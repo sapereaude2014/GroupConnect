@@ -1,6 +1,6 @@
 # 🏡 家庭智能管家工作区模板 (Family Assistant Template)
 
-将本目录作为 `workspace_dir`，即可让 GroupAgent 化身为具备家庭档案管理、多模态单据归档、生活备忘与智能家居控制的家庭管家。
+将本目录作为 `workspace_dir`，即可让 GroupConnect 化身为具备家庭档案管理、多模态单据归档、生活备忘与智能家居控制的家庭管家。
 
 ## 📁 推荐目录结构
 

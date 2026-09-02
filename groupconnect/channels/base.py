@@ -1,5 +1,5 @@
 """
-Base Channel Protocol for GroupAgent.
+Base Channel Protocol for GroupConnect.
 Decouples chat platforms (Telegram, Discord, Feishu, WeCom, Slack) from core logic.
 """
 

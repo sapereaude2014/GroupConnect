@@ -1,5 +1,5 @@
 """
-Security Gatekeeper for GroupAgent.
+Security Gatekeeper for GroupConnect.
 Enforces group chat isolation, private user allowlisting, and unauthorized intrusion blocking.
 """
 

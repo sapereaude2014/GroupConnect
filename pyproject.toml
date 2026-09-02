@@ -7,7 +7,7 @@ name = "groupconnect"
 version = "1.0.0"
 description = "A Group-Native, Context-Aware Local Agent Gateway for Telegram & Beyond"
 readme = "README.md"
-authors = [{ name = "GroupAgent Contributors" }]
+authors = [{ name = "GroupConnect Contributors" }]
 license = { text = "MIT" }
 requires-python = ">=3.9"
 dependencies = [

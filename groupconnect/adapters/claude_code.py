@@ -1,5 +1,5 @@
 """
-Claude Code CLI Adapter for GroupAgent.
+Claude Code CLI Adapter for GroupConnect.
 Bridges Anthropic's Claude Code CLI to chat platforms.
 """
 

@@ -1,5 +1,5 @@
 #!/bin/bash
-# GroupAgent Watchdog Daemon Script
+# GroupConnect Watchdog Daemon Script
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIG_FILE="${1:-$DIR/config.json}"
@@ -7,7 +7,7 @@ LOG_FILE="${2:-$DIR/groupconnect.log}"
 PID_FILE="${3:-$DIR/groupconnect.pid}"
 
 echo "$$" > "$PID_FILE"
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting GroupAgent Watchdog (PID: $$)..." >> "$LOG_FILE"
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting GroupConnect Watchdog (PID: $$)..." >> "$LOG_FILE"
 
 cleanup() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] Watchdog stopping..." >> "$LOG_FILE"

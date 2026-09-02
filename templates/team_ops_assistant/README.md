@@ -1,6 +1,6 @@
 # 💼 研发与项目团队管家模板 (Team Ops Template)
 
-将本目录作为 `workspace_dir`，即可让 GroupAgent 化身为敏捷开发、日常站会、讨论纪要提炼与任务追踪的团队群助手。
+将本目录作为 `workspace_dir`，即可让 GroupConnect 化身为敏捷开发、日常站会、讨论纪要提炼与任务追踪的团队群助手。
 
 ## 📁 推荐目录结构
 

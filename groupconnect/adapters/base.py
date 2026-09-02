@@ -1,5 +1,5 @@
 """
-Base Agent Adapter Protocol for GroupAgent.
+Base Agent Adapter Protocol for GroupConnect.
 Decouples the chat gateway from any specific AI agent CLI or LLM API backend.
 """
 

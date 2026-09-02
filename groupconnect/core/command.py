@@ -1,5 +1,5 @@
 """
-Strict Slash Command Parser for GroupAgent.
+Strict Slash Command Parser for GroupConnect.
 Prevents false triggers from body text, punctuation, or similar English vocabulary (e.g. /stopwords).
 """
 

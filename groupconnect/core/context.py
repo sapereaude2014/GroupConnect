@@ -1,5 +1,5 @@
 """
-Sliding Window Context & Message History Manager for GroupAgent.
+Sliding Window Context & Message History Manager for GroupConnect.
 Maintains in-memory deques for immediate recall and logs structured JSONL to disk monthly.
 """
 

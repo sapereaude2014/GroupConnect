@@ -1,5 +1,5 @@
 """
-Telegram Platform Channel for GroupAgent.
+Telegram Platform Channel for GroupConnect.
 Implements long polling, multimodal media downloads, typing heartbeats, and Markdown auto-fallback.
 """
 
