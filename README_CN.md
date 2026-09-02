@@ -108,21 +108,28 @@ python3 -m groupconnect.cli --init
 
 ### 3. 运行服务
 
-**前台运行指定平台**：
+**前台调试运行**：
 ```bash
 python3 -m groupconnect.cli --config config.telegram.json
 ```
 
-**后台守护运行 (进程崩溃自动重启，保障 7×24 小时在线)**：
+**后台守护运行 (进程崩溃自动重启、状态管理)**：
 ```bash
-./scripts/daemon.sh config.telegram.json logs/tg.log pids/tg.pid
+# 启动后台守护服务
+bash scripts/daemon.sh start config.telegram.json
+
+# 查看所有运行中的机器人服务
+bash scripts/daemon.sh status
+
+# 停止指定服务
+bash scripts/daemon.sh stop config.telegram.json
 ```
 
 **多平台并发运行 (共享同一个工作区大脑)**：
 ```bash
-./scripts/daemon.sh config.telegram.json logs/tg.log pids/tg.pid
-./scripts/daemon.sh config.feishu.json logs/feishu.log pids/feishu.pid
-./scripts/daemon.sh config.discord.json logs/discord.log pids/discord.pid
+bash scripts/daemon.sh start config.telegram.json
+bash scripts/daemon.sh start config.feishu.json
+bash scripts/daemon.sh start config.discord.json
 ```
 
 ---
