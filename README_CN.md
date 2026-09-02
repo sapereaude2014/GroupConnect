@@ -1,4 +1,4 @@
-# GroupConnect
+<h1 align="center">GroupConnect</h1>
 
 <p align="center">
   <b>把群聊连接到本地 CLI Agent 及其工作区。</b><br>

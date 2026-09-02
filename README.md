@@ -1,4 +1,4 @@
-# GroupConnect
+<h1 align="center">GroupConnect</h1>
 
 <p align="center">
   <b>Connect group chats to local CLI agents and their workspaces.</b><br>
