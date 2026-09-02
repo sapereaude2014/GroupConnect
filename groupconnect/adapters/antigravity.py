@@ -1,6 +1,6 @@
 """
 Google Antigravity CLI Harness Adapter.
-Connects to local `agy` via full-duplex stream-json or persistent process management.
+Connects to local `agy` via CLI non-interactive mode.
 """
 
 import asyncio
@@ -44,9 +44,12 @@ class AntigravityAdapter(BaseAgentAdapter):
     ) -> Tuple[Optional[str], Optional[str]]:
         cmd = [self.agy_bin, "-p", prompt, "--model", self.model]
         if conversation_id:
-            cmd.extend(["--resume", conversation_id])
+            if conversation_id == "continue":
+                cmd.append("--continue")
+            else:
+                cmd.extend(["--conversation", conversation_id])
 
-        logger.info(f"[Antigravity] Spawning runner for chat {chat_id}: {' '.join(cmd[:4])}...")
+        logger.info(f"[Antigravity] Spawning runner for chat {chat_id}: {' '.join(cmd[:6])}...")
         proc = None
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -71,7 +74,7 @@ class AntigravityAdapter(BaseAgentAdapter):
                 logger.error(f"[Antigravity] Process exited with code {proc.returncode}. Stderr: {stderr_str}")
                 return f"⚠️ Execution failed (Exit code {proc.returncode}):\n```\n{stderr_str or stdout_str}\n```", conversation_id
 
-            new_cid = conversation_id or f"cid_{int(time.time())}"
+            new_cid = conversation_id or "continue"
             return stdout_str, new_cid
 
         except asyncio.TimeoutError:
