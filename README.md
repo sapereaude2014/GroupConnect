@@ -9,17 +9,20 @@
   <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License" />
   <img src="https://img.shields.io/badge/python-3.9+-green.svg" alt="Python" />
   <img src="https://img.shields.io/badge/dependency-httpx_only-brightgreen.svg" alt="Zero Bloat" />
-  <img src="https://img.shields.io/badge/telegram-Bot_API-blue.svg" alt="Telegram" />
-  <img src="https://img.shields.io/badge/harness-Antigravity_|_Claude_|_Codex_|_OpenCode-orange.svg" alt="Supported Harnesses" />
+  <img src="https://img.shields.io/badge/channels-Telegram_|_Discord_&_Feishu_Planned-blue.svg" alt="Channels" />
+  <img src="https://img.shields.io/badge/harness-Antigravity_|_Claude_|_Codex_|_OpenCode-orange.svg" alt="Agent Harnesses" />
 </p>
 
 ---
 
 ## 📖 项目简介
 
-GroupConnect 是一个专为群聊协作设计的轻量级网关，用于将群聊平台（首发深度支持 Telegram）连接到本地运行的各类 CLI Agent（已支持 **Google Antigravity `agy`**、**Anthropic Claude Code `claude`**、**OpenAI Codex `codex`** 及 **OpenCode `opencode`**）。
+GroupConnect 是一个专为群聊协作设计的轻量级网关，用于将群聊平台连接到本地运行的各类 CLI Agent（已支持 **Google Antigravity `agy`**、**Anthropic Claude Code `claude`**、**OpenAI Codex `codex`** 及 **OpenCode `opencode`**）。
 
-通过静默滑动窗口与多模态自动化管道，GroupConnect 让本地 CLI Agent 能够自然感知群内前文讨论背景，自动下载落盘多模态附件，并提供低延迟的常驻执行与即时打断能力。
+项目采用**三层完全解耦架构**：
+1. **核心引擎层 (`groupconnect.core`)**：负责跨平台的静默滑动窗口、增量上下文追踪、多模态附件自动落盘、常驻进程池管理与通用白名单鉴权；
+2. **平台通道层 (`groupconnect.channels`)**：负责各 IM 平台的协议适配（首发深度实现 `TelegramChannel`，支持长轮询、未授权自动退群与消息分片）；
+3. **后端引擎层 (`groupconnect.adapters`)**：负责对接各类本地 CLI Agent Harness。
 
 ---
 
@@ -46,18 +49,27 @@ GroupConnect 是一个专为群聊协作设计的轻量级网关，用于将群�
 
 ---
 
-## ✨ 核心特性
+## ✨ 核心特性（通用层）
 
 * 🧠 **群聊静默滑动窗口 (Silent Sliding Window)**：在群成员日常交流时不主动打扰，后台自动维护最近 $N$ 条群聊消息（`max_history_len` 可自由配置，默认 30 条）；被唤醒时自动注入讨论背景，连续追问时仅同步增量新消息。
 * 📎 **多模态附件自动落盘 (Multimodal Auto-Inbox)**：群内发送的照片、语音和文档自动下载保存至工作区的 `inbox/attachments/` 目录，并在提示词中提供本地绝对路径供视觉与分析工具直接读取。
 * 🔥 **常驻引擎工作池 (Resident Worker Pool)**：支持通过全双工 `stream-json` 管道保持 Agent 进程常驻，消除冷启动延迟；支持空闲超时自动回收。
 * 🛑 **抢占式强杀 (`/stop`)**：收到 `/stop` 指令时无需排队等待处理锁，通过 POSIX 独立进程组（`os.killpg`）立即终止当前任务及所有子进程。
-* 🛡️ **双重白名单看门狗 (Security Gatekeeper)**：支持群聊与私聊成员白名单鉴权；被拉入未授权群聊时自动退出，陌生人私聊直接拦截。
-* 📖 **移动端即时预览 (Telegraph Instant View)**：提供长篇文档转译为 Telegraph 页面工具，在 Telegram 移动端内支持 0 秒免密原生弹窗阅读。
+* 🛡️ **双重白名单看门狗 (Security Gatekeeper)**：支持群聊与私聊成员白名单鉴权，陌生私聊直接拦截，保护本地工作区安全。
 
 ---
 
-## 🧩 支持的本地 CLI Harness
+## 🌐 平台通道与专有特性 (Channels)
+
+| 平台通道 | 实现状态 | 专有特性支持 |
+| :--- | :--- | :--- |
+| **`Telegram`** | 🟢 已内置 | 长轮询接收、未授权群聊**秒级自动退群** (`leaveChat`)、正在输入心跳、3800 字符段落安全拆分、Markdown 语法自动降级、移动端 Telegraph 免密即时预览。 |
+| **`Discord`** | 🟡 规划中 | Embeds 结构化卡片展示、Threads 子频道隔离。 |
+| **`Feishu`** | 🟡 规划中 | 交互式消息卡片 (Interactive Cards)、飞书云文档挂载。 |
+
+---
+
+## 🧩 支持的本地 CLI Harness (Adapters)
 
 | 引擎类型 (`engine_type`) | 调起指令 | 说明 |
 | :--- | :--- | :--- |
@@ -79,6 +91,8 @@ git clone https://github.com/sapereaude2014/GroupConnect.git
 cd GroupConnect
 pip install -r requirements.txt
 ```
+
+确保本地环境中已安装并授权对应的 CLI Agent（如 `agy`、`claude`、`codex` 或 `opencode`）。
 
 ### 2. 初始化配置 (两种方式任选其一)
 
@@ -117,19 +131,20 @@ python3 -m groupconnect.cli --config config.json
 
 ## ⚙️ 配置参数说明
 
-| 参数项 | 类型 | 默认值 | 说明 |
+| 参数项 | 分类 | 默认值 | 说明 |
 | :--- | :--- | :--- | :--- |
-| `platform` | string | `"telegram"` | 接入平台（目前支持 `"telegram"`） |
-| `engine_type` | string | `"antigravity"` | 后端 Agent 类型（支持 `"antigravity"`, `"claude"`, `"codex"`, `"opencode"`） |
-| `workspace_dir` | string | `"./workspace"` | Agent 挂载的本地工作区根目录（所有附件与日志自动在此创建） |
-| `max_history_len` | int | `30` | 静默群聊滑动窗口保留的最大消息条数 |
-| `timeout_secs` | int | `180` | 单次 Agent 执行最大超时时间（秒） |
-| `session_idle_timeout_mins` | int | `30` | 常驻进程空闲自动回收时长（分钟，设为 0 表示不回收） |
-| `max_chunk_size` | int | `3800` | 发送给 Telegram 的单条消息安全字符上限 |
-| `typing_interval_secs` | float | `4.0` | 推理期间发送“正在输入”心跳指示的间隔（秒） |
-| `allowed_chat_ids` | list | `[]` | 允许接入的群聊 ID 白名单（非白名单群聊自动退群） |
-| `allowed_user_ids` | list | `[]` | 允许私聊的 Telegram User ID 白名单 |
-| `allowed_usernames` | list | `[]` | 允许私聊的 Telegram Username 白名单 |
+| `platform` | 平台通道 | `"telegram"` | 接入平台（目前支持 `"telegram"`） |
+| `bot_token` | 平台通道 | `""` | 对应平台的机器人访问密钥 |
+| `engine_type` | 引擎适配 | `"antigravity"` | 后端 Agent 类型（支持 `"antigravity"`, `"claude"`, `"codex"`, `"opencode"`） |
+| `workspace_dir` | 通用核心 | `"./workspace"` | Agent 挂载的本地工作区根目录（所有附件与日志自动在此创建） |
+| `max_history_len` | 通用核心 | `30` | 静默群聊滑动窗口保留的最大消息条数 |
+| `timeout_secs` | 通用核心 | `180` | 单次 Agent 执行最大超时时间（秒） |
+| `session_idle_timeout_mins` | 通用核心 | `30` | 常驻进程空闲自动回收时长（分钟，设为 0 表示不回收） |
+| `max_chunk_size` | 平台通道 | `3800` | 发送给 Telegram 的单条消息安全字符上限 |
+| `typing_interval_secs` | 平台通道 | `4.0` | 推理期间发送“正在输入”心跳指示的间隔（秒） |
+| `allowed_chat_ids` | 安全鉴权 | `[]` | 允许接入的群聊 ID 白名单（非白名单群聊自动退群） |
+| `allowed_user_ids` | 安全鉴权 | `[]` | 允许私聊的 Telegram User ID 白名单 |
+| `allowed_usernames` | 安全鉴权 | `[]` | 允许私聊的 Telegram Username 白名单 |
 
 ---
 
