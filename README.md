@@ -2,7 +2,7 @@
 
 <p align="center">
   <b>A Group-Context Gateway for Local CLI Agents (Claude Code, Antigravity, Codex, OpenCode)</b><br>
-  Connect your group chats across <b>Telegram</b>, <b>Feishu (Lark)</b>, and <b>WeCom (WeChat Work)</b> to local CLI agents with silent sliding context, dynamic member security, and zero cold-start execution.
+  Connect your group chats across <b>Telegram</b>, <b>Feishu (Lark)</b>, and <b>WeCom</b> to local CLI agents with silent sliding context, dynamic member security, and zero cold-start execution.
 </p>
 
 <p align="center">
@@ -22,7 +22,7 @@
 
 ## 📖 Overview
 
-**GroupConnect** is a lightweight, decoupled gateway designed for group-native AI collaboration. It connects group messaging platforms (**Telegram**, **Feishu / Lark**, and **WeCom / WeChat Work**) to local CLI Agents running on your machine—including **Anthropic Claude Code (`claude`)**, **Google Antigravity (`agy`)**, **OpenAI Codex (`codex`)**, and **OpenCode (`opencode`)**.
+**GroupConnect** is a lightweight, decoupled gateway designed for group-native AI collaboration. It connects group messaging platforms (**Telegram**, **Feishu / Lark**, and **WeCom**) to local CLI Agents running on your machine—including **Anthropic Claude Code (`claude`)**, **Google Antigravity (`agy`)**, **OpenAI Codex (`codex`)**, and **OpenCode (`opencode`)**.
 
 Standard AI bots only listen to messages where they are explicitly tagged, losing the entire conversational background. GroupConnect silently maintains recent discussion context, automatically ingests media attachments into your local workspace, recognizes team members dynamically, and executes agent tasks with zero cold-start delay under a strict **Secure-by-Default (Default-Deny)** security model.
 
@@ -62,13 +62,13 @@ In real-world group chats, team members discuss problems organically before call
 
 ---
 
-## 🌐 Platform Channels
+## 🌐 Platform Channel Requirements & Permissions
 
-| Platform (`platform`) | Implementation | Key Capabilities |
-| :--- | :--- | :--- |
-| **`telegram`** | 🟢 Built-in | Long-polling, auto-leave protection (`leaveChat`), paragraph-safe 4000-char message chunking, Markdown fallback, Telegraph Instant View. |
-| **`feishu`** (Lark) | 🟢 Built-in | Feishu Open Platform bot API, tenant token caching, group member verification, automated chat leave. |
-| **`wecom`** (WeChat Work) | 🟢 Built-in | Enterprise self-built app & bot API, supports personal WeChat access via WeCom external groups, access token auto-refresh. |
+| Platform (`platform`) | Status | Required Permission / Setting (One-Line Guide) | Silent Context Support |
+| :--- | :--- | :--- | :--- |
+| **`telegram`** | 🟢 Built-in | Set `/setprivacy -> Disable` in `@BotFather` to receive unmentioned group chats. | 🌟 Full Support (No public IP needed) |
+| **`feishu`** (Lark) | 🟢 Built-in | Request `im:message.group_msg` (Read all group messages) in Feishu Developer Console. | 🌟 Full Support (Requires Webhook) |
+| **`wecom`** (WeChat Work) | 🟢 Built-in | Configure self-built app Webhook callback URL and token. | ⚠️ Mention-only (WeCom protocol restricts unmentioned chats) |
 
 ---
 
