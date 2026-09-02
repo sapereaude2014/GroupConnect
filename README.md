@@ -101,14 +101,14 @@ cp config.example.json config.json
 }
 ```
 
-### 3. 启动服务
+### 3. 运行服务
 
-**前台运行**：
+**前台运行（用于本地调试）**：
 ```bash
 python3 -m groupconnect.cli --config config.json
 ```
 
-**后台守护进程常驻 (Watchdog 自动自愈拉起)**：
+**后台守护运行（用于服务器长期挂机，进程异常崩溃时 3 秒自动重启）**：
 ```bash
 ./scripts/daemon.sh config.json groupconnect.log groupconnect.pid
 ```
