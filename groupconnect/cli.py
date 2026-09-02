@@ -10,6 +10,7 @@ import logging
 import os
 import signal
 import sys
+from typing import Optional
 
 from groupconnect.adapters.base import ADAPTER_METADATA
 from groupconnect.channels.base import CHANNEL_METADATA
@@ -182,32 +183,37 @@ def main() -> None:
 
     engine = GroupConnectEngine(config)
 
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    async def _runner():
+        loop = asyncio.get_running_loop()
+        stop_event = asyncio.Event()
 
-    def handle_sigterm(*_):
-        logger.info("Received termination signal. Gracefully shutting down...")
-        engine.is_running = False
+        def _signal_handler():
+            logger.info("Received termination signal. Gracefully shutting down...")
+            engine.is_running = False
+            if hasattr(engine.adapter, "close"):
+                engine.adapter.close()
+            stop_event.set()
+
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                loop.add_signal_handler(sig, _signal_handler)
+            except NotImplementedError:
+                pass
+
+        engine_task = asyncio.create_task(engine.start())
+        stop_wait_task = asyncio.create_task(stop_event.wait())
+
+        done, pending = await asyncio.wait([engine_task, stop_wait_task], return_when=asyncio.FIRST_COMPLETED)
+        for t in pending:
+            t.cancel()
         if hasattr(engine.adapter, "close"):
             engine.adapter.close()
-        loop.stop()
-
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        try:
-            loop.add_signal_handler(sig, handle_sigterm)
-        except NotImplementedError:
-            pass
+        logger.info("GroupConnect Gateway stopped cleanly.")
 
     try:
-        loop.run_until_complete(engine.start())
+        asyncio.run(_runner())
     except KeyboardInterrupt:
         logger.info("KeyboardInterrupt received. Stopping gateway...")
-    finally:
-        engine.is_running = False
-        if hasattr(engine.adapter, "close"):
-            engine.adapter.close()
-        loop.close()
-        logger.info("GroupConnect Gateway stopped cleanly.")
 
 
 if __name__ == "__main__":

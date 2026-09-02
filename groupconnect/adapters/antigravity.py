@@ -1,6 +1,6 @@
 """
 Google Antigravity CLI Harness Adapter.
-Connects to local `agy` via CLI non-interactive mode.
+Connects to local `agy` via JSON structured output or print execution with session resumption.
 """
 
 import asyncio
@@ -42,12 +42,15 @@ class AntigravityAdapter(BaseAgentAdapter):
         chat_id: Optional[int] = None,
         attachments: Optional[List[Dict[str, Any]]] = None
     ) -> Tuple[Optional[str], Optional[str]]:
-        cmd = [self.agy_bin, "-p", prompt, "--model", self.model]
+        cmd = [
+            self.agy_bin,
+            "-p", prompt,
+            "--model", self.model,
+            "--output-format", "json",
+            "--dangerously-skip-permissions"
+        ]
         if conversation_id:
-            if conversation_id == "continue":
-                cmd.append("--continue")
-            else:
-                cmd.extend(["--conversation", conversation_id])
+            cmd.extend(["--conversation", conversation_id])
 
         logger.info(f"[Antigravity] Spawning runner for chat {chat_id}: {' '.join(cmd[:6])}...")
         proc = None
@@ -74,8 +77,20 @@ class AntigravityAdapter(BaseAgentAdapter):
                 logger.error(f"[Antigravity] Process exited with code {proc.returncode}. Stderr: {stderr_str}")
                 return f"⚠️ Execution failed (Exit code {proc.returncode}):\n```\n{stderr_str or stdout_str}\n```", conversation_id
 
-            new_cid = conversation_id or "continue"
-            return stdout_str, new_cid
+            # Parse JSON output from agy
+            new_cid = conversation_id
+            response_text = stdout_str
+            try:
+                data = json.loads(stdout_str)
+                if isinstance(data, dict):
+                    if data.get("conversation_id"):
+                        new_cid = data["conversation_id"]
+                    if data.get("response") is not None:
+                        response_text = str(data["response"]).strip()
+            except json.JSONDecodeError:
+                response_text = stdout_str
+
+            return response_text, new_cid
 
         except asyncio.TimeoutError:
             logger.error(f"[Antigravity] Task timed out after {self.timeout_secs}s for chat {chat_id}")
