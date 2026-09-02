@@ -1,8 +1,8 @@
 # GroupConnect
 
 <p align="center">
-  <b>A Group-Context Gateway for Local CLI Agents (Claude Code, Antigravity, Codex, OpenCode)</b><br>
-  Connect your group chats across <b>Telegram</b>, <b>Discord</b>, <b>Slack</b>, <b>Feishu (Lark)</b>, and <b>WeCom</b> to local CLI agents with silent sliding context, dynamic member security, and zero cold-start execution.
+  <b>Give CLI agents context from the group chat.</b><br>
+  A lightweight, zero-bloat runtime connecting Telegram, Discord, Slack, Feishu, and WeCom to Claude Code, Antigravity, Codex, and OpenCode.
 </p>
 
 <p align="center">
@@ -13,171 +13,146 @@
   <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License" />
   <img src="https://img.shields.io/badge/python-3.9+-green.svg" alt="Python" />
   <img src="https://img.shields.io/badge/dependency-httpx_only-brightgreen.svg" alt="Zero Bloat" />
-  <img src="https://img.shields.io/badge/security-Secure_by_Default-brightgreen.svg" alt="Security" />
+  <img src="https://img.shields.io/badge/security-Default_Deny-brightgreen.svg" alt="Security" />
   <img src="https://img.shields.io/badge/channels-Telegram_|_Discord_|_Slack_|_Feishu_|_WeCom-blue.svg" alt="Supported Channels" />
   <img src="https://img.shields.io/badge/harness-Claude_|_Antigravity_|_Codex_|_OpenCode-orange.svg" alt="Supported Harnesses" />
 </p>
 
 ---
 
-## 📖 Overview
+## 💬 The Experience
 
-**GroupConnect** is a lightweight, decoupled gateway designed for group-native AI collaboration. It connects group messaging platforms (**Telegram**, **Discord**, **Slack**, **Feishu / Lark**, and **WeCom**) to local CLI Agents running on your machine—including **Anthropic Claude Code (`claude`)**, **Google Antigravity (`agy`)**, **OpenAI Codex (`codex`)**, and **OpenCode (`opencode`)**.
+In real group chats, discussions happen organically before anyone calls an AI:
 
-Standard AI bots only listen to messages where they are explicitly tagged, losing the entire conversational background. GroupConnect silently maintains recent discussion context, automatically ingests media attachments into your local workspace, recognizes team members dynamically, and executes agent tasks with zero cold-start delay under a strict **Secure-by-Default (Default-Deny)** security model.
+```text
+Alice: "Hiking this Saturday?"
+Bob:   "Sure, I can drive."
+Carol: "Let's meet at 8:00 AM then?"
+Alice: "@AI Please take note of this."
 
----
-
-## 👥 Why GroupConnect?
-
-In real-world group chats, team members discuss problems organically before calling an AI assistant:
-
-```
-┌────────────────────────────────────────────────────────────────────────┐
-│ 💬 Real-World Team Chat                                                │
-│                                                                        │
-│ Alice: "Section 3 of the new proposal has a concurrency lock issue."   │
-│ Bob:   "Right, it lacks timeouts and retries, which may deadlock."     │
-│ Alice: "@bot Review the deadlock risk we discussed and update docs.md" │
-└───────────────────────────────────┬────────────────────────────────────┘
-                                    │
-          ┌─────────────────────────┴─────────────────────────┐
-          ▼                                                   ▼
-❌ Standard Group Bots (Discards non-@ messages)      ✅ GroupConnect (Silent Context + Local Execution)
-------------------------------------------------     ---------------------------------------------------
-• "What deadlock are you referring to? Please paste   • Ingests the sliding context, invokes local tools
-  the previous discussion."                             to modify `docs.md`, and reports the diff.
-• User frustration from repeating context.            • Seamless and context-aware.
+AI:    "Got it, recorded:
+       • Event: Hiking trip
+       • Time: Saturday 08:00 AM
+       • Transportation: Bob will drive"
 ```
 
----
-
-## ✨ Core Features (Platform-Agnostic)
-
-* 🧠 **Silent Sliding Window & Delta Sync**: Observes group discussions silently without spamming replies. When tagged, it automatically injects recent discussion context (configurable depth, default 30 messages) so the agent immediately understands what the team was discussing, syncing only incremental messages on continuous follow-ups.
-* 🔥 **Zero Cold-Start Worker Pool**: Maintains persistent background agent subprocesses to eliminate startup latency and preserve multi-turn conversational memory.
-* 📎 **Automatic Multimodal Inbox**: Photos, voice notes, and documents sent in chat are automatically downloaded to `inbox/attachments/` in your workspace and passed as absolute local paths for native visual and file tools.
-* ⏹️ **Instant `/stop` Interruption**: If an agent enters an unwanted loop or you need to abort a command immediately, sending `/stop` preemptively terminates the active process tree without waiting for locks.
-* 🛡️ **Secure-by-Default & Dynamic Member Control**: Protects local shell & files with default-deny lockdown. Authenticate users via `@username` or toggle `allow_group_members_dm` to automatically grant DM access to authorized group members.
+> **No one wrote a prompt. No one copied and pasted history. The AI simply read what just happened in the chat.**
 
 ---
 
-## 🌐 Platform Channel Context Permissions & Limitations
+## 🎯 What is GroupConnect?
 
-| Platform (`platform`) | Status | Required Setting for Silent Group Context | Silent Context Support |
+Local CLI agents like **Anthropic Claude Code (`claude`)**, **Google Antigravity (`agy`)**, **OpenAI Codex (`codex`)**, and **OpenCode (`opencode`)** are powerful because they have full access to your local files and shell tools.
+
+However, standard group chat bots only receive the single message where they are tagged, completely losing conversational context.
+
+**GroupConnect is the minimal glue runtime that bridges this gap:**
+1. It silently tracks recent group discussions in a lightweight sliding window.
+2. When tagged, it injects the recent conversation background and invokes your local CLI agent.
+3. It downloads photos, voice notes, and documents directly to your local workspace.
+4. It lets you interrupt run-away agent tasks instantly with `/stop`.
+
+```text
+          Group Chat (Telegram / Discord / Slack / Feishu / WeCom)
+                                     │
+                                     ▼
+                       GroupConnect (Lightweight Runtime)
+                  [ Sliding Context + Local File Inbox + /stop ]
+                                     │
+                                     ▼
+                       Local CLI Agent (Interchangeable)
+                  ├── Anthropic Claude Code (`claude`)
+                  ├── Google Antigravity (`agy`)
+                  ├── OpenAI Codex (`codex`)
+                  └── OpenCode (`opencode`)
+                                     │
+                                     ▼
+                          Local Workspace & Files
+```
+
+---
+
+## 🧱 Clean Division: Core vs Templates
+
+GroupConnect separates **runtime glue** from **workspace structure**:
+
+### 1. Core (The Runtime)
+* **Silent Sliding Context**: Maintains the last $N$ messages (default: 30) in memory. Syncs only incremental messages on continuous follow-ups.
+* **Zero Cold-Start Worker Pool**: Keeps agent subprocesses warm in the background for instant execution and multi-turn memory.
+* **Multimodal Auto-Inbox**: Photos and files sent in chat are saved to `workspace/inbox/attachments/` and passed as absolute local paths.
+* **Instant `/stop`**: Preemptively kills active CLI agent process trees on `/stop` without waiting for queues or locks.
+* **Secure-by-Default**: Default-deny lockdown mode prevents unauthorized users from executing commands on your machine.
+
+### 2. Templates (How to Organize Your Workspace)
+Reference templates in [`templates/`](templates/) demonstrate how to organize local directories when turning a group chat into an ongoing workspace:
+* 🏡 **[Family Assistant](templates/family_assistant/)**: Organizing family health logs, assets, and reminders.
+* 💼 **[Team Ops Assistant](templates/team_ops_assistant/)**: Organizing sprint backlogs, incident SOPs, and monthly JSONL discussion archives.
+
+---
+
+## 🌐 Platform Context Matrix
+
+| Platform (`platform`) | Status | Required Setting for Silent Group Context | Context Support |
 | :--- | :--- | :--- | :--- |
-| **`telegram`** | 🟢 Built-in | Set `/setprivacy -> Disable` in `@BotFather` to receive unmentioned group messages. | 🌟 Full Support (No public IP needed) |
-| **`discord`** | 🟢 Built-in | Enable `Message Content Intent` and `Server Members Intent` in Discord Developer Portal. | 🌟 Full Support (REST & Webhook) |
-| **`slack`** | 🟢 Built-in | Subscribe to `message.channels`, `message.groups`, and `app_mention` events in Slack App. | 🌟 Full Support (Events API) |
-| **`feishu`** (Lark) | 🟢 Built-in | Request `im:message.group_msg` (Read all group messages) in Feishu Developer Console. | 🌟 Full Support (Requires Webhook) |
-| **`wecom`** (WeChat Work) | 🟢 Built-in | **None (Unsupported)**: WeChat protocol strictly restricts unmentioned group messages from being pushed. | ⚠️ Mention-only (No background context) |
+| **`telegram`** | 🟢 Built-in | Set `/setprivacy -> Disable` in `@BotFather`. | 🌟 Full (No public IP needed) |
+| **`discord`** | 🟢 Built-in | Enable `Message Content Intent` in Discord Portal. | 🌟 Full (REST & Webhook) |
+| **`slack`** | 🟢 Built-in | Subscribe to `message.channels` and `app_mention` in Slack App. | 🌟 Full (Events API) |
+| **`feishu`** (Lark) | 🟢 Built-in | Request `im:message.group_msg` permission in Feishu Console. | 🌟 Full (Requires Webhook) |
+| **`wecom`** (WeChat Work) | 🟢 Built-in | **None (Unsupported)**: WeChat protocol does not push unmentioned group messages. | ⚠️ Mention-only |
 
 ---
 
-## 🧩 Supported CLI Agents
-
-| Engine (`engine_type`) | Binary Command | Features |
-| :--- | :--- | :--- |
-| `claude` | `claude -p` | Official Anthropic Claude Code CLI with session resumption |
-| `antigravity` (default) | `agy` | High-performance full-duplex `stream-json` resident worker pool |
-| `codex` | `codex exec` | OpenAI Codex CLI non-interactive execution with image attachment support |
-| `opencode` | `opencode run` | OpenCode CLI headless automation and multi-turn session handling |
-
----
-
-## 🚀 Quick Start (3 Steps)
+## 🚀 Quick Start (30 Seconds)
 
 ### 1. Install
 
-Requires Python 3.9+ and `httpx` (no heavy database required):
+Requires Python 3.9+ and `httpx` (no database required):
 
 ```bash
 git clone https://github.com/sapereaude2014/GroupConnect.git
 cd GroupConnect
-pip install -r requirements.txt
+pip install -e .
 ```
 
-Ensure your chosen CLI agent (e.g., `claude`, `agy`, `codex`, or `opencode`) is installed and authenticated locally.
+Ensure your CLI agent (e.g., `claude`, `agy`, `codex`, or `opencode`) is authenticated locally.
 
-### 2. Configure (Interactive Wizard)
+### 2. Configure
 
 Run the interactive setup wizard:
 
 ```bash
-python3 -m groupconnect.cli --init
+groupconnect --init
 ```
 
-The wizard will prompt for your platform and credentials, automatically saving to `config.<platform>.json` (e.g., `config.telegram.json`, `config.feishu.json`, `config.discord.json`).
+The wizard prompts for your platform and credentials, saving to `config.<platform>.json` (e.g., `config.telegram.json`).
 
 ### 3. Run
 
 **Foreground Mode**:
 ```bash
-python3 -m groupconnect.cli --config config.telegram.json
+groupconnect -c config.telegram.json
 ```
 
-**Background Daemon (Crash Auto-Restart & Service Management)**:
+**Background Daemon (Crash Auto-Restart & Status Management)**:
 ```bash
 # Start in background
 bash scripts/daemon.sh start config.telegram.json
 
-# Check status of all running bots
+# Check status of running bots
 bash scripts/daemon.sh status
 
-# Stop service
+# Stop bot
 bash scripts/daemon.sh stop config.telegram.json
 ```
-
-**Multi-Platform Concurrent Deployment**:
-```bash
-bash scripts/daemon.sh start config.telegram.json
-bash scripts/daemon.sh start config.feishu.json
-bash scripts/daemon.sh start config.discord.json
-```
-
----
-
-## ⚙️ Configuration Reference
-
-| Parameter | Category | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `platform` | Channel | `"telegram"` | Messaging platform (`"telegram"`, `"discord"`, `"slack"`, `"feishu"`, `"wecom"`) |
-| `bot_token` | Channel | `""` | Telegram Bot API Token |
-| `discord_bot_token` | Channel | `""` | Discord Bot Token |
-| `slack_bot_token` | Channel | `""` | Slack Bot User OAuth Token (`xoxb-...`) |
-| `feishu_app_id` | Channel | `""` | Feishu / Lark App ID (`cli_...`) |
-| `feishu_app_secret` | Channel | `""` | Feishu / Lark App Secret |
-| `wecom_corp_id` | Channel | `""` | WeCom Enterprise Corp ID (`ww...`) |
-| `wecom_corp_secret` | Channel | `""` | WeCom Application Secret |
-| `wecom_agent_id` | Channel | `""` | WeCom Application Agent ID |
-| `engine_type` | Engine | `"antigravity"` | Agent backend (`"antigravity"`, `"claude"`, `"codex"`, `"opencode"`) |
-| `workspace_dir` | Core | `"./workspace"` | Target local directory for agent operations and inbox |
-| `max_history_len` | Core | `30` | Number of recent group messages to track in sliding buffer |
-| `timeout_secs` | Core | `180` | Maximum execution timeout per turn in seconds |
-| `session_idle_timeout_mins` | Core | `30` | Minutes of inactivity before recycling warm worker processes |
-| `max_chunk_size` | Core | `3800` | Safe message chunk size (long replies are automatically split by paragraph to prevent platform limit errors) |
-| `allow_open_access` | Security | `false` | If `false`, enables Safe Lockdown Mode when allowlist is empty |
-| `allow_group_members_dm` | Security | `true` | Allows members of authorized groups to automatically DM the bot |
-| `allowed_chat_ids` | Security | `[]` | Whitelisted Group Chat IDs (auto-leaves unlisted groups) |
-| `allowed_user_ids` | Security | `[]` | Whitelisted User IDs for direct messaging |
-| `allowed_usernames` | Security | `[]` | Whitelisted `@usernames` for direct messaging |
 
 ---
 
 ## 🛠 Built-in Slash Commands
 
-* `/status` — View current session, engine status, sliding buffer depth, and authorization state.
-* `/stop` — Preemptively interrupt in-flight agent tasks immediately.
+* `/status` — View current session, engine status, sliding buffer depth, and whitelist info.
+* `/stop` — Preemptively terminate in-flight agent tasks immediately.
 * `/new` or `/clear` — Reset session and clear sliding context buffer.
 * `/help` — Display help information.
-
----
-
-## 📂 Workspace Templates (Optional)
-
-Ready-to-use workspace presets are provided in [`templates/`](templates/):
-* 🏡 **Family Assistant ([`templates/family_assistant/`](templates/family_assistant/))**: Family ledger rules, document archiving, and Telegraph publishing.
-* 💼 **Team Ops Assistant ([`templates/team_ops_assistant/`](templates/team_ops_assistant/))**: Agile standup summaries, issue tracking, and discussion digestion.
 
 ---
 
