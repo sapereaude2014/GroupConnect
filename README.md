@@ -155,7 +155,7 @@ bash scripts/daemon.sh start config.discord.json
 | `max_history_len` | Core | `30` | Number of recent group messages to track in sliding buffer |
 | `timeout_secs` | Core | `180` | Maximum execution timeout per turn in seconds |
 | `session_idle_timeout_mins` | Core | `30` | Minutes of inactivity before recycling warm worker processes |
-| `max_chunk_size` | Channel | `3800` | Safe message chunk size to prevent platform character limit errors |
+| `max_chunk_size` | Core | `3800` | Safe message chunk size (long replies are automatically split by paragraph to prevent platform limit errors) |
 | `allow_open_access` | Security | `false` | If `false`, enables Safe Lockdown Mode when allowlist is empty |
 | `allow_group_members_dm` | Security | `true` | Allows members of authorized groups to automatically DM the bot |
 | `allowed_chat_ids` | Security | `[]` | Whitelisted Group Chat IDs (auto-leaves unlisted groups) |

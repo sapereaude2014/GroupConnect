@@ -152,7 +152,7 @@ bash scripts/daemon.sh start config.discord.json
 | `max_history_len` | 通用核心 | `30` | 静默群聊滑动窗口保留的最大消息条数 |
 | `timeout_secs` | 通用核心 | `180` | 单次 Agent 执行最大超时时间（秒） |
 | `session_idle_timeout_mins` | 通用核心 | `30` | 常驻进程空闲自动回收时长（分钟，设为 0 表示不回收） |
-| `max_chunk_size` | 平台通道 | `3800` | 发送给 Telegram 的单条消息安全字符上限 |
+| `max_chunk_size` | 通用核心 | `3800` | 单条消息安全字符上限（超长回复自动按段落智能切片分段发送，防止触发平台字数超限） |
 | `allow_open_access` | 安全鉴权 | `false` | 是否允许完全开放访问（为 `false` 时白名单为空会自动进入锁定模式） |
 | `allow_group_members_dm` | 安全鉴权 | `true` | 是否允许授权群内的成员免配置直接私聊 Bot（设为 `false` 则仅限指定用户私聊） |
 | `allowed_chat_ids` | 安全鉴权 | `[]` | 允许接入的群聊 ID 白名单（非白名单群聊自动退群） |
