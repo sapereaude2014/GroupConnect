@@ -1,6 +1,6 @@
 """
 OpenCode CLI Adapter for GroupConnect.
-Bridges OpenCode CLI non-interactive execution (`opencode run`) to chat platforms.
+Bridges OpenCode CLI (`opencode run`) to chat platforms.
 """
 
 import asyncio
@@ -16,7 +16,7 @@ logger = logging.getLogger("groupconnect.adapters.opencode")
 
 
 class OpenCodeAdapter(BaseAgentAdapter):
-    """Adapter for OpenCode CLI headless automation (`opencode run`)."""
+    """Adapter for OpenCode CLI automation (`opencode run`)."""
 
     def __init__(
         self,
@@ -41,23 +41,34 @@ class OpenCodeAdapter(BaseAgentAdapter):
     ) -> Tuple[Optional[str], Optional[str]]:
         cid_key = chat_id or 0
 
-        # Build command: opencode run [OPTIONS] "<PROMPT>"
-        cmd = [self.opencode_bin, "run"]
+        # Build command: opencode run [OPTIONS] [message..]
+        cmd = [self.opencode_bin, "run", "--dir", self.workspace_dir]
         if conversation_id:
-            cmd.extend(["--session", conversation_id])
+            cmd.extend(["-s", conversation_id])
         if self.model:
-            cmd.extend(["--model", self.model])
+            cmd.extend(["-m", self.model])
 
-        # Enable JSON streaming format and append prompt
+        # Attach files via -f
+        if attachments:
+            for att in attachments:
+                if att.get("path") and os.path.exists(att["path"]):
+                    cmd.extend(["-f", att["path"]])
+
+        # Enable JSON streaming and append prompt
         cmd.extend(["--format", "json", prompt])
 
         logger.info(f"[OpenCode:{cid_key}] Executing opencode run (session={conversation_id})...")
+
+        env = dict(os.environ)
+        if not env.get("TMPDIR") or env.get("TMPDIR").startswith("/data"):
+            env["TMPDIR"] = "/tmp"
 
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             cwd=self.workspace_dir,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=env,
             start_new_session=True  # POSIX Process Group isolation for /stop
         )
         self.active_procs[cid_key] = proc
@@ -77,6 +88,8 @@ class OpenCodeAdapter(BaseAgentAdapter):
                     event = json.loads(line_str)
                     if "session_id" in event:
                         new_session_id = event["session_id"]
+                    elif "session" in event:
+                        new_session_id = event["session"]
                     if event.get("type") == "text" and "content" in event:
                         collected_text.append(event["content"])
                     elif event.get("type") == "message" and "text" in event:
