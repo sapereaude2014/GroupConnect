@@ -63,7 +63,7 @@
 
 ## 🌐 平台通道上下文权限与限制
 
-| 平台类型 (`platform`) | 实现状态 | 获取静默群上下文的必需设置（一行说明） | 静默群上下文能力 |
+| 平台类型 (`platform`) | 实现状态 | 静默群上下文必需配置 | 静默群上下文能力 |
 | :--- | :--- | :--- | :--- |
 | **`telegram`** | 🟢 已内置 | 在 `@BotFather` 中执行 `/setprivacy` 设为 `Disable`。 | 🌟 完整支持（免公网 IP） |
 | **`discord`** | 🟢 已内置 | 在 Discord 开发者后台开启 `Message Content Intent` 特权。 | 🌟 完整支持（REST & Webhook） |

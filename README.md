@@ -64,7 +64,7 @@ In real-world group chats, team members discuss problems organically before call
 
 ## 🌐 Platform Channel Context Permissions & Limitations
 
-| Platform (`platform`) | Status | Required Permission for Silent Group Context (One-Line Guide) | Silent Context Support |
+| Platform (`platform`) | Status | Required Setting for Silent Group Context | Silent Context Support |
 | :--- | :--- | :--- | :--- |
 | **`telegram`** | 🟢 Built-in | Set `/setprivacy -> Disable` in `@BotFather` to receive unmentioned group messages. | 🌟 Full Support (No public IP needed) |
 | **`discord`** | 🟢 Built-in | Enable `Message Content Intent` and `Server Members Intent` in Discord Developer Portal. | 🌟 Full Support (REST & Webhook) |
