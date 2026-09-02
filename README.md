@@ -62,15 +62,15 @@ In real-world group chats, team members discuss problems organically before call
 
 ---
 
-## 🌐 Platform Channel Requirements & Permissions
+## 🌐 Platform Channel Context Permissions & Limitations
 
-| Platform (`platform`) | Status | Required Permission / Setting (One-Line Guide) | Silent Context Support |
+| Platform (`platform`) | Status | Required Permission for Silent Group Context (One-Line Guide) | Silent Context Support |
 | :--- | :--- | :--- | :--- |
-| **`telegram`** | 🟢 Built-in | Set `/setprivacy -> Disable` in `@BotFather` to receive unmentioned group chats. | 🌟 Full Support (No public IP needed) |
+| **`telegram`** | 🟢 Built-in | Set `/setprivacy -> Disable` in `@BotFather` to receive unmentioned group messages. | 🌟 Full Support (No public IP needed) |
 | **`discord`** | 🟢 Built-in | Enable `Message Content Intent` and `Server Members Intent` in Discord Developer Portal. | 🌟 Full Support (REST & Webhook) |
-| **`slack`** | 🟢 Built-in | Subscribe to `message.channels`, `message.groups`, and `app_mention` events in Slack App settings. | 🌟 Full Support (Events API) |
+| **`slack`** | 🟢 Built-in | Subscribe to `message.channels`, `message.groups`, and `app_mention` events in Slack App. | 🌟 Full Support (Events API) |
 | **`feishu`** (Lark) | 🟢 Built-in | Request `im:message.group_msg` (Read all group messages) in Feishu Developer Console. | 🌟 Full Support (Requires Webhook) |
-| **`wecom`** (WeChat Work) | 🟢 Built-in | Configure self-built app Webhook callback URL and token. | ⚠️ Mention-only (WeCom protocol restricts unmentioned chats) |
+| **`wecom`** (WeChat Work) | 🟢 Built-in | **None (Unsupported)**: WeChat protocol strictly restricts unmentioned group messages from being pushed. | ⚠️ Mention-only (No background context) |
 
 ---
 
