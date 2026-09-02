@@ -2,7 +2,7 @@
 
 <p align="center">
   <b>Give CLI agents context from the group chat.</b><br>
-  A lightweight, zero-bloat runtime connecting Telegram, Discord, Slack, Feishu, and WeCom to Claude Code, Antigravity, Codex, and OpenCode.
+  A lightweight tool connecting Telegram, Discord, Slack, Feishu, and WeCom to Claude Code, Antigravity, Codex, and OpenCode.
 </p>
 
 <p align="center">
@@ -46,7 +46,7 @@ Local CLI agents like **Anthropic Claude Code (`claude`)**, **Google Antigravity
 
 However, standard group chat bots only receive the single message where they are tagged, completely losing conversational context.
 
-**GroupConnect is the minimal glue runtime that bridges this gap:**
+**GroupConnect bridges this gap:**
 1. It silently tracks recent group discussions in a lightweight sliding window.
 2. When tagged, it injects the recent conversation background and invokes your local CLI agent.
 3. It downloads photos, voice notes, and documents directly to your local workspace.
@@ -56,7 +56,7 @@ However, standard group chat bots only receive the single message where they are
           Group Chat (Telegram / Discord / Slack / Feishu / WeCom)
                                      │
                                      ▼
-                       GroupConnect (Lightweight Runtime)
+                                GroupConnect
                   [ Sliding Context + Local File Inbox + /stop ]
                                      │
                                      ▼
@@ -74,9 +74,9 @@ However, standard group chat bots only receive the single message where they are
 
 ## 🧱 Clean Division: Core vs Templates
 
-GroupConnect separates **runtime glue** from **workspace structure**:
+GroupConnect cleanly separates **the bridge mechanism** from **workspace organization**:
 
-### 1. Core (The Runtime)
+### 1. Core (The Bridge)
 * **Silent Sliding Context**: Maintains the last $N$ messages (default: 30) in memory. Syncs only incremental messages on continuous follow-ups.
 * **Zero Cold-Start Worker Pool**: Keeps agent subprocesses warm in the background for instant execution and multi-turn memory.
 * **Multimodal Auto-Inbox**: Photos and files sent in chat are saved to `workspace/inbox/attachments/` and passed as absolute local paths.

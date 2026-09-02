@@ -1,7 +1,7 @@
 # GroupConnect
 
 <p align="center">
-  <b>让本地 CLI Agent 原生理解群聊上下文的极简 Runtime。</b><br>
+  <b>让本地 CLI Agent 读懂群聊上下文。</b><br>
   （连接 Telegram、Discord、Slack、飞书 Feishu、企业微信 WeCom；适配 Claude Code、Antigravity、Codex、OpenCode）
 </p>
 
@@ -46,7 +46,7 @@ AI:     "好的，已为你记录：
 
 但传统的群聊机器人只在被 `@` 时收到单条消息，彻底丢失了群聊讨论背景。
 
-**GroupConnect 就是把这套繁琐胶水工程压缩成一个极简 Runtime：**
+**GroupConnect 就是把这套繁琐的胶水逻辑做成一个即装即用的轻量工具：**
 1. 在后台静默维护群聊最近的滑动上下文；
 2. 当有人 `@` 机器人时，自动将群聊背景打包注入并调起本地 CLI Agent；
 3. 群内发送的照片、语音和文档，自动秒级落盘到本地工作区；
@@ -56,7 +56,7 @@ AI:     "好的，已为你记录：
           群聊平台 (Telegram / Discord / Slack / 飞书 / 企微)
                                    │
                                    ▼
-                       GroupConnect (轻量 Runtime)
+                              GroupConnect
                  [ 静默滑动窗口 + 附件落盘 + 即时 /stop ]
                                    │
                                    ▼
@@ -74,9 +74,9 @@ AI:     "好的，已为你记录：
 
 ## 🧱 干净利落的项目结构：Core 与 Templates
 
-GroupConnect 严格区分 **运行时胶水（Core）** 与 **工作区组织范式（Templates）**：
+GroupConnect 严格区分 **连接通道与核心逻辑（Core）** 与 **工作区组织范式（Templates）**：
 
-### 1. Core（核心运行时）
+### 1. Core（核心连接逻辑）
 * **静默滑动窗口与增量同步**：后台维护最近 $N$ 条（默认 30 条）群聊记录，连续追问时仅同步增量消息；
 * **零冷启动进程池**：保持后台进程温热，消除启动延迟并保留多轮会话记忆；
 * **多模态附件自动落盘**：群聊照片、单据自动存入 `workspace/inbox/attachments/` 并提供绝对物理路径；
