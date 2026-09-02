@@ -1,6 +1,6 @@
 """
 Central Orchestrator Engine for GroupConnect.
-Connects Channel, Agent Adapter, Context Manager, Gatekeeper, and Command Parser.
+Connects Channels (Telegram, Feishu, WeCom), Agent Adapters, Context Manager, Gatekeeper, and Command Parser.
 """
 
 import asyncio
@@ -16,6 +16,8 @@ from groupconnect.adapters.codex import CodexAdapter
 from groupconnect.adapters.opencode import OpenCodeAdapter
 from groupconnect.channels.base import BaseChannel, InboundMessage
 from groupconnect.channels.telegram import TelegramChannel
+from groupconnect.channels.feishu import FeishuChannel
+from groupconnect.channels.wecom import WeComChannel
 from groupconnect.core.command import parse_bot_command
 from groupconnect.core.config import GatewayConfig
 from groupconnect.core.context import ContextManager
@@ -45,11 +47,11 @@ class GroupConnectEngine:
         # 2. Agent Adapter Factory
         self.adapter: BaseAgentAdapter = self._create_adapter()
 
-        # 3. Channel Factory
+        # 3. Channel Factory (Supports: telegram, feishu, wecom)
         self.channel: BaseChannel = self._create_channel()
 
         # Concurrency Locks & State
-        self.chat_locks: Dict[int, asyncio.Lock] = {}
+        self.chat_locks: Dict[Any, asyncio.Lock] = {}
         self.is_running = False
 
     def _create_adapter(self) -> BaseAgentAdapter:
@@ -89,12 +91,20 @@ class GroupConnectEngine:
             )
 
     def _create_channel(self) -> BaseChannel:
-        if self.config.platform == "telegram":
+        platform = self.config.platform
+        if platform in ("telegram", "tg"):
             return TelegramChannel(self.config, self.on_inbound_message)
+        elif platform in ("feishu", "lark"):
+            return FeishuChannel(self.config, self.on_inbound_message)
+        elif platform in ("wecom", "wechat", "wework", "weixin"):
+            return WeComChannel(self.config, self.on_inbound_message)
         else:
-            raise ValueError(f"Unsupported platform channel: {self.config.platform}. Supported: 'telegram'")
+            raise ValueError(
+                f"Unsupported platform channel: '{platform}'. "
+                f"Supported channels: 'telegram', 'feishu', 'wecom'"
+            )
 
-    def get_chat_lock(self, chat_id: int) -> asyncio.Lock:
+    def get_chat_lock(self, chat_id: Any) -> asyncio.Lock:
         if chat_id not in self.chat_locks:
             self.chat_locks[chat_id] = asyncio.Lock()
         return self.chat_locks[chat_id]
@@ -152,7 +162,7 @@ class GroupConnectEngine:
                         "🔒 **Safe Lockdown Mode**\n\n"
                         "No allowlist is configured in `config.json`. To protect local workspace assets, "
                         "access is locked by default.\n\n"
-                        "👉 **To authorize yourself**, add your Telegram username or numeric ID to `allowed_usernames` "
+                        "👉 **To authorize yourself**, add your username or numeric ID to `allowed_usernames` "
                         "or `allowed_user_ids` in `config.json`."
                     )
                 return

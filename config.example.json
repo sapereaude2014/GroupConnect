@@ -4,6 +4,13 @@
   "bot_username": "your_group_bot",
   "bot_name": "GroupConnect",
 
+  "feishu_app_id": "cli_xxxxxxxxxxxx",
+  "feishu_app_secret": "YOUR_FEISHU_APP_SECRET",
+
+  "wecom_corp_id": "wwxxxxxxxxxxxxxx",
+  "wecom_corp_secret": "YOUR_WECOM_CORP_SECRET",
+  "wecom_agent_id": "1000002",
+
   "workspace_dir": "./workspace",
 
   "engine_type": "antigravity",

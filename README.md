@@ -2,7 +2,7 @@
 
 <p align="center">
   <b>A Group-Context Gateway for Local CLI Agents (Claude Code, Antigravity, Codex, OpenCode)</b><br>
-  Connect your group chats to local CLI agents with silent sliding context, dynamic member security, and zero cold-start execution.
+  Connect your group chats across <b>Telegram</b>, <b>Feishu (Lark)</b>, and <b>WeCom (WeChat Work)</b> to local CLI agents with silent sliding context, dynamic member security, and zero cold-start execution.
 </p>
 
 <p align="center">
@@ -14,7 +14,7 @@
   <img src="https://img.shields.io/badge/python-3.9+-green.svg" alt="Python" />
   <img src="https://img.shields.io/badge/dependency-httpx_only-brightgreen.svg" alt="Zero Bloat" />
   <img src="https://img.shields.io/badge/security-Secure_by_Default-brightgreen.svg" alt="Security" />
-  <img src="https://img.shields.io/badge/channels-Telegram_|_Discord_&_Feishu_Planned-blue.svg" alt="Channels" />
+  <img src="https://img.shields.io/badge/channels-Telegram_|_Feishu_|_WeCom-blue.svg" alt="Supported Channels" />
   <img src="https://img.shields.io/badge/harness-Claude_|_Antigravity_|_Codex_|_OpenCode-orange.svg" alt="Supported Harnesses" />
 </p>
 
@@ -22,7 +22,7 @@
 
 ## 📖 Overview
 
-**GroupConnect** is a lightweight, decoupled gateway designed for group-native AI collaboration. It connects group messaging platforms (launching with deep Telegram support) to local CLI Agents running on your machine—including **Anthropic Claude Code (`claude`)**, **Google Antigravity (`agy`)**, **OpenAI Codex (`codex`)**, and **OpenCode (`opencode`)**.
+**GroupConnect** is a lightweight, decoupled gateway designed for group-native AI collaboration. It connects group messaging platforms (**Telegram**, **Feishu / Lark**, and **WeCom / WeChat Work**) to local CLI Agents running on your machine—including **Anthropic Claude Code (`claude`)**, **Google Antigravity (`agy`)**, **OpenAI Codex (`codex`)**, and **OpenCode (`opencode`)**.
 
 Standard AI bots only listen to messages where they are explicitly tagged, losing the entire conversational background. GroupConnect silently maintains recent discussion context, automatically ingests media attachments into your local workspace, recognizes team members dynamically, and executes agent tasks with zero cold-start delay under a strict **Secure-by-Default (Default-Deny)** security model.
 
@@ -62,17 +62,13 @@ In real-world group chats, team members discuss problems organically before call
 
 ---
 
-## 🌐 Platform Channel Integrations
+## 🌐 Platform Channels
 
-### 🟢 Telegram Channel (Built-in)
-* **Auto-Leave Protection (`leaveChat`)**: Immediately leaves unauthorized groups if dragged in by strangers to protect local workspace files.
-* **Smart Long-Message Splitting**: Gracefully splits responses exceeding Telegram's 4096-character limit along paragraph boundaries without cutting code blocks or words in half.
-* **Markdown Fallback Protection**: Automatically strips formatting and retries as clean text if unclosed Markdown tags trigger Telegram parsing errors, guaranteeing 100% message delivery.
-* **Telegraph Instant View**: Converts long-form research reports into zero-authentication Telegraph pages for 0-second native popup reading on mobile.
-
-### 🟡 Planned Channels
-* **Discord**: Rich Embed cards, thread-based conversation isolation.
-* **Feishu / Lark**: Interactive cards and cloud document attachments.
+| Platform (`platform`) | Implementation | Key Capabilities |
+| :--- | :--- | :--- |
+| **`telegram`** | 🟢 Built-in | Long-polling, auto-leave protection (`leaveChat`), paragraph-safe 4000-char message chunking, Markdown fallback, Telegraph Instant View. |
+| **`feishu`** (Lark) | 🟢 Built-in | Feishu Open Platform bot API, tenant token caching, group member verification, automated chat leave. |
+| **`wecom`** (WeChat Work) | 🟢 Built-in | Enterprise self-built app & bot API, supports personal WeChat access via WeCom external groups, access token auto-refresh. |
 
 ---
 
@@ -109,7 +105,7 @@ Run the interactive setup wizard:
 python3 -m groupconnect.cli --init
 ```
 
-The wizard will prompt for your Telegram Bot Token (from `@BotFather`), your preferred CLI agent, and your local workspace directory, generating `config.json` in seconds.
+The wizard will prompt for your platform, credentials, preferred CLI agent, and local workspace directory, generating `config.json` in seconds.
 
 *(Or copy `config.example.json` to `config.json` and edit it manually).*
 
@@ -131,8 +127,13 @@ python3 -m groupconnect.cli --config config.json
 
 | Parameter | Category | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `platform` | Channel | `"telegram"` | Messaging platform (`"telegram"`) |
+| `platform` | Channel | `"telegram"` | Messaging platform (`"telegram"`, `"feishu"`, `"wecom"`) |
 | `bot_token` | Channel | `""` | Telegram Bot API Token |
+| `feishu_app_id` | Channel | `""` | Feishu / Lark App ID (`cli_...`) |
+| `feishu_app_secret` | Channel | `""` | Feishu / Lark App Secret |
+| `wecom_corp_id` | Channel | `""` | WeCom Enterprise Corp ID (`ww...`) |
+| `wecom_corp_secret` | Channel | `""` | WeCom Application Secret |
+| `wecom_agent_id` | Channel | `""` | WeCom Application Agent ID |
 | `engine_type` | Engine | `"antigravity"` | Agent backend (`"antigravity"`, `"claude"`, `"codex"`, `"opencode"`) |
 | `workspace_dir` | Core | `"./workspace"` | Target local directory for agent operations and inbox |
 | `max_history_len` | Core | `30` | Number of recent group messages to track in sliding buffer |
@@ -142,8 +143,8 @@ python3 -m groupconnect.cli --config config.json
 | `allow_open_access` | Security | `false` | If `false`, enables Safe Lockdown Mode when allowlist is empty |
 | `allow_group_members_dm` | Security | `true` | Allows members of authorized groups to automatically DM the bot |
 | `allowed_chat_ids` | Security | `[]` | Whitelisted Group Chat IDs (auto-leaves unlisted groups) |
-| `allowed_user_ids` | Security | `[]` | Whitelisted Telegram User IDs for direct messaging |
-| `allowed_usernames` | Security | `[]` | Whitelisted Telegram `@usernames` for direct messaging |
+| `allowed_user_ids` | Security | `[]` | Whitelisted User IDs for direct messaging |
+| `allowed_usernames` | Security | `[]` | Whitelisted `@usernames` for direct messaging |
 
 ---
 

@@ -2,7 +2,7 @@
 
 <p align="center">
   <b>专为群聊设计的本地 CLI Agent 静默上下文感知与常驻运行网关</b><br>
-  （支持 Claude Code、Antigravity、Codex、OpenCode）
+  （支持 Telegram、飞书 Feishu、企业微信 WeCom；支持 Claude Code、Antigravity、Codex、OpenCode）
 </p>
 
 <p align="center">
@@ -14,7 +14,7 @@
   <img src="https://img.shields.io/badge/python-3.9+-green.svg" alt="Python" />
   <img src="https://img.shields.io/badge/dependency-httpx_only-brightgreen.svg" alt="Zero Bloat" />
   <img src="https://img.shields.io/badge/security-默认安全锁定-brightgreen.svg" alt="Security" />
-  <img src="https://img.shields.io/badge/channels-Telegram_|_Discord_&_Feishu_Planned-blue.svg" alt="Channels" />
+  <img src="https://img.shields.io/badge/channels-Telegram_|_Feishu_|_WeCom-blue.svg" alt="Supported Channels" />
   <img src="https://img.shields.io/badge/harness-Claude_|_Antigravity_|_Codex_|_OpenCode-orange.svg" alt="Supported Harnesses" />
 </p>
 
@@ -22,7 +22,7 @@
 
 ## 📖 项目简介
 
-**GroupConnect** 是一个专为群聊协作设计的轻量级网关，用于将群聊平台（首发深度支持 Telegram）连接到本地运行的各类 CLI Agent（支持 **Anthropic Claude Code `claude`**、**Google Antigravity `agy`**、**OpenAI Codex `codex`** 及 **OpenCode `opencode`**）。
+**GroupConnect** 是一个专为群聊协作设计的轻量级网关，用于将主流群聊平台（深度支持 **Telegram**、**飞书 Feishu**、**企业微信 WeCom**）连接到本地运行的各类 CLI Agent（支持 **Anthropic Claude Code `claude`**、**Google Antigravity `agy`**、**OpenAI Codex `codex`** 及 **OpenCode `opencode`**）。
 
 传统机器人只在被 `@` 时才接收单条消息，彻底丢失群聊讨论背景。GroupConnect 在后台静默维护最近讨论上下文，群内发送的多模态文件自动落盘到本地工作区，支持动态成员鉴权，在**默认拒绝（Default-Deny）**的安全策略下提供零冷启动的低延迟常驻执行。
 
@@ -61,17 +61,13 @@
 
 ---
 
-## 🌐 平台通道与专有特性 (Platform Channels)
+## 🌐 支持的平台通道 (Platform Channels)
 
-### 🟢 Telegram 渠道（已内置）
-* **防陌生拉群保护 (`leaveChat`)**：一旦检测到被拉入非白名单群聊，秒级调用 `leaveChat` 退出，防止本地工作区被陌生群调用；
-* **长消息智能按段落拆分**：针对 Telegram 单条 4096 字符的限制，超长回答自动按段落边界拆分连续发送，绝不断章、绝不截断代码块；
-* **Markdown 语法自动容错**：若模型输出未闭合标签导致 Telegram 解析报错，秒级自动降级重发纯文本，确保消息 100% 成功送达；
-* **移动端免密即时预览 (Telegraph)**：长篇报告或方案支持一键转译为 Telegraph 页面，在 Telegram 移动端内支持 0 秒免密原生弹窗阅读。
-
-### 🟡 规划中渠道
-* **Discord**：Embeds 富文本卡片、Threads 子频道对话隔离；
-* **飞书 / Lark**：交互式消息卡片 (Interactive Cards)、飞书云文档挂载。
+| 平台类型 (`platform`) | 实现状态 | 特性支持 |
+| :--- | :--- | :--- |
+| **`telegram`** | 🟢 已内置 | 长轮询免公网 IP、未授权秒级退群 (`leaveChat`)、长消息按段落拆分、Markdown 语法自动容错、Telegraph 原生即时预览。 |
+| **`feishu`** (飞书) | 🟢 已内置 | 飞书开放平台企业自建应用 API、Tenant Token 自动刷新与多级缓存、群成员关系动态核验。 |
+| **`wecom`** (企业微信) | 🟢 已内置 | 企业自建应用与智能机器人 API、**支持普通微信用户在微信中直接对话**（通过企微外部互通群）、Access Token 自动续期。 |
 
 ---
 
@@ -106,7 +102,7 @@ pip install -r requirements.txt
 python3 -m groupconnect.cli --init
 ```
 
-向导会依次询问您的 Telegram Bot Token（来自 `@BotFather`）、所选 CLI Agent 及本地工作区路径，10 秒内自动生成 `config.json`。
+向导会依次询问您的接入平台（Telegram / 飞书 / 企微）、凭证、所选 CLI Agent 及本地工作区路径，10 秒内自动生成 `config.json`。
 
 ### 3. 运行服务
 
@@ -126,8 +122,13 @@ python3 -m groupconnect.cli --config config.json
 
 | 参数项 | 分类 | 默认值 | 说明 |
 | :--- | :--- | :--- | :--- |
-| `platform` | 平台通道 | `"telegram"` | 接入平台（目前支持 `"telegram"`） |
+| `platform` | 平台通道 | `"telegram"` | 接入平台（支持 `"telegram"`, `"feishu"`, `"wecom"`） |
 | `bot_token` | 平台通道 | `""` | Telegram Bot API 访问密钥 |
+| `feishu_app_id` | 平台通道 | `""` | 飞书应用 App ID (`cli_...`) |
+| `feishu_app_secret` | 平台通道 | `""` | 飞书应用 App Secret |
+| `wecom_corp_id` | 平台通道 | `""` | 企业微信 Corp ID (`ww...`) |
+| `wecom_corp_secret` | 平台通道 | `""` | 企业微信应用 Secret |
+| `wecom_agent_id` | 平台通道 | `""` | 企业微信应用 Agent ID |
 | `engine_type` | 引擎适配 | `"antigravity"` | 后端 Agent 类型（支持 `"claude"`, `"antigravity"`, `"codex"`, `"opencode"`） |
 | `workspace_dir` | 通用核心 | `"./workspace"` | Agent 挂载的本地工作区目录（附件与日志自动在此创建） |
 | `max_history_len` | 通用核心 | `30` | 静默群聊滑动窗口保留的最大消息条数 |
@@ -137,8 +138,8 @@ python3 -m groupconnect.cli --config config.json
 | `allow_open_access` | 安全鉴权 | `false` | 是否允许完全开放访问（为 `false` 时白名单为空会自动进入锁定模式） |
 | `allow_group_members_dm` | 安全鉴权 | `true` | 是否允许授权群内的成员免配置直接私聊 Bot（设为 `false` 则仅限指定用户私聊） |
 | `allowed_chat_ids` | 安全鉴权 | `[]` | 允许接入的群聊 ID 白名单（非白名单群聊自动退群） |
-| `allowed_user_ids` | 安全鉴权 | `[]` | 允许私聊的 Telegram User ID 白名单 |
-| `allowed_usernames` | 安全鉴权 | `[]` | 允许私聊的 Telegram Username 白名单 |
+| `allowed_user_ids` | 安全鉴权 | `[]` | 允许私聊的 User ID 白名单 |
+| `allowed_usernames` | 安全鉴权 | `[]` | 允许私聊的 Username 白名单 |
 
 ---
 
@@ -155,7 +156,7 @@ python3 -m groupconnect.cli --config config.json
 
 `templates/` 目录下提供了两个开箱即用的工作区参考模板（**非必选**）：
 * 🏡 **家庭管家模板 ([`templates/family_assistant/`](templates/family_assistant/))**：包含家庭档案管理、多模态单据归档及 Telegraph 即时预览转译工具。
-* 💼 **团队助理模板 ([`templates/team_ops_assistant/`](templates/team_ops_assistant/))**：包含敏捷讨论要点提炼与任务跟进规范。
+* 💼 **团队助理模板 ([`templates/team_ops_assistant/`](templates/team_ops_assistant/))**：包含敏捷讨论要点提炼、历史记录检索与任务跟进规范。
 
 ---
 
