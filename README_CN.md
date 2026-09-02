@@ -125,7 +125,7 @@ bash scripts/daemon.sh status
 bash scripts/daemon.sh stop config.telegram.json
 ```
 
-**多平台并发运行 (共享同一个工作区大脑)**：
+**多平台并发运行 (可独立挂载不同工作区或协同运行)**：
 ```bash
 bash scripts/daemon.sh start config.telegram.json
 bash scripts/daemon.sh start config.feishu.json
