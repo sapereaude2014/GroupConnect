@@ -1,7 +1,7 @@
 # GroupConnect
 
 <p align="center">
-  <b>让本地 CLI Agent 读懂群聊上下文。</b><br>
+  <b>把群聊连接到本地 CLI Agent 及其工作区。</b><br>
   （连接 Telegram、Discord、Slack、飞书 Feishu、企业微信 WeCom；适配 Claude Code、Antigravity、Codex、OpenCode）
 </p>
 
@@ -28,15 +28,15 @@
 Alice:  "周六去爬山吧？"
 Bob:    "可以，我负责开车。"
 Carol:  "那就早上八点集合？"
-Alice:  "@AI 帮我们记一下"
+Alice:  "@AI 帮我们把行程记到日程里"
 
-AI:     "好的，已为你记录：
+AI:     "好的，已更新至 schedule.md：
         • 事项：周末爬山
         • 时间：周六 08:00
         • 分工：Bob 负责车辆"
 ```
 
-> **没有人向 AI 重新写 Prompt，也没有人复制粘贴聊天记录。AI 只是自然读懂了刚才群里发生了什么。**
+> **没有人向 AI 重新写 Prompt，也没有人复制粘贴聊天记录。AI 只是自然读懂了刚才群里发生了什么，并直接落盘到工作区。**
 
 ---
 
@@ -46,49 +46,53 @@ AI:     "好的，已为你记录：
 ❌ 普通群聊 Bot (未 @ 消息直接丢弃)
 群成员日常讨论 ───(未@直接丢弃)───> 丢失前文 ───(@AI唤醒)───> "请问你们刚才在聊什么？"
 
-✅ GroupConnect (静默感知与本地执行)
-群成员日常讨论 ───(静默滑动窗口)───> 记忆前文 ───(@AI唤醒)───> 自动带入背景并执行任务
+✅ GroupConnect (静默感知与本地工作区执行)
+群成员日常讨论 ───(静默滑动窗口)───> 记忆前文 ───(@AI唤醒)───> 自动带入背景并修改本地文件
 ```
 
-像 **Anthropic Claude Code (`claude`)**、**Google Antigravity (`agy`)**、**OpenAI Codex (`codex`)** 和 **OpenCode (`opencode`)** 这类本地 CLI Agent 非常强大，因为它们能直接在你的电脑上读写文件、执行脚本。
-
-**GroupConnect 就是把这套连接逻辑做成一个即装即用的轻量连接层：**
-
 ```text
-          群聊平台 (Telegram / Discord / Slack / 飞书 / 企微)
-                                   │
-                                   ▼
-                       GroupConnect (轻量连接层)
-                 [ 静默滑动窗口 + 附件落盘 + 即时 /stop ]
-                                   │
-                                   ▼
-                    本地 CLI Agent (开箱即用，自由替换)
-                 ├── Anthropic Claude Code (`claude`)
-                 ├── Google Antigravity (`agy`)
-                 ├── OpenAI Codex (`codex`)
-                 └── OpenCode (`opencode`)
-                                   │
-                                   ▼
-                    本地工作区 (Workspace / Local Files)
+                 群聊 (自然讨论流)
+                         │
+                         ▼
+               ┌──────────────────┐
+               │   GroupConnect   │
+               │  捕获静默群聊上下文 │
+               │  唤醒本地 CLI Agent │
+               └────────┬─────────┘
+                        │
+                        ▼
+                 本地 CLI Agent
+         (Claude / Antigravity / Codex)
+                        │
+               ┌────────┴────────┐
+               │                 │
+               ▼                 ▼
+          即时回答           工作区 (长期资产沉淀)
+                                 │
+                        ┌────────┼────────┐
+                        ▼        ▼        ▼
+                      任务看板  业务文档  历史归档
 ```
 
 ---
 
-## 🧱 干净利落的项目结构：Core 与 Templates
+## 🧱 双层架构设计：Core 与 Templates
 
-GroupConnect 严格区分 **连接层机制（Core）** 与 **工作区组织范式（Templates）**：
+GroupConnect 严格区分 **连接层机制（Core）** 与 **工作区持久化沉淀（Templates）**：
 
-### 1. Core（核心连接层）
-* **静默滑动窗口与增量同步**：后台维护最近 $N$ 条（默认 30 条）群聊记录，连续追问时仅同步增量消息；
+### 1. Core（群聊 ➔ 上下文 ➔ Agent）
+* **静默滑动窗口与增量同步**：后台维护最近 $N$ 条（默认 30 条）群聊记录，连续追问时仅同步增量新消息；
 * **零冷启动进程池**：保持后台进程温热，消除启动延迟并保留多轮会话记忆；
 * **多模态附件自动落盘**：群聊照片、单据自动存入 `workspace/inbox/attachments/` 并提供绝对物理路径；
 * **即时打断 (`/stop`)**：不排队等待，毫秒级直接强杀当前运行的 Agent 任务树；
 * **默认安全锁定 (Default-Deny)**：白名单为空时自动进入锁定模式，杜绝未经授权的 Shell 执行风险。
 
-### 2. Templates（工作区文件组织范式）
-[`templates/`](templates/) 目录下提供了两套参考实现，回答*“当群聊变成 Agent 的工作空间时，文件应该怎么组织”*：
-* 🏡 **[家庭管家模板 (family_assistant)](templates/family_assistant/)**：包含家庭档案、健康台账、用药记录与单据归档规范；
-* 💼 **[团队助理模板 (team_ops_assistant)](templates/team_ops_assistant/)**：包含敏捷任务看板、故障排查 SOP 与按月归档历史搜索工具。
+### 2. Templates（Agent ➔ 工作区 ➔ 长期资产沉淀）
+> *注：Templates 并非 GroupConnect 的必需组件，GroupConnect 对你的工作区目录结构不做任何强行规定。模板仅作为展示同一套机制在不同场景下的最佳实践参考。*
+
+[`templates/`](templates/) 目录下提供了两套开箱即用的参考实现：
+* 🏡 **[家庭管家模板 (family_assistant)](templates/family_assistant/)**：展示如何将家庭群聊转化为健康档案、资产记录与记忆守则的沉淀空间；
+* 💼 **[团队助理模板 (team_ops_assistant)](templates/team_ops_assistant/)**：展示如何将研发群聊转化为敏捷任务看板、故障 SOP 与按月归档历史搜索工具。
 
 ---
 

@@ -1,8 +1,8 @@
 # GroupConnect
 
 <p align="center">
-  <b>Give local CLI agents context from group chats.</b><br>
-  Connect Telegram, Discord, Slack, Feishu, and WeCom to Claude Code, Antigravity, Codex, and OpenCode.
+  <b>Connect group chats to local CLI agents and their workspaces.</b><br>
+  A lightweight connection layer bridging Telegram, Discord, Slack, Feishu, and WeCom to Claude Code, Antigravity, Codex, and OpenCode.
 </p>
 
 <p align="center">
@@ -22,21 +22,21 @@
 
 ## 💬 The Experience
 
-In real-world group chats, team members discuss organically before calling an AI assistant:
+In real-world group chats, discussions happen organically before anyone calls an AI assistant:
 
 ```text
 Alice: "Hiking this Saturday?"
 Bob:   "Sure, I can drive."
 Carol: "Let's meet at 8:00 AM then?"
-Alice: "@AI Please take note of this."
+Alice: "@AI Please take note of this in our schedule."
 
-AI:    "Got it, recorded:
+AI:    "Got it, recorded in schedule.md:
        • Event: Hiking trip
        • Time: Saturday 08:00 AM
        • Transportation: Bob will drive"
 ```
 
-> **No one wrote a prompt. No one copied and pasted chat history. The AI simply read what just happened in the chat.**
+> **No one wrote a lengthy prompt. No one copied and pasted chat history. The AI simply read what just happened in the chat and updated the workspace.**
 
 ---
 
@@ -44,51 +44,55 @@ AI:    "Got it, recorded:
 
 ```text
 ❌ Standard Group Bots (Discards non-@ messages)
-Alice / Bob chatting ───(Discarded)───> Context Lost ───(@AI tagged)───> "What were you talking about?"
+Team chatting ───(Discarded)───> Context Lost ───(@AI tagged)───> "What were you talking about?"
 
-✅ GroupConnect (Silent Context + Local Execution)
-Alice / Bob chatting ───(Silent Sliding Window)───> Background Synced ───(@AI tagged)───> Instant Action
+✅ GroupConnect (Silent Context + Local Workspace Execution)
+Team chatting ───(Silent Sliding Window)───> Context Captured ───(@AI tagged)───> Updates Local Files
 ```
 
-Local CLI agents like **Anthropic Claude Code (`claude`)**, **Google Antigravity (`agy`)**, **OpenAI Codex (`codex`)**, and **OpenCode (`opencode`)** run on your machine with full access to your local files and tools.
-
-**GroupConnect is the ready-to-use connection layer bridging your group chats to your local CLI agents.**
-
 ```text
-          Group Chat (Telegram / Discord / Slack / Feishu / WeCom)
-                                     │
-                                     ▼
-                       GroupConnect (Connection Layer)
-             [ Silent Sliding Window + Local Auto-Inbox + /stop ]
-                                     │
-                                     ▼
-                       Local CLI Agent (Interchangeable)
-                  ├── Anthropic Claude Code (`claude`)
-                  ├── Google Antigravity (`agy`)
-                  ├── OpenAI Codex (`codex`)
-                  └── OpenCode (`opencode`)
-                                     │
-                                     ▼
-                          Local Workspace & Files
+                 Group Chat (Natural Discussion)
+                               │
+                               ▼
+                     ┌──────────────────┐
+                     │   GroupConnect   │
+                     │  Context Capture │
+                     │  Agent Invocation│
+                     └────────┬─────────┘
+                              │
+                              ▼
+                       Local CLI Agent
+               (Claude / Antigravity / Codex)
+                              │
+                     ┌────────┴────────┐
+                     │                 │
+                     ▼                 ▼
+                Direct Reply       Workspace (Persistent Assets)
+                                       │
+                              ┌────────┼────────┐
+                              ▼        ▼        ▼
+                            Tasks    Docs    History
 ```
 
 ---
 
-## 🧱 Clean Division: Core vs Templates
+## 🧱 The Two-Layer Architecture: Core & Templates
 
-GroupConnect separates **the connection layer (Core)** from **workspace organization (Templates)**:
+GroupConnect cleanly separates **the runtime connection layer (Core)** from **long-term asset persistence (Templates)**:
 
-### 1. Core (Connection Layer)
-* **Silent Sliding Window & Delta Sync**: Tracks recent discussion in the background (default: 30 messages). When tagged, it injects the context and only syncs incremental messages on continuous follow-ups.
-* **Zero Cold-Start Worker Pool**: Maintains warm subprocesses in the background for instant multi-turn memory without startup delay.
+### 1. Core (Group Chat ➔ Context ➔ Agent)
+* **Silent Sliding Window & Delta Sync**: Maintains recent group discussion in memory (default: 30 messages). Syncs only incremental messages on continuous follow-ups.
+* **Zero Cold-Start Worker Pool**: Keeps agent subprocesses warm in the background for instant execution and multi-turn conversational memory.
 * **Multimodal Auto-Inbox**: Photos, voice notes, and documents sent in chat are automatically downloaded to `workspace/inbox/attachments/` and passed as absolute local paths.
 * **Instant `/stop` Interruption**: Preemptively terminates active CLI agent process trees on `/stop` without waiting for queues or locks.
 * **Default-Deny Security**: Safe lockdown mode by default, preventing unauthorized users from accessing your local machine.
 
-### 2. Templates (Workspace Reference Implementations)
+### 2. Templates (Agent ➔ Workspace ➔ Long-Term Persistence)
+*Note: Templates are purely optional reference implementations. GroupConnect imposes zero restrictions on your workspace structure.*
+
 Reference presets in [`templates/`](templates/) demonstrate how to organize local directories when turning a group chat into an ongoing workspace:
-* 🏡 **[Family Assistant](templates/family_assistant/)**: Organizing family health logs, assets, and reminders.
-* 💼 **[Team Ops Assistant](templates/team_ops_assistant/)**: Organizing sprint backlogs, incident SOPs, and monthly JSONL discussion archives.
+* 🏡 **[Family Assistant](templates/family_assistant/)**: Turning a family chat into a persistent ledger for health records, assets, and memory guidelines.
+* 💼 **[Team Ops Assistant](templates/team_ops_assistant/)**: Turning a dev team chat into an active workspace for sprint tracking, incident SOPs, and searchable monthly JSONL archives.
 
 ---
 
