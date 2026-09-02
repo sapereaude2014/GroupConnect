@@ -1,0 +1,2 @@
+[console_scripts]
+groupconnect = groupconnect.cli:main
