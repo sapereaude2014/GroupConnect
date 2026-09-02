@@ -2,7 +2,7 @@
 
 <p align="center">
   <b>专为群聊设计的本地 CLI Agent 静默上下文感知与常驻运行网关</b><br>
-  （支持 Telegram、飞书 Feishu、企业微信 WeCom；支持 Claude Code、Antigravity、Codex、OpenCode）
+  （支持 Telegram、Discord、Slack、飞书 Feishu、企业微信 WeCom；支持 Claude Code、Antigravity、Codex、OpenCode）
 </p>
 
 <p align="center">
@@ -14,7 +14,7 @@
   <img src="https://img.shields.io/badge/python-3.9+-green.svg" alt="Python" />
   <img src="https://img.shields.io/badge/dependency-httpx_only-brightgreen.svg" alt="Zero Bloat" />
   <img src="https://img.shields.io/badge/security-默认安全锁定-brightgreen.svg" alt="Security" />
-  <img src="https://img.shields.io/badge/channels-Telegram_|_Feishu_|_WeCom-blue.svg" alt="Supported Channels" />
+  <img src="https://img.shields.io/badge/channels-Telegram_|_Discord_|_Slack_|_Feishu_|_WeCom-blue.svg" alt="Supported Channels" />
   <img src="https://img.shields.io/badge/harness-Claude_|_Antigravity_|_Codex_|_OpenCode-orange.svg" alt="Supported Harnesses" />
 </p>
 
@@ -22,7 +22,7 @@
 
 ## 📖 项目简介
 
-**GroupConnect** 是一个专为群聊协作设计的轻量级网关，用于将主流群聊平台（深度支持 **Telegram**、**飞书 Feishu**、**企业微信 WeCom**）连接到本地运行的各类 CLI Agent（支持 **Anthropic Claude Code `claude`**、**Google Antigravity `agy`**、**OpenAI Codex `codex`** 及 **OpenCode `opencode`**）。
+**GroupConnect** 是一个专为群聊协作设计的轻量级网关，用于将主流群聊平台（深度支持 **Telegram**、**Discord**、**Slack**、**飞书 Feishu**、**企业微信 WeCom**）连接到本地运行的各类 CLI Agent（支持 **Anthropic Claude Code `claude`**、**Google Antigravity `agy`**、**OpenAI Codex `codex`** 及 **OpenCode `opencode`**）。
 
 传统机器人只在被 `@` 时才接收单条消息，彻底丢失群聊讨论背景。GroupConnect 在后台静默维护最近讨论上下文，群内发送的多模态文件自动落盘到本地工作区，支持动态成员鉴权，在**默认拒绝（Default-Deny）**的安全策略下提供零冷启动的低延迟常驻执行。
 
@@ -63,9 +63,11 @@
 
 ## 🌐 平台通道权限要求与限制
 
-| 平台类型 (`platform`) | 实现状态 | 必需权限 / 设置（一句话说明） | 静默群上下文能力 |
+| 平台类型 (`platform`) | 实现状态 | 必需权限 / 设置（一行说明） | 静默群上下文能力 |
 | :--- | :--- | :--- | :--- |
 | **`telegram`** | 🟢 已内置 | 在 `@BotFather` 中执行 `/setprivacy` 设为 `Disable`。 | 🌟 完整支持（免公网 IP） |
+| **`discord`** | 🟢 已内置 | 在 Discord 开发者后台开启 `Message Content Intent` 特权。 | 🌟 完整支持（REST & Webhook） |
+| **`slack`** | 🟢 已内置 | 在 Slack App 中订阅 `message.channels` 与 `app_mention` 事件。 | 🌟 完整支持（Events API） |
 | **`feishu`** (飞书) | 🟢 已内置 | 在飞书开放平台申请 `im:message.group_msg`（获取群组所有消息）权限。 | 🌟 完整支持（需 Webhook 回调） |
 | **`wecom`** (企业微信) | 🟢 已内置 | 配置自建应用接收消息 Webhook 地址与 Token。 | ⚠️ 仅限 `@` 提问（微信协议限制未 @ 消息下发） |
 
@@ -102,7 +104,7 @@ pip install -r requirements.txt
 python3 -m groupconnect.cli --init
 ```
 
-向导会依次询问您的接入平台（Telegram / 飞书 / 企微）、凭证、所选 CLI Agent 及本地工作区路径，10 秒内自动生成 `config.json`。
+向导会依次询问您的接入平台（Telegram / Discord / Slack / 飞书 / 企微）、凭证、所选 CLI Agent 及本地工作区路径，10 秒内自动生成 `config.json`。
 
 ### 3. 运行服务
 
@@ -122,8 +124,10 @@ python3 -m groupconnect.cli --config config.json
 
 | 参数项 | 分类 | 默认值 | 说明 |
 | :--- | :--- | :--- | :--- |
-| `platform` | 平台通道 | `"telegram"` | 接入平台（支持 `"telegram"`, `"feishu"`, `"wecom"`） |
+| `platform` | 平台通道 | `"telegram"` | 接入平台（支持 `"telegram"`, `"discord"`, `"slack"`, `"feishu"`, `"wecom"`） |
 | `bot_token` | 平台通道 | `""` | Telegram Bot API 访问密钥 |
+| `discord_bot_token` | 平台通道 | `""` | Discord Bot Token |
+| `slack_bot_token` | 平台通道 | `""` | Slack Bot User OAuth Token (`xoxb-...`) |
 | `feishu_app_id` | 平台通道 | `""` | 飞书应用 App ID (`cli_...`) |
 | `feishu_app_secret` | 平台通道 | `""` | 飞书应用 App Secret |
 | `wecom_corp_id` | 平台通道 | `""` | 企业微信 Corp ID (`ww...`) |

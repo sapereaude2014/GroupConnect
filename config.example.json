@@ -4,6 +4,10 @@
   "bot_username": "your_group_bot",
   "bot_name": "GroupConnect",
 
+  "discord_bot_token": "YOUR_DISCORD_BOT_TOKEN",
+
+  "slack_bot_token": "xoxb-YOUR_SLACK_BOT_TOKEN",
+
   "feishu_app_id": "cli_xxxxxxxxxxxx",
   "feishu_app_secret": "YOUR_FEISHU_APP_SECRET",
 

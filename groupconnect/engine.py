@@ -1,6 +1,6 @@
 """
 Central Orchestrator Engine for GroupConnect.
-Connects Channels (Telegram, Feishu, WeCom), Agent Adapters, Context Manager, Gatekeeper, and Command Parser.
+Connects Channels (Telegram, Discord, Slack, Feishu, WeCom), Agent Adapters, Context Manager, Gatekeeper, and Command Parser.
 """
 
 import asyncio
@@ -16,6 +16,8 @@ from groupconnect.adapters.codex import CodexAdapter
 from groupconnect.adapters.opencode import OpenCodeAdapter
 from groupconnect.channels.base import BaseChannel, InboundMessage
 from groupconnect.channels.telegram import TelegramChannel
+from groupconnect.channels.discord import DiscordChannel
+from groupconnect.channels.slack import SlackChannel
 from groupconnect.channels.feishu import FeishuChannel
 from groupconnect.channels.wecom import WeComChannel
 from groupconnect.core.command import parse_bot_command
@@ -47,7 +49,7 @@ class GroupConnectEngine:
         # 2. Agent Adapter Factory
         self.adapter: BaseAgentAdapter = self._create_adapter()
 
-        # 3. Channel Factory (Supports: telegram, feishu, wecom)
+        # 3. Channel Factory (Supports: telegram, discord, slack, feishu, wecom)
         self.channel: BaseChannel = self._create_channel()
 
         # Concurrency Locks & State
@@ -94,6 +96,10 @@ class GroupConnectEngine:
         platform = self.config.platform
         if platform in ("telegram", "tg"):
             return TelegramChannel(self.config, self.on_inbound_message)
+        elif platform in ("discord",):
+            return DiscordChannel(self.config, self.on_inbound_message)
+        elif platform in ("slack",):
+            return SlackChannel(self.config, self.on_inbound_message)
         elif platform in ("feishu", "lark"):
             return FeishuChannel(self.config, self.on_inbound_message)
         elif platform in ("wecom", "wechat", "wework", "weixin"):
@@ -101,7 +107,7 @@ class GroupConnectEngine:
         else:
             raise ValueError(
                 f"Unsupported platform channel: '{platform}'. "
-                f"Supported channels: 'telegram', 'feishu', 'wecom'"
+                f"Supported channels: 'telegram', 'discord', 'slack', 'feishu', 'wecom'"
             )
 
     def get_chat_lock(self, chat_id: Any) -> asyncio.Lock:

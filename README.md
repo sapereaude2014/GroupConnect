@@ -2,7 +2,7 @@
 
 <p align="center">
   <b>A Group-Context Gateway for Local CLI Agents (Claude Code, Antigravity, Codex, OpenCode)</b><br>
-  Connect your group chats across <b>Telegram</b>, <b>Feishu (Lark)</b>, and <b>WeCom</b> to local CLI agents with silent sliding context, dynamic member security, and zero cold-start execution.
+  Connect your group chats across <b>Telegram</b>, <b>Discord</b>, <b>Slack</b>, <b>Feishu (Lark)</b>, and <b>WeCom</b> to local CLI agents with silent sliding context, dynamic member security, and zero cold-start execution.
 </p>
 
 <p align="center">
@@ -14,7 +14,7 @@
   <img src="https://img.shields.io/badge/python-3.9+-green.svg" alt="Python" />
   <img src="https://img.shields.io/badge/dependency-httpx_only-brightgreen.svg" alt="Zero Bloat" />
   <img src="https://img.shields.io/badge/security-Secure_by_Default-brightgreen.svg" alt="Security" />
-  <img src="https://img.shields.io/badge/channels-Telegram_|_Feishu_|_WeCom-blue.svg" alt="Supported Channels" />
+  <img src="https://img.shields.io/badge/channels-Telegram_|_Discord_|_Slack_|_Feishu_|_WeCom-blue.svg" alt="Supported Channels" />
   <img src="https://img.shields.io/badge/harness-Claude_|_Antigravity_|_Codex_|_OpenCode-orange.svg" alt="Supported Harnesses" />
 </p>
 
@@ -22,7 +22,7 @@
 
 ## 📖 Overview
 
-**GroupConnect** is a lightweight, decoupled gateway designed for group-native AI collaboration. It connects group messaging platforms (**Telegram**, **Feishu / Lark**, and **WeCom**) to local CLI Agents running on your machine—including **Anthropic Claude Code (`claude`)**, **Google Antigravity (`agy`)**, **OpenAI Codex (`codex`)**, and **OpenCode (`opencode`)**.
+**GroupConnect** is a lightweight, decoupled gateway designed for group-native AI collaboration. It connects group messaging platforms (**Telegram**, **Discord**, **Slack**, **Feishu / Lark**, and **WeCom**) to local CLI Agents running on your machine—including **Anthropic Claude Code (`claude`)**, **Google Antigravity (`agy`)**, **OpenAI Codex (`codex`)**, and **OpenCode (`opencode`)**.
 
 Standard AI bots only listen to messages where they are explicitly tagged, losing the entire conversational background. GroupConnect silently maintains recent discussion context, automatically ingests media attachments into your local workspace, recognizes team members dynamically, and executes agent tasks with zero cold-start delay under a strict **Secure-by-Default (Default-Deny)** security model.
 
@@ -67,6 +67,8 @@ In real-world group chats, team members discuss problems organically before call
 | Platform (`platform`) | Status | Required Permission / Setting (One-Line Guide) | Silent Context Support |
 | :--- | :--- | :--- | :--- |
 | **`telegram`** | 🟢 Built-in | Set `/setprivacy -> Disable` in `@BotFather` to receive unmentioned group chats. | 🌟 Full Support (No public IP needed) |
+| **`discord`** | 🟢 Built-in | Enable `Message Content Intent` and `Server Members Intent` in Discord Developer Portal. | 🌟 Full Support (REST & Webhook) |
+| **`slack`** | 🟢 Built-in | Subscribe to `message.channels`, `message.groups`, and `app_mention` events in Slack App settings. | 🌟 Full Support (Events API) |
 | **`feishu`** (Lark) | 🟢 Built-in | Request `im:message.group_msg` (Read all group messages) in Feishu Developer Console. | 🌟 Full Support (Requires Webhook) |
 | **`wecom`** (WeChat Work) | 🟢 Built-in | Configure self-built app Webhook callback URL and token. | ⚠️ Mention-only (WeCom protocol restricts unmentioned chats) |
 
@@ -127,8 +129,10 @@ python3 -m groupconnect.cli --config config.json
 
 | Parameter | Category | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `platform` | Channel | `"telegram"` | Messaging platform (`"telegram"`, `"feishu"`, `"wecom"`) |
+| `platform` | Channel | `"telegram"` | Messaging platform (`"telegram"`, `"discord"`, `"slack"`, `"feishu"`, `"wecom"`) |
 | `bot_token` | Channel | `""` | Telegram Bot API Token |
+| `discord_bot_token` | Channel | `""` | Discord Bot Token |
+| `slack_bot_token` | Channel | `""` | Slack Bot User OAuth Token (`xoxb-...`) |
 | `feishu_app_id` | Channel | `""` | Feishu / Lark App ID (`cli_...`) |
 | `feishu_app_secret` | Channel | `""` | Feishu / Lark App Secret |
 | `wecom_corp_id` | Channel | `""` | WeCom Enterprise Corp ID (`ww...`) |
