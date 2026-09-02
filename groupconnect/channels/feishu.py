@@ -1,6 +1,6 @@
 """
 Feishu / Lark Platform Channel for GroupConnect.
-Connects Feishu Open Platform bot API to core agent gateway.
+Connects Feishu Open Platform bot API & Webhook callback server to core agent gateway.
 """
 
 import asyncio
@@ -20,7 +20,7 @@ logger = logging.getLogger("groupconnect.channel.feishu")
 
 
 class FeishuChannel(BaseChannel):
-    """Channel adapter for Feishu (Lark) Open Platform."""
+    """Channel adapter for Feishu (Lark) Open Platform with built-in Webhook listener."""
 
     def __init__(
         self,
@@ -31,6 +31,8 @@ class FeishuChannel(BaseChannel):
         self.handler = message_handler
         self.app_id = config.raw.get("feishu_app_id") or config.raw.get("app_id", "")
         self.app_secret = config.raw.get("feishu_app_secret") or config.raw.get("app_secret", "")
+        self.verification_token = config.raw.get("feishu_verification_token", "")
+        self.port = int(config.raw.get("webhook_port", config.raw.get("port", 8088)))
         self.api_base = config.raw.get("feishu_api_base", "https://open.feishu.cn")
         self.bot_username = config.bot_username
         self.bot_name = config.bot_name
@@ -38,6 +40,7 @@ class FeishuChannel(BaseChannel):
         self._token: Optional[str] = None
         self._token_expires_at: float = 0.0
         self.client = httpx.AsyncClient(timeout=30.0)
+        self.server = None
         self.is_running = False
 
     async def get_tenant_access_token(self) -> str:
@@ -79,7 +82,6 @@ class FeishuChannel(BaseChannel):
         return None
 
     async def send_typing_action(self, chat_id: Union[int, str]) -> None:
-        # Feishu does not have an explicit typing indicator API endpoint
         pass
 
     async def leave_chat(self, chat_id: Union[int, str]) -> bool:
@@ -111,8 +113,108 @@ class FeishuChannel(BaseChannel):
             logger.warning(f"[Feishu] Failed to check user membership: {e}")
             return False
 
+    async def _handle_http_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        """Handles inbound Feishu Webhook HTTP callbacks (URL verification & events)."""
+        try:
+            request_line = await reader.readline()
+            if not request_line:
+                writer.close()
+                return
+
+            headers = {}
+            content_length = 0
+            while True:
+                line = await reader.readline()
+                if line in (b"\r\n", b"\n", b""):
+                    break
+                header_str = line.decode("utf-8", errors="replace").strip()
+                if ":" in header_str:
+                    k, v = header_str.split(":", 1)
+                    headers[k.strip().lower()] = v.strip()
+                    if k.strip().lower() == "content-length":
+                        content_length = int(v.strip())
+
+            body_bytes = await reader.readexactly(content_length) if content_length > 0 else b""
+            body_str = body_bytes.decode("utf-8", errors="replace")
+
+            if not body_str:
+                response = b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"
+                writer.write(response)
+                await writer.drain()
+                writer.close()
+                return
+
+            try:
+                event_data = json.loads(body_str)
+            except json.JSONDecodeError:
+                response = b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n"
+                writer.write(response)
+                await writer.drain()
+                writer.close()
+                return
+
+            # 1. Feishu URL Challenge Verification
+            if event_data.get("type") == "url_verification" and "challenge" in event_data:
+                resp_payload = json.dumps({"challenge": event_data["challenge"]}).encode("utf-8")
+                response = (
+                    b"HTTP/1.1 200 OK\r\n"
+                    b"Content-Type: application/json; charset=utf-8\r\n"
+                    + f"Content-Length: {len(resp_payload)}\r\n\r\n".encode("utf-8")
+                    + resp_payload
+                )
+                writer.write(response)
+                await writer.drain()
+                writer.close()
+                return
+
+            # Acknowledge HTTP 200 immediately
+            response = b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"
+            writer.write(response)
+            await writer.drain()
+            writer.close()
+
+            # 2. Process Feishu Message Event (im.message.receive_v1)
+            header = event_data.get("header", {})
+            if header.get("event_type") == "im.message.receive_v1":
+                event = event_data.get("event", {})
+                msg = event.get("message", {})
+                sender = event.get("sender", {})
+                sender_id = sender.get("sender_id", {})
+
+                chat_id = msg.get("chat_id")
+                chat_type = msg.get("chat_type", "group")  # 'p2p' or 'group'
+                if chat_type == "p2p":
+                    chat_type = "private"
+
+                # Parse message content
+                raw_content = msg.get("content", "{}")
+                try:
+                    content_json = json.loads(raw_content)
+                    text = content_json.get("text", "")
+                except Exception:
+                    text = raw_content
+
+                mentions = msg.get("mentions", [])
+                is_mentioned = any(m.get("name") == self.bot_name or m.get("key") == "@_all" for m in mentions)
+                is_triggered = (chat_type == "private") or is_mentioned or (f"@{self.bot_username}" in text)
+
+                inbound = InboundMessage(
+                    chat_id=chat_id,
+                    chat_type=chat_type,
+                    msg_id=msg.get("message_id"),
+                    sender_name=sender_id.get("user_id", "feishu_user"),
+                    from_user={"id": sender_id.get("open_id") or sender_id.get("user_id"), "username": sender_id.get("user_id")},
+                    text=text,
+                    is_triggered=is_triggered
+                )
+                asyncio.create_task(self.handler(inbound))
+
+        except Exception as e:
+            logger.error(f"[Feishu] Error handling webhook request: {e}", exc_info=True)
+
     async def start(self) -> None:
         self.is_running = True
-        logger.info(f"Starting Feishu Channel (App ID: {self.app_id})...")
-        while self.is_running:
-            await asyncio.sleep(1)
+        logger.info(f"Starting Feishu Webhook Server on port {self.port} (App ID: {self.app_id})...")
+        self.server = await asyncio.start_server(self._handle_http_client, "0.0.0.0", self.port)
+        async with self.server:
+            await self.server.serve_forever()
