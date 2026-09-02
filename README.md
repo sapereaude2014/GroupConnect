@@ -1,8 +1,12 @@
 # GroupConnect
 
 <p align="center">
-  <b>A Group-Context Gateway for Local CLI Agents (Antigravity, Claude Code, Codex, OpenCode)</b><br>
-  专为群聊设计的本地 CLI Agent 静默上下文感知与常驻运行网关
+  <b>A Group-Context Gateway for Local CLI Agents (Claude Code, Antigravity, Codex, OpenCode)</b><br>
+  Connect your group chats to local CLI agents with silent sliding context, dynamic member security, and zero cold-start execution.
+</p>
+
+<p align="center">
+  <a href="README.md"><b>English</b></a> | <a href="README_CN.md"><b>中文文档</b></a>
 </p>
 
 <p align="center">
@@ -10,86 +14,70 @@
   <img src="https://img.shields.io/badge/python-3.9+-green.svg" alt="Python" />
   <img src="https://img.shields.io/badge/dependency-httpx_only-brightgreen.svg" alt="Zero Bloat" />
   <img src="https://img.shields.io/badge/channels-Telegram_|_Discord_&_Feishu_Planned-blue.svg" alt="Channels" />
-  <img src="https://img.shields.io/badge/harness-Antigravity_|_Claude_|_Codex_|_OpenCode-orange.svg" alt="Agent Harnesses" />
+  <img src="https://img.shields.io/badge/harness-Claude_|_Antigravity_|_Codex_|_OpenCode-orange.svg" alt="Supported Harnesses" />
 </p>
 
 ---
 
-## 📖 项目简介
+## 📖 Overview
 
-GroupConnect 是一个专为群聊协作设计的轻量级网关，用于将群聊平台连接到本地运行的各类 CLI Agent（已支持 **Google Antigravity `agy`**、**Anthropic Claude Code `claude`**、**OpenAI Codex `codex`** 及 **OpenCode `opencode`**）。
+**GroupConnect** is a lightweight, decoupled gateway designed for group-native AI collaboration. It connects group messaging platforms (launching with deep Telegram support) to local CLI Agents running on your machine—including **Anthropic Claude Code (`claude`)**, **Google Antigravity (`agy`)**, **OpenAI Codex (`codex`)**, and **OpenCode (`opencode`)**.
 
-项目采用**三层完全解耦架构**：
-1. **核心引擎层 (`groupconnect.core`)**：负责跨平台的静默滑动窗口、增量上下文追踪、多模态附件自动落盘、常驻进程池管理与通用白名单鉴权；
-2. **平台通道层 (`groupconnect.channels`)**：负责各 IM 平台的协议适配（首发内置 `TelegramChannel`）；
-3. **后端引擎层 (`groupconnect.adapters`)**：负责对接各类本地 CLI Agent Harness。
+Standard AI bots only listen to messages where they are explicitly tagged, losing the entire conversational background. GroupConnect silently maintains recent discussion context, automatically ingests media attachments into your local workspace, recognizes team members dynamically, and executes agent tasks with zero cold-start delay.
 
 ---
 
-## 👥 典型场景对比
+## 👥 Why GroupConnect?
 
-在真实群聊协作中，群成员之间的自然讨论往往不包含 `@bot`。普通机器人由于缺乏静默上下文感知，在被唤醒时容易丢失前文：
+In real-world group chats, team members discuss problems organically before calling an AI assistant:
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
-│ 💬 真实群聊场景                                                         │
+│ 💬 Real-World Team Chat                                                │
 │                                                                        │
-│ Alice: "这套新方案第 3 节关于并发锁的逻辑有点问题，你看了吗？"            │
-│ Bob:   "看了，没考虑超时和重试，高并发下可能会死锁。"                  │
-│ Alice: "@bot 帮我们分析一下刚才讨论的死锁风险，并把改进方案写入 docs/方案.md"│
+│ Alice: "Section 3 of the new proposal has a concurrency lock issue."   │
+│ Bob:   "Right, it lacks timeouts and retries, which may deadlock."     │
+│ Alice: "@bot Review the deadlock risk we discussed and update docs.md" │
 └───────────────────────────────────┬────────────────────────────────────┘
                                     │
           ┌─────────────────────────┴─────────────────────────┐
           ▼                                                   ▼
-❌ 普通群聊 Bot (未 @ 消息直接丢弃)                  ✅ GroupConnect (静默感知与本地执行)
----------------------------------------             ---------------------------------------
-• 表现："请问你要分析什么死锁？请提供前文。"        • 表现：自动提取滑动窗口前文背景，调用本地
-• 结果：上下文丢失，必须手动复制粘贴前文             Tool 直接修改 `docs/方案.md` 并汇报
+❌ Standard Group Bots (Discards non-@ messages)      ✅ GroupConnect (Silent Context + Local Execution)
+------------------------------------------------     ---------------------------------------------------
+• "What deadlock are you referring to? Please paste   • Ingests the sliding context, invokes local tools
+  the previous discussion."                             to modify `docs.md`, and reports the diff.
+• User frustration from repeating context.            • Seamless and context-aware.
 ```
 
 ---
 
-## ✨ 核心特性（通用层）
+## ✨ Key Features
 
-* 🧠 **群聊静默滑动窗口 (Silent Sliding Window)**：在群成员日常交流时不主动打扰，后台自动维护最近 $N$ 条群聊消息（`max_history_len` 可自由配置，默认 30 条）；被唤醒时自动注入讨论背景，连续追问时仅同步增量新消息。
-* 📎 **多模态附件自动落盘 (Multimodal Auto-Inbox)**：群内发送的照片、语音和文档自动下载保存至工作区的 `inbox/attachments/` 目录，并在提示词中提供本地绝对路径供视觉与分析工具直接读取。
-* 🔥 **常驻引擎工作池 (Resident Worker Pool)**：支持通过全双工 `stream-json` 管道保持 Agent 进程常驻，消除冷启动延迟；支持空闲超时自动回收。
-* 🛑 **抢占式强杀 (`/stop`)**：收到 `/stop` 指令时无需排队等待处理锁，通过 POSIX 独立进程组（`os.killpg`）立即终止当前任务及所有子进程。
-* 🛡️ **双重白名单看门狗 (Security Gatekeeper)**：支持群聊与私聊成员白名单鉴权，陌生私聊直接拦截，保护本地工作区安全。
-
----
-
-## 🌐 平台通道与专有特性 (Channels)
-
-### 🟢 Telegram 渠道（已内置）
-* **超长回答自动分条发送**：针对 Telegram 单条 4096 字符的硬性上限，当回答过长时自动按双换行（段落边界）拆分成多条连续发送，绝不硬切断代码块或长单词；
-* **Markdown 语法自动容错**：若大模型输出不规则标签导致 Telegram 解析报错，自动剥离格式秒级降级重发纯文本，确保消息 100% 成功送达；
-* **“正在输入”心跳指示**：Agent 推理期间自动维持 `typing` 状态，避免群成员产生“机器人死机”的误判；
-* **未授权自动退群**：一旦检测到被拉入非白名单群聊，立即调用 `leaveChat` 退出，防止本地工作区被陌生群调用；
-* **移动端免密即时预览**：长篇报告/方案可一键转译为 Telegraph 页面，在 Telegram App 内 0 秒弹窗阅读。
-
-### 🟡 规划中渠道
-* **Discord**：Embeds 富文本卡片、Threads 子频道对话隔离；
-* **飞书 / Lark**：交互式消息卡片 (Interactive Cards)、飞书云文档挂载。
+* 🧠 **Silent Sliding Window**: Observes group discussions silently without spamming replies. When tagged, it automatically injects recent context (configurable depth, default 30 messages) so the agent immediately understands what the team was discussing.
+* 👥 **Dynamic Member Access Control**: No need to look up obscure numeric Telegram user IDs. Whitelist by `@username`, or allow members of your authorized group to automatically DM the assistant via dynamic membership verification. Automatically leaves unauthorized groups to protect your local environment.
+* 📎 **Automatic Multimodal Inbox**: Photos, voice notes, and documents sent in chat are automatically downloaded to `inbox/attachments/` in your workspace and passed as absolute local paths for native visual and file tools.
+* 🔥 **Zero Cold-Start Worker Pool**: Maintains persistent agent subprocesses to eliminate startup latency and preserve multi-turn conversational memory.
+* ⏹️ **Instant `/stop` Cancellation**: If an agent enters an unwanted loop or you need to abort a command immediately, sending `/stop` preemptively terminates the active process tree without waiting for locks.
+* 📖 **Telegram Instant View Integration**: Long-form research reports and documents can be converted into Telegraph pages for zero-second native popup reading on mobile.
 
 ---
 
-## 🧩 支持的本地 CLI Harness (Adapters)
+## 🧩 Supported CLI Agents
 
-| 引擎类型 (`engine_type`) | 调起指令 | 说明 |
+| Engine (`engine_type`) | Binary Command | Features |
 | :--- | :--- | :--- |
-| `antigravity` (默认) | `agy` | 支持全双工 `stream-json` 管道常驻会话池（零冷启动） |
-| `claude` | `claude -p` | 支持 Anthropic Claude Code CLI 会话恢复与执行 |
-| `codex` | `codex exec` | 支持 OpenAI Codex CLI 非交互式 JSONL 事件流与图片附件传入 |
-| `opencode` | `opencode run` | 支持 OpenCode CLI 非交互式任务执行与多轮会话管理 |
+| `claude` | `claude -p` | Official Anthropic Claude Code CLI with session resumption |
+| `antigravity` (default) | `agy` | High-performance full-duplex `stream-json` resident worker pool |
+| `codex` | `codex exec` | OpenAI Codex CLI non-interactive execution with image attachment support |
+| `opencode` | `opencode run` | OpenCode CLI headless automation and multi-turn session handling |
 
 ---
 
-## 🚀 极速上手 (只需 3 步)
+## 🚀 Quick Start (3 Steps)
 
-### 1. 克隆与安装依赖
+### 1. Install
 
-本项目无需数据库，仅需 Python 3.9+ 及 `httpx`：
+Requires Python 3.9+ and `httpx` (no heavy database required):
 
 ```bash
 git clone https://github.com/sapereaude2014/GroupConnect.git
@@ -97,79 +85,69 @@ cd GroupConnect
 pip install -r requirements.txt
 ```
 
-确保本地环境中已安装并授权对应的 CLI Agent（如 `agy`、`claude`、`codex` 或 `opencode`）。
+Ensure your chosen CLI agent (e.g., `claude`, `agy`, `codex`, or `opencode`) is installed and authenticated locally.
 
-### 2. 初始化配置 (两种方式任选其一)
+### 2. Configure (Interactive Wizard)
 
-#### 方式 A：交互式向导快速生成（推荐）
+Run the interactive setup wizard:
+
 ```bash
 python3 -m groupconnect.cli --init
 ```
-*向导会依次询问您的 Telegram Bot Token、所选 CLI Agent 及本地工作区路径，10 秒内自动生成 `config.json`。*
 
-#### 方式 B：手动编辑 `config.json`
-```bash
-cp config.example.json config.json
-```
-只需将 `workspace_dir` 指向您希望 Agent 读写代码或文档的**任意单个本地目录**（如 `~/my_project`），无需手动创建任何子文件夹：
-```json
-{
-  "bot_token": "YOUR_TELEGRAM_BOT_TOKEN",
-  "engine_type": "claude",
-  "workspace_dir": "/path/to/your/project"
-}
-```
+The wizard will prompt for your Telegram Bot Token (from `@BotFather`), your preferred CLI agent, and your local workspace directory, generating `config.json` in seconds.
 
-### 3. 运行服务
+*(Or copy `config.example.json` to `config.json` and edit it manually).*
 
-**前台运行（用于本地调试）**：
+### 3. Run
+
+**Foreground (for development & testing)**:
 ```bash
 python3 -m groupconnect.cli --config config.json
 ```
 
-**后台守护运行（用于服务器长期挂机，进程异常崩溃时 3 秒自动重启）**：
+**Background Daemon (auto-restarts on crash for 24/7 reliability)**:
 ```bash
 ./scripts/daemon.sh config.json groupconnect.log groupconnect.pid
 ```
 
 ---
 
-## ⚙️ 配置参数说明
+## ⚙️ Configuration Reference
 
-| 参数项 | 分类 | 默认值 | 说明 |
+| Parameter | Category | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `platform` | 平台通道 | `"telegram"` | 接入平台（目前支持 `"telegram"`） |
-| `bot_token` | 平台通道 | `""` | 对应平台的机器人访问密钥 |
-| `engine_type` | 引擎适配 | `"antigravity"` | 后端 Agent 类型（支持 `"antigravity"`, `"claude"`, `"codex"`, `"opencode"`） |
-| `workspace_dir` | 通用核心 | `"./workspace"` | Agent 挂载的本地工作区根目录（所有附件与日志自动在此创建） |
-| `max_history_len` | 通用核心 | `30` | 静默群聊滑动窗口保留的最大消息条数 |
-| `timeout_secs` | 通用核心 | `180` | 单次 Agent 执行最大超时时间（秒） |
-| `session_idle_timeout_mins` | 通用核心 | `30` | 常驻进程空闲自动回收时长（分钟，设为 0 表示不回收） |
-| `max_chunk_size` | 平台通道 | `3800` | 发送给 Telegram 的单条消息安全字符上限 |
-| `typing_interval_secs` | 平台通道 | `4.0` | 推理期间发送“正在输入”心跳指示的间隔（秒） |
-| `allowed_chat_ids` | 安全鉴权 | `[]` | 允许接入的群聊 ID 白名单（非白名单群聊自动退群） |
-| `allowed_user_ids` | 安全鉴权 | `[]` | 允许私聊的 Telegram User ID 白名单 |
-| `allowed_usernames` | 安全鉴权 | `[]` | 允许私聊的 Telegram Username 白名单 |
+| `platform` | Channel | `"telegram"` | Messaging platform (`"telegram"`) |
+| `bot_token` | Channel | `""` | Telegram Bot API Token |
+| `engine_type` | Engine | `"antigravity"` | Agent backend (`"antigravity"`, `"claude"`, `"codex"`, `"opencode"`) |
+| `workspace_dir` | Core | `"./workspace"` | Target local directory for agent operations and inbox |
+| `max_history_len` | Core | `30` | Number of recent group messages to track in sliding buffer |
+| `timeout_secs` | Core | `180` | Maximum execution timeout per turn in seconds |
+| `session_idle_timeout_mins` | Core | `30` | Minutes of inactivity before recycling warm worker processes |
+| `max_chunk_size` | Channel | `3800` | Safe message chunk size to prevent platform character limit errors |
+| `allowed_chat_ids` | Security | `[]` | Whitelisted Group Chat IDs (auto-leaves unlisted groups) |
+| `allowed_user_ids` | Security | `[]` | Whitelisted Telegram User IDs for direct messaging |
+| `allowed_usernames` | Security | `[]` | Whitelisted Telegram `@usernames` for direct messaging |
 
 ---
 
-## 🛠 内置指令
+## 🛠 Built-in Slash Commands
 
-* `/status`：查看当前会话状态、常驻进程运行状态、群缓存深度与白名单信息；
-* `/stop`：抢占式立即停止当前正在执行的 Agent 任务；
-* `/new` 或 `/clear`：重置当前会话并清空群聊滑动缓存；
-* `/help`：查看使用帮助。
-
----
-
-## 📂 场景模板说明 (可选参考)
-
-`templates/` 目录下提供了两个开箱即用的工作区参考模板（**非必选**）：
-* 🏡 **家庭管家模板 ([`templates/family_assistant/`](templates/family_assistant/))**：参考目录结构、家庭管理规则与 Telegraph 预览脚本。
-* 💼 **团队助理模板 ([`templates/team_ops_assistant/`](templates/team_ops_assistant/))**：参考敏捷项目协作规则与任务跟进规范。
+* `/status` — View current session, engine status, sliding buffer depth, and authorization state.
+* `/stop` — Preemptively interrupt in-flight agent tasks immediately.
+* `/new` or `/clear` — Reset session and clear sliding context buffer.
+* `/help` — Display help information.
 
 ---
 
-## 📄 开源许可证
+## 📂 Workspace Templates (Optional)
 
-本项目基于 [MIT License](LICENSE) 开源。
+Ready-to-use workspace presets are provided in [`templates/`](templates/):
+* 🏡 **Family Assistant ([`templates/family_assistant/`](templates/family_assistant/))**: Family ledger rules, document archiving, and Telegraph publishing.
+* 💼 **Team Ops Assistant ([`templates/team_ops_assistant/`](templates/team_ops_assistant/))**: Agile standup summaries, issue tracking, and discussion digestion.
+
+---
+
+## 📄 License
+
+Distributed under the [MIT License](LICENSE).
