@@ -1,10 +1,45 @@
-# 💼 Team Ops Assistant Workspace Template
+# 💼 Team Ops & Agile Assistant Workspace Template
 
-Point `workspace_dir` to this directory to turn GroupConnect into an agile team assistant for daily standups, discussion summarization, and issue tracking.
+This template turns **GroupConnect** into an autonomous DevOps & Agile Assistant for software engineering teams. Point `workspace_dir` to your repository or this directory to enable intelligent group standups, incident triage, and task tracking.
 
-## 📁 Recommended Directory Structure
-- `docs/`: Architecture proposals, SOPs, and API specifications
-- `tasks/`: Backlog items, sprint milestones, and action items
-- `meetings/`: Meeting minutes and discussion digests
-- `inbox/attachments/`: UI mockups, crash stacks, and PRDs shared in chat (auto-saved)
-- `inbox/chat_logs/`: Full discussion logs (auto-archived monthly in JSONL)
+---
+
+## 🚀 Key Capabilities in Action
+
+### 1. Discussion Digestion & Task Sync
+```
+Alice: "We agreed to switch to Redis Cluster for session caching."
+Bob:   "I'll handle the terraform provisioning by Thursday."
+Alice: "@bot Summarize our decision and add Bob's task to current_sprint.md"
+```
+* **Result**: The agent extracts the consensus, adds `- [ ] Provision Redis Cluster via Terraform (@bob, Due: Thu)` into `tasks/current_sprint.md`, and confirms in chat with a 3-line summary.
+
+### 2. Multimodal Bug Triage
+```
+Developer drops an error stack screenshot into the Telegram/Discord group:
+Developer: "@bot What caused this 500 error?"
+```
+* **Result**: The image is automatically saved to `inbox/attachments/`, the agent inspects the stack trace, locates the failing line in the local codebase, and replies with the diagnosis and fix snippet.
+
+---
+
+## 📁 Directory Structure
+
+```
+├── AGENTS.md                  # System prompt and operational rules
+├── README.md                  # Workspace documentation
+├── docs/                      # Technical docs, architecture SOPs
+│   └── architecture_sop.md    # Architecture review guidelines
+├── tasks/                     # Task management boards
+│   ├── current_sprint.md      # Active sprint board
+│   └── backlog.md             # Feature and tech-debt backlog
+├── meetings/                  # Standup minutes and discussion digests
+│   └── template.md            # Standard meeting note format
+├── incidents/                 # Incident triage and post-mortems
+│   └── template.md            # Incident post-mortem template
+├── tools/                     # Automation helper utilities
+│   └── digest_discussion.py   # Standup & meeting formatter
+└── inbox/                     # Auto-created by GroupConnect
+    ├── attachments/           # Shared images, logs, documents
+    └── chat_logs/             # Monthly JSONL discussion logs
+```
