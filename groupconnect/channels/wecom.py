@@ -14,13 +14,24 @@ from typing import Any, Callable, Coroutine, Dict, List, Optional, Union
 
 import httpx
 
-from groupconnect.channels.base import BaseChannel, InboundMessage
+from groupconnect.channels.base import BaseChannel, ChannelField, InboundMessage, register_channel
 from groupconnect.core.command import parse_bot_command
 from groupconnect.core.config import GatewayConfig
 
 logger = logging.getLogger("groupconnect.channel.wecom")
 
 
+@register_channel(
+    name="wecom",
+    display_name="WeCom (企业微信)",
+    aliases=["wechat", "wework", "weixin"],
+    fields=[
+        ChannelField(key="wecom_corp_id", label="WeCom Corp ID (ww...)", is_secret=False),
+        ChannelField(key="wecom_corp_secret", label="WeCom App Secret", is_secret=True),
+        ChannelField(key="wecom_agent_id", label="WeCom Agent ID [e.g. 1000002]", default="1000002"),
+        ChannelField(key="webhook_port", label="Webhook listening port", default=8089, is_int=True)
+    ]
+)
 class WeComChannel(BaseChannel):
     """Channel adapter for WeCom (Enterprise WeChat) with built-in Webhook receiver."""
 

@@ -12,13 +12,23 @@ from typing import Any, Callable, Coroutine, Dict, List, Optional, Union
 
 import httpx
 
-from groupconnect.channels.base import BaseChannel, InboundMessage
+from groupconnect.channels.base import BaseChannel, ChannelField, InboundMessage, register_channel
 from groupconnect.core.command import parse_bot_command
 from groupconnect.core.config import GatewayConfig
 
 logger = logging.getLogger("groupconnect.channel.discord")
 
 
+@register_channel(
+    name="discord",
+    display_name="Discord",
+    aliases=["dc"],
+    fields=[
+        ChannelField(key="discord_bot_token", label="Discord Bot Token", is_secret=True),
+        ChannelField(key="bot_username", label="Bot Client ID / Username", default="discord_bot"),
+        ChannelField(key="webhook_port", label="Webhook listening port", default=8090, is_int=True)
+    ]
+)
 class DiscordChannel(BaseChannel):
     """Channel adapter for Discord Bot API."""
 
@@ -72,7 +82,6 @@ class DiscordChannel(BaseChannel):
 
     async def leave_chat(self, chat_id: Union[int, str]) -> bool:
         try:
-            # Leave server/guild
             url = f"{self.api_base}/users/@me/guilds/{chat_id}"
             resp = await self.client.delete(url)
             return resp.status_code == 204

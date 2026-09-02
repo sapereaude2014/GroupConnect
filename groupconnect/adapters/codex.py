@@ -1,6 +1,6 @@
 """
-Codex CLI Adapter for GroupConnect.
-Bridges OpenAI Codex CLI non-interactive execution (`codex exec`) to chat platforms.
+OpenAI Codex CLI Harness Adapter.
+Connects to official `codex` CLI via non-interactive `exec` execution.
 """
 
 import asyncio
@@ -8,20 +8,20 @@ import json
 import logging
 import os
 import signal
-from typing import Any, Dict, List, Optional, Set, Tuple
+import time
+from typing import Any, Dict, List, Optional, Tuple
 
-from groupconnect.adapters.base import BaseAgentAdapter
+from groupconnect.adapters.base import BaseAgentAdapter, register_adapter
 
-logger = logging.getLogger("groupconnect.adapters.codex")
+logger = logging.getLogger("groupconnect.adapter.codex")
 
 
+@register_adapter(name="codex", display_name="OpenAI Codex (codex)", aliases=["openai_codex", "openai"])
 class CodexAdapter(BaseAgentAdapter):
-    """Adapter for OpenAI Codex CLI non-interactive execution."""
-
     def __init__(
         self,
         codex_bin: str = "codex",
-        workspace_dir: str = ".",
+        workspace_dir: str = "./workspace",
         model: Optional[str] = None,
         timeout_secs: int = 180
     ):
@@ -29,8 +29,7 @@ class CodexAdapter(BaseAgentAdapter):
         self.workspace_dir = os.path.abspath(workspace_dir)
         self.model = model
         self.timeout_secs = timeout_secs
-        self.active_procs: Dict[int, asyncio.subprocess.Process] = {}
-        self.cancelled_chats: Set[int] = set()
+        self.active_processes: Dict[int, Any] = {}
 
     async def execute_turn(
         self,
@@ -39,97 +38,98 @@ class CodexAdapter(BaseAgentAdapter):
         chat_id: Optional[int] = None,
         attachments: Optional[List[Dict[str, Any]]] = None
     ) -> Tuple[Optional[str], Optional[str]]:
-        cid_key = chat_id or 0
-
-        # Build command: codex exec [OPTIONS] [PROMPT] or codex exec resume <id> [PROMPT]
-        cmd = [self.codex_bin, "exec"]
-        if conversation_id:
-            cmd.extend(["resume", conversation_id])
+        cmd = [self.codex_bin, "exec", "--json"]
         if self.model:
-            cmd.extend(["-c", f"model={self.model}"])
+            cmd.extend(["-m", self.model])
+        if conversation_id:
+            cmd.extend(["--session", conversation_id])
 
-        # Attach image files via -i
         if attachments:
             for att in attachments:
-                if att.get("path") and att.get("type") == "photo" and os.path.exists(att["path"]):
+                if att.get("type") == "photo" and att.get("path"):
                     cmd.extend(["-i", att["path"]])
 
-        # Enable JSON event streaming and pass prompt
-        cmd.extend(["--json", prompt])
+        cmd.append(prompt)
 
-        logger.info(f"[Codex:{cid_key}] Executing codex exec (resume={bool(conversation_id)})...")
-
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            cwd=self.workspace_dir,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            start_new_session=True  # POSIX Process Group isolation for /stop
-        )
-        self.active_procs[cid_key] = proc
-
-        collected_text: List[str] = []
-        new_session_id = conversation_id
-
+        logger.info(f"[Codex] Spawning CLI runner for chat {chat_id}...")
+        proc = None
         try:
-            while True:
-                line = await proc.stdout.readline()
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                cwd=self.workspace_dir,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                start_new_session=True
+            )
+            if chat_id is not None:
+                self.active_processes[chat_id] = proc
+
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                proc.communicate(),
+                timeout=float(self.timeout_secs)
+            )
+            stdout_str = stdout_bytes.decode("utf-8", errors="replace").strip()
+            stderr_str = stderr_bytes.decode("utf-8", errors="replace").strip()
+
+            if proc.returncode != 0:
+                logger.error(f"[Codex] Exited with code {proc.returncode}. Stderr: {stderr_str}")
+                return f"⚠️ OpenAI Codex error (Code {proc.returncode}):\n```\n{stderr_str or stdout_str}\n```", conversation_id
+
+            final_text = ""
+            for line in stdout_str.split("\n"):
+                line = line.strip()
                 if not line:
-                    break
-                line_str = line.decode("utf-8", errors="replace").strip()
-                if not line_str:
                     continue
                 try:
-                    event = json.loads(line_str)
-                    # Extract session id and message text from JSONL stream
-                    if "session_id" in event:
-                        new_session_id = event["session_id"]
-                    if event.get("type") == "message" and "content" in event:
-                        collected_text.append(event["content"])
-                    elif event.get("type") == "agent_message" and "text" in event:
-                        collected_text.append(event["text"])
-                    elif event.get("type") == "item" and "text" in event:
-                        collected_text.append(event["text"])
+                    event = json.loads(line)
+                    if event.get("type") == "message" and event.get("content"):
+                        final_text += event["content"]
+                    elif event.get("type") == "agent_response" and event.get("text"):
+                        final_text += event["text"]
                 except json.JSONDecodeError:
-                    collected_text.append(line_str)
+                    final_text += f"{line}\n"
 
-            await proc.wait()
+            result_text = final_text.strip() if final_text.strip() else stdout_str
+            new_cid = conversation_id or f"codex_cid_{int(time.time())}"
+            return result_text, new_cid
 
-            if cid_key in self.cancelled_chats:
-                return None, new_session_id
-
-            if proc.returncode != 0 and not collected_text:
-                stderr_bytes = await proc.stderr.read()
-                err_msg = stderr_bytes.decode("utf-8", errors="replace").strip()
-                return f"⚠️ Codex execution error (code {proc.returncode}):\n{err_msg}", new_session_id
-
-            resp = "\n".join(collected_text).strip() or "(Task completed with no text output)"
-            return resp, new_session_id
         except asyncio.TimeoutError:
-            self.terminate(cid_key)
-            return f"⚠️ Codex execution timed out after {self.timeout_secs}s.", new_session_id
+            logger.error(f"[Codex] Execution timed out after {self.timeout_secs}s")
+            if proc and proc.returncode is None:
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                except Exception:
+                    pass
+            return "⏳ Error: OpenAI Codex execution timed out.", conversation_id
+
         except asyncio.CancelledError:
-            self.terminate(cid_key)
-            return None, new_session_id
-        except Exception as e:
-            logger.error(f"[Codex:{cid_key}] Error: {e}", exc_info=True)
-            self.terminate(cid_key)
-            if cid_key in self.cancelled_chats:
-                return None, new_session_id
-            return f"⚠️ Codex execution exception: {e}", new_session_id
+            logger.info(f"[Codex] Turn cancelled for chat {chat_id}")
+            if proc and proc.returncode is None:
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                except Exception:
+                    pass
+            return None, conversation_id
+
         finally:
-            self.active_procs.pop(cid_key, None)
-            self.cancelled_chats.discard(cid_key)
+            if chat_id is not None and chat_id in self.active_processes:
+                self.active_processes.pop(chat_id, None)
 
     def terminate(self, chat_id: int) -> None:
-        self.cancelled_chats.add(chat_id)
-        proc = self.active_procs.pop(chat_id, None)
-        if proc and proc.pid:
+        proc = self.active_processes.get(chat_id)
+        if proc and proc.returncode is None:
+            logger.info(f"[Codex] Killing process group for chat {chat_id}")
             try:
-                os.killpg(proc.pid, signal.SIGTERM)
-            except Exception:
-                pass
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except Exception as e:
+                logger.warning(f"Error terminating Codex: {e}")
+            self.active_processes.pop(chat_id, None)
 
     def close(self) -> None:
-        for cid in list(self.active_procs.keys()):
-            self.terminate(cid)
+        for cid, proc in list(self.active_processes.items()):
+            if proc.returncode is None:
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                except Exception:
+                    pass
+        self.active_processes.clear()

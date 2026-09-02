@@ -12,13 +12,23 @@ from typing import Any, Callable, Coroutine, Dict, List, Optional, Union
 
 import httpx
 
-from groupconnect.channels.base import BaseChannel, InboundMessage
+from groupconnect.channels.base import BaseChannel, ChannelField, InboundMessage, register_channel
 from groupconnect.core.command import parse_bot_command
 from groupconnect.core.config import GatewayConfig
 
 logger = logging.getLogger("groupconnect.channel.slack")
 
 
+@register_channel(
+    name="slack",
+    display_name="Slack",
+    aliases=[],
+    fields=[
+        ChannelField(key="slack_bot_token", label="Slack Bot User OAuth Token (xoxb-...)", is_secret=True),
+        ChannelField(key="bot_username", label="Slack Bot User ID / Name", default="slack_bot"),
+        ChannelField(key="webhook_port", label="Webhook listening port", default=8091, is_int=True)
+    ]
+)
 class SlackChannel(BaseChannel):
     """Channel adapter for Slack Web API and Events API."""
 

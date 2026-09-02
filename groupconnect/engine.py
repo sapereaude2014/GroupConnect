@@ -1,6 +1,7 @@
 """
 Central Orchestrator Engine for GroupConnect.
-Connects Channels (Telegram, Discord, Slack, Feishu, WeCom), Agent Adapters, Context Manager, Gatekeeper, and Command Parser.
+Dynamically resolves Channels and Agent Adapters from registries.
+Connects Context Manager, Gatekeeper, and Command Parser.
 """
 
 import asyncio
@@ -9,17 +10,19 @@ import re
 import time
 from typing import Any, Dict, Optional
 
-from groupconnect.adapters.base import BaseAgentAdapter
-from groupconnect.adapters.antigravity import AntigravityAdapter
-from groupconnect.adapters.claude_code import ClaudeCodeAdapter
-from groupconnect.adapters.codex import CodexAdapter
-from groupconnect.adapters.opencode import OpenCodeAdapter
-from groupconnect.channels.base import BaseChannel, InboundMessage
-from groupconnect.channels.telegram import TelegramChannel
-from groupconnect.channels.discord import DiscordChannel
-from groupconnect.channels.slack import SlackChannel
-from groupconnect.channels.feishu import FeishuChannel
-from groupconnect.channels.wecom import WeComChannel
+from groupconnect.adapters.base import BaseAgentAdapter, get_adapter_class
+import groupconnect.adapters.antigravity
+import groupconnect.adapters.claude_code
+import groupconnect.adapters.codex
+import groupconnect.adapters.opencode
+
+from groupconnect.channels.base import BaseChannel, InboundMessage, get_channel_class
+import groupconnect.channels.telegram
+import groupconnect.channels.discord
+import groupconnect.channels.slack
+import groupconnect.channels.feishu
+import groupconnect.channels.wecom
+
 from groupconnect.core.command import parse_bot_command
 from groupconnect.core.config import GatewayConfig
 from groupconnect.core.context import ContextManager
@@ -46,10 +49,10 @@ class GroupConnectEngine:
             allow_group_members_dm=config.allow_group_members_dm
         )
 
-        # 2. Agent Adapter Factory
+        # 2. Agent Adapter Dynamic Factory
         self.adapter: BaseAgentAdapter = self._create_adapter()
 
-        # 3. Channel Factory (Supports: telegram, discord, slack, feishu, wecom)
+        # 3. Channel Dynamic Factory
         self.channel: BaseChannel = self._create_channel()
 
         # Concurrency Locks & State
@@ -57,58 +60,41 @@ class GroupConnectEngine:
         self.is_running = False
 
     def _create_adapter(self) -> BaseAgentAdapter:
-        engine_type = self.config.engine_type
-        if engine_type == "antigravity":
-            return AntigravityAdapter(
+        adapter_cls = get_adapter_class(self.config.engine_type)
+        if self.config.engine_type == "antigravity":
+            return adapter_cls(
                 agy_bin=self.config.agy_bin,
                 workspace_dir=self.config.workspace_dir,
                 model=self.config.model or "gemini-3.7-flash-high",
                 timeout_secs=self.config.timeout_secs,
                 idle_timeout_mins=self.config.session_idle_timeout_mins
             )
-        elif engine_type in ("claude", "claude_code"):
-            return ClaudeCodeAdapter(
+        elif self.config.engine_type in ("claude", "claude_code"):
+            return adapter_cls(
                 claude_bin=self.config.claude_bin,
                 workspace_dir=self.config.workspace_dir,
                 timeout_secs=self.config.timeout_secs
             )
-        elif engine_type in ("codex",):
-            return CodexAdapter(
+        elif self.config.engine_type in ("codex",):
+            return adapter_cls(
                 codex_bin=self.config.codex_bin,
                 workspace_dir=self.config.workspace_dir,
                 model=self.config.model,
                 timeout_secs=self.config.timeout_secs
             )
-        elif engine_type in ("opencode", "open-code"):
-            return OpenCodeAdapter(
+        elif self.config.engine_type in ("opencode", "open-code"):
+            return adapter_cls(
                 opencode_bin=self.config.opencode_bin,
                 workspace_dir=self.config.workspace_dir,
                 model=self.config.model,
                 timeout_secs=self.config.timeout_secs
             )
         else:
-            raise ValueError(
-                f"Unsupported engine_type: '{engine_type}'. "
-                f"Supported adapters: 'antigravity', 'claude', 'codex', 'opencode'"
-            )
+            return adapter_cls(workspace_dir=self.config.workspace_dir, timeout_secs=self.config.timeout_secs)
 
     def _create_channel(self) -> BaseChannel:
-        platform = self.config.platform
-        if platform in ("telegram", "tg"):
-            return TelegramChannel(self.config, self.on_inbound_message)
-        elif platform in ("discord",):
-            return DiscordChannel(self.config, self.on_inbound_message)
-        elif platform in ("slack",):
-            return SlackChannel(self.config, self.on_inbound_message)
-        elif platform in ("feishu", "lark"):
-            return FeishuChannel(self.config, self.on_inbound_message)
-        elif platform in ("wecom", "wechat", "wework", "weixin"):
-            return WeComChannel(self.config, self.on_inbound_message)
-        else:
-            raise ValueError(
-                f"Unsupported platform channel: '{platform}'. "
-                f"Supported channels: 'telegram', 'discord', 'slack', 'feishu', 'wecom'"
-            )
+        channel_cls = get_channel_class(self.config.platform)
+        return channel_cls(self.config, self.on_inbound_message)
 
     def get_chat_lock(self, chat_id: Any) -> asyncio.Lock:
         if chat_id not in self.chat_locks:

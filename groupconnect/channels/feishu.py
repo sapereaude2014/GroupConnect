@@ -12,13 +12,23 @@ from typing import Any, Callable, Coroutine, Dict, List, Optional, Union
 
 import httpx
 
-from groupconnect.channels.base import BaseChannel, InboundMessage
+from groupconnect.channels.base import BaseChannel, ChannelField, InboundMessage, register_channel
 from groupconnect.core.command import parse_bot_command
 from groupconnect.core.config import GatewayConfig
 
 logger = logging.getLogger("groupconnect.channel.feishu")
 
 
+@register_channel(
+    name="feishu",
+    display_name="Feishu / Lark (飞书)",
+    aliases=["lark"],
+    fields=[
+        ChannelField(key="feishu_app_id", label="Feishu App ID (cli_...)", is_secret=False),
+        ChannelField(key="feishu_app_secret", label="Feishu App Secret", is_secret=True),
+        ChannelField(key="webhook_port", label="Webhook listening port", default=8088, is_int=True)
+    ]
+)
 class FeishuChannel(BaseChannel):
     """Channel adapter for Feishu (Lark) Open Platform with built-in Webhook listener."""
 

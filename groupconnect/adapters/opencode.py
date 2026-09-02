@@ -1,6 +1,6 @@
 """
-OpenCode CLI Adapter for GroupConnect.
-Bridges OpenCode CLI (`opencode run`) to chat platforms.
+OpenCode CLI Harness Adapter.
+Connects to official `opencode` CLI via non-interactive `run` execution.
 """
 
 import asyncio
@@ -8,20 +8,20 @@ import json
 import logging
 import os
 import signal
-from typing import Any, Dict, List, Optional, Set, Tuple
+import time
+from typing import Any, Dict, List, Optional, Tuple
 
-from groupconnect.adapters.base import BaseAgentAdapter
+from groupconnect.adapters.base import BaseAgentAdapter, register_adapter
 
-logger = logging.getLogger("groupconnect.adapters.opencode")
+logger = logging.getLogger("groupconnect.adapter.opencode")
 
 
+@register_adapter(name="opencode", display_name="OpenCode (opencode)", aliases=["open-code"])
 class OpenCodeAdapter(BaseAgentAdapter):
-    """Adapter for OpenCode CLI automation (`opencode run`)."""
-
     def __init__(
         self,
         opencode_bin: str = "opencode",
-        workspace_dir: str = ".",
+        workspace_dir: str = "./workspace",
         model: Optional[str] = None,
         timeout_secs: int = 180
     ):
@@ -29,8 +29,7 @@ class OpenCodeAdapter(BaseAgentAdapter):
         self.workspace_dir = os.path.abspath(workspace_dir)
         self.model = model
         self.timeout_secs = timeout_secs
-        self.active_procs: Dict[int, asyncio.subprocess.Process] = {}
-        self.cancelled_chats: Set[int] = set()
+        self.active_processes: Dict[int, Any] = {}
 
     async def execute_turn(
         self,
@@ -39,103 +38,103 @@ class OpenCodeAdapter(BaseAgentAdapter):
         chat_id: Optional[int] = None,
         attachments: Optional[List[Dict[str, Any]]] = None
     ) -> Tuple[Optional[str], Optional[str]]:
-        cid_key = chat_id or 0
-
-        # Build command: opencode run [OPTIONS] [message..]
-        cmd = [self.opencode_bin, "run", "--dir", self.workspace_dir]
+        cmd = [self.opencode_bin, "run", "--format", "json", "--dir", self.workspace_dir]
+        if self.model:
+            cmd.extend(["--model", self.model])
         if conversation_id:
             cmd.extend(["-s", conversation_id])
-        if self.model:
-            cmd.extend(["-m", self.model])
 
-        # Attach files via -f
         if attachments:
             for att in attachments:
-                if att.get("path") and os.path.exists(att["path"]):
+                if att.get("path"):
                     cmd.extend(["-f", att["path"]])
 
-        # Enable JSON streaming and append prompt
-        cmd.extend(["--format", "json", prompt])
+        cmd.append(prompt)
 
-        logger.info(f"[OpenCode:{cid_key}] Executing opencode run (session={conversation_id})...")
-
-        env = dict(os.environ)
-        if not env.get("TMPDIR") or env.get("TMPDIR").startswith("/data"):
-            env["TMPDIR"] = "/tmp"
-
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            cwd=self.workspace_dir,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=env,
-            start_new_session=True  # POSIX Process Group isolation for /stop
-        )
-        self.active_procs[cid_key] = proc
-
-        collected_text: List[str] = []
-        new_session_id = conversation_id
+        logger.info(f"[OpenCode] Spawning CLI runner for chat {chat_id}...")
+        proc = None
+        custom_env = os.environ.copy()
+        if "TMPDIR" not in custom_env or not os.path.exists(custom_env["TMPDIR"]):
+            custom_env["TMPDIR"] = "/tmp"
 
         try:
-            while True:
-                line = await proc.stdout.readline()
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                cwd=self.workspace_dir,
+                env=custom_env,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                start_new_session=True
+            )
+            if chat_id is not None:
+                self.active_processes[chat_id] = proc
+
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                proc.communicate(),
+                timeout=float(self.timeout_secs)
+            )
+            stdout_str = stdout_bytes.decode("utf-8", errors="replace").strip()
+            stderr_str = stderr_bytes.decode("utf-8", errors="replace").strip()
+
+            if proc.returncode != 0:
+                logger.error(f"[OpenCode] Exited with code {proc.returncode}. Stderr: {stderr_str}")
+                return f"⚠️ OpenCode error (Code {proc.returncode}):\n```\n{stderr_str or stdout_str}\n```", conversation_id
+
+            final_text = ""
+            for line in stdout_str.split("\n"):
+                line = line.strip()
                 if not line:
-                    break
-                line_str = line.decode("utf-8", errors="replace").strip()
-                if not line_str:
                     continue
                 try:
-                    event = json.loads(line_str)
-                    if "session_id" in event:
-                        new_session_id = event["session_id"]
-                    elif "session" in event:
-                        new_session_id = event["session"]
-                    if event.get("type") == "text" and "content" in event:
-                        collected_text.append(event["content"])
-                    elif event.get("type") == "message" and "text" in event:
-                        collected_text.append(event["text"])
-                    elif "response" in event:
-                        collected_text.append(str(event["response"]))
+                    event = json.loads(line)
+                    if event.get("type") == "text" and event.get("content"):
+                        final_text += event["content"]
+                    elif event.get("type") == "message" and event.get("text"):
+                        final_text += event["text"]
                 except json.JSONDecodeError:
-                    collected_text.append(line_str)
+                    final_text += f"{line}\n"
 
-            await proc.wait()
+            result_text = final_text.strip() if final_text.strip() else stdout_str
+            new_cid = conversation_id or f"opencode_cid_{int(time.time())}"
+            return result_text, new_cid
 
-            if cid_key in self.cancelled_chats:
-                return None, new_session_id
-
-            if proc.returncode != 0 and not collected_text:
-                stderr_bytes = await proc.stderr.read()
-                err_msg = stderr_bytes.decode("utf-8", errors="replace").strip()
-                return f"⚠️ OpenCode execution error (code {proc.returncode}):\n{err_msg}", new_session_id
-
-            resp = "\n".join(collected_text).strip() or "(Task completed with no text output)"
-            return resp, new_session_id
         except asyncio.TimeoutError:
-            self.terminate(cid_key)
-            return f"⚠️ OpenCode execution timed out after {self.timeout_secs}s.", new_session_id
+            logger.error(f"[OpenCode] Execution timed out after {self.timeout_secs}s")
+            if proc and proc.returncode is None:
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                except Exception:
+                    pass
+            return "⏳ Error: OpenCode execution timed out.", conversation_id
+
         except asyncio.CancelledError:
-            self.terminate(cid_key)
-            return None, new_session_id
-        except Exception as e:
-            logger.error(f"[OpenCode:{cid_key}] Error: {e}", exc_info=True)
-            self.terminate(cid_key)
-            if cid_key in self.cancelled_chats:
-                return None, new_session_id
-            return f"⚠️ OpenCode execution exception: {e}", new_session_id
+            logger.info(f"[OpenCode] Turn cancelled for chat {chat_id}")
+            if proc and proc.returncode is None:
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                except Exception:
+                    pass
+            return None, conversation_id
+
         finally:
-            self.active_procs.pop(cid_key, None)
-            self.cancelled_chats.discard(cid_key)
+            if chat_id is not None and chat_id in self.active_processes:
+                self.active_processes.pop(chat_id, None)
 
     def terminate(self, chat_id: int) -> None:
-        self.cancelled_chats.add(chat_id)
-        proc = self.active_procs.pop(chat_id, None)
-        if proc and proc.pid:
+        proc = self.active_processes.get(chat_id)
+        if proc and proc.returncode is None:
+            logger.info(f"[OpenCode] Killing process group for chat {chat_id}")
             try:
-                os.killpg(proc.pid, signal.SIGTERM)
-            except Exception:
-                pass
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except Exception as e:
+                logger.warning(f"Error terminating OpenCode: {e}")
+            self.active_processes.pop(chat_id, None)
 
     def close(self) -> None:
-        for cid in list(self.active_procs.keys()):
-            self.terminate(cid)
+        for cid, proc in list(self.active_processes.items()):
+            if proc.returncode is None:
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                except Exception:
+                    pass
+        self.active_processes.clear()

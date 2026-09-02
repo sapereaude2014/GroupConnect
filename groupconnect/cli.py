@@ -1,6 +1,6 @@
 """
 CLI Entry point for GroupConnect Gateway.
-Supports interactive initialization wizard (--init) for all 5 platforms and standard startup.
+Supports dynamic initialization wizard (--init) for any registered platform and standard startup.
 """
 
 import argparse
@@ -11,6 +11,8 @@ import os
 import signal
 import sys
 
+from groupconnect.adapters.base import ADAPTER_METADATA
+from groupconnect.channels.base import CHANNEL_METADATA
 from groupconnect.core.config import GatewayConfig
 from groupconnect.engine import GroupConnectEngine
 
@@ -21,27 +23,27 @@ def setup_logging(level: str = "INFO") -> None:
 
 
 def run_init_wizard(config_path: str = "config.json") -> None:
-    """Interactive CLI setup wizard to generate config.json for any supported platform."""
+    """Interactive CLI setup wizard dynamically populated from Channel & Adapter registries."""
     print("=" * 60)
-    print("🚀 Welcome to GroupConnect Multi-Platform Setup Wizard!")
+    print("🚀 Welcome to GroupConnect Dynamic Setup Wizard!")
     print("=" * 60)
 
-    # 1. Select Platform
+    # 1. Dynamically list all registered platforms
+    channels = list(CHANNEL_METADATA.values())
     print("1. Select your Messaging Platform:")
-    print("   [1] Telegram (Default)")
-    print("   [2] Discord")
-    print("   [3] Slack")
-    print("   [4] Feishu / Lark (飞书)")
-    print("   [5] WeCom (企业微信)")
-    platform_choice = input("   Choose platform [1-5, default: 1]: ").strip() or "1"
-    platform_map = {
-        "1": "telegram",
-        "2": "discord",
-        "3": "slack",
-        "4": "feishu",
-        "5": "wecom"
-    }
-    platform = platform_map.get(platform_choice, "telegram")
+    for idx, c in enumerate(channels, 1):
+        print(f"   [{idx}] {c.display_name}")
+
+    p_choice = input(f"   Choose platform [1-{len(channels)}, default: 1]: ").strip() or "1"
+    try:
+        p_idx = int(p_choice) - 1
+        if not (0 <= p_idx < len(channels)):
+            p_idx = 0
+    except ValueError:
+        p_idx = 0
+
+    selected_channel = channels[p_idx]
+    platform = selected_channel.name
 
     config_data = {
         "platform": platform,
@@ -61,54 +63,39 @@ def run_init_wizard(config_path: str = "config.json") -> None:
         "allowed_usernames": []
     }
 
-    # Platform Credentials
-    if platform == "telegram":
-        token = input("\n2. Enter Telegram Bot Token (from @BotFather): ").strip()
-        while not token:
-            token = input("   Token cannot be empty. Please enter your Bot Token: ").strip()
-        config_data["bot_token"] = token
-        username = input("   Enter Bot Username (without @, e.g. my_group_bot): ").strip().lstrip("@")
-        config_data["bot_username"] = username or "my_group_bot"
+    # 2. Dynamically prompt for fields declared by the selected channel
+    print(f"\n2. Configure {selected_channel.display_name} settings:")
+    for f in selected_channel.fields:
+        prompt_text = f"   • {f.label}"
+        if f.default is not None:
+            prompt_text += f" [default: {f.default}]"
+        prompt_text += ": "
+        val = input(prompt_text).strip()
+        if not val and f.default is not None:
+            val = str(f.default)
+        if f.is_int:
+            try:
+                config_data[f.key] = int(val) if val else int(f.default or 0)
+            except ValueError:
+                config_data[f.key] = int(f.default or 0)
+        else:
+            config_data[f.key] = val
 
-    elif platform == "discord":
-        token = input("\n2. Enter Discord Bot Token: ").strip()
-        while not token:
-            token = input("   Token cannot be empty. Please enter Discord Bot Token: ").strip()
-        config_data["discord_bot_token"] = token
-        config_data["bot_username"] = input("   Enter Bot Client ID / Username: ").strip() or "discord_bot"
-
-    elif platform == "slack":
-        token = input("\n2. Enter Slack Bot User OAuth Token (xoxb-...): ").strip()
-        while not token:
-            token = input("   Token cannot be empty. Please enter Slack Bot Token: ").strip()
-        config_data["slack_bot_token"] = token
-        config_data["bot_username"] = input("   Enter Slack Bot User ID / Name: ").strip() or "slack_bot"
-
-    elif platform == "feishu":
-        app_id = input("\n2. Enter Feishu App ID (cli_...): ").strip()
-        app_secret = input("   Enter Feishu App Secret: ").strip()
-        config_data["feishu_app_id"] = app_id
-        config_data["feishu_app_secret"] = app_secret
-        config_data["webhook_port"] = int(input("   Webhook listening port [default: 8088]: ").strip() or 8088)
-
-    elif platform == "wecom":
-        corp_id = input("\n2. Enter WeCom Corp ID (ww...): ").strip()
-        corp_secret = input("   Enter WeCom App Secret: ").strip()
-        agent_id = input("   Enter WeCom Agent ID [e.g. 1000002]: ").strip() or "1000002"
-        config_data["wecom_corp_id"] = corp_id
-        config_data["wecom_corp_secret"] = corp_secret
-        config_data["wecom_agent_id"] = agent_id
-        config_data["webhook_port"] = int(input("   Webhook listening port [default: 8089]: ").strip() or 8089)
-
-    # 3. Select CLI Agent
+    # 3. Dynamically list all registered agent adapters
+    adapters = list(ADAPTER_METADATA.values())
     print("\n3. Select your local CLI Agent Harness:")
-    print("   [1] Google Antigravity (agy - Default)")
-    print("   [2] Anthropic Claude Code (claude)")
-    print("   [3] OpenAI Codex (codex)")
-    print("   [4] OpenCode (opencode)")
-    engine_choice = input("   Choose engine [1-4, default: 1]: ").strip() or "1"
-    engine_map = {"1": "antigravity", "2": "claude", "3": "codex", "4": "opencode"}
-    config_data["engine_type"] = engine_map.get(engine_choice, "antigravity")
+    for idx, a in enumerate(adapters, 1):
+        print(f"   [{idx}] {a.display_name}")
+
+    a_choice = input(f"   Choose engine [1-{len(adapters)}, default: 1]: ").strip() or "1"
+    try:
+        a_idx = int(a_choice) - 1
+        if not (0 <= a_idx < len(adapters)):
+            a_idx = 0
+    except ValueError:
+        a_idx = 0
+
+    config_data["engine_type"] = adapters[a_idx].name
 
     # 4. Workspace Directory
     ws_dir = input("\n4. Enter local workspace path to attach [default: ./workspace]: ").strip() or "./workspace"
