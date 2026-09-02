@@ -68,9 +68,9 @@ GroupConnect 是一个专为群聊协作设计的轻量级网关，用于将群�
 
 ---
 
-## 🚀 快速开始
+## 🚀 极速上手 (只需 3 步)
 
-### 1. 安装
+### 1. 克隆与安装依赖
 
 本项目无需数据库，仅需 Python 3.9+ 及 `httpx`：
 
@@ -80,61 +80,35 @@ cd GroupConnect
 pip install -r requirements.txt
 ```
 
-确保本地环境中已安装并授权对应的 CLI Agent（如 `agy`、`claude`、`codex` 或 `opencode`）。
+### 2. 初始化配置 (两种方式任选其一)
 
-### 2. 配置文件 `config.json`
+#### 方式 A：交互式向导快速生成（推荐）
+```bash
+python3 -m groupconnect.cli --init
+```
+*向导会依次询问您的 Telegram Bot Token、所选 CLI Agent 及本地工作区路径，10 秒内自动生成 `config.json`。*
 
-从示例文件创建配置文件：
-
+#### 方式 B：手动编辑 `config.json`
 ```bash
 cp config.example.json config.json
 ```
-
-编辑 `config.json`：
-
+只需将 `workspace_dir` 指向您希望 Agent 读写代码或文档的**任意单个本地目录**（如 `~/my_project`），无需手动创建任何子文件夹：
 ```json
 {
-  "platform": "telegram",
   "bot_token": "YOUR_TELEGRAM_BOT_TOKEN",
-  "bot_username": "your_group_bot",
-  "bot_name": "GroupConnect",
-
-  "workspace_dir": "./workspace",
-
-  "engine_type": "antigravity",
-  "model": "gemini-3.7-flash-high",
-  "agy_bin": "agy",
-  "claude_bin": "claude",
-  "codex_bin": "codex",
-  "opencode_bin": "opencode",
-
-  "max_history_len": 30,
-  "timeout_secs": 180,
-  "session_idle_timeout_mins": 30,
-  "max_chunk_size": 3800,
-  "typing_interval_secs": 4.0,
-
-  "allowed_chat_ids": [
-    -1001234567890
-  ],
-  "allowed_user_ids": [
-    123456789
-  ],
-  "allowed_usernames": [
-    "alice",
-    "bob"
-  ]
+  "engine_type": "claude",
+  "workspace_dir": "/path/to/your/project"
 }
 ```
 
-### 3. 运行服务
+### 3. 启动服务
 
-**前台调试运行**：
+**前台运行**：
 ```bash
 python3 -m groupconnect.cli --config config.json
 ```
 
-**后台守护进程运行 (Watchdog 自动拉起)**：
+**后台守护进程常驻 (Watchdog 自动自愈拉起)**：
 ```bash
 ./scripts/daemon.sh config.json groupconnect.log groupconnect.pid
 ```
@@ -147,7 +121,7 @@ python3 -m groupconnect.cli --config config.json
 | :--- | :--- | :--- | :--- |
 | `platform` | string | `"telegram"` | 接入平台（目前支持 `"telegram"`） |
 | `engine_type` | string | `"antigravity"` | 后端 Agent 类型（支持 `"antigravity"`, `"claude"`, `"codex"`, `"opencode"`） |
-| `workspace_dir` | string | `"./workspace"` | Agent 挂载的本地工作区根目录 |
+| `workspace_dir` | string | `"./workspace"` | Agent 挂载的本地工作区根目录（所有附件与日志自动在此创建） |
 | `max_history_len` | int | `30` | 静默群聊滑动窗口保留的最大消息条数 |
 | `timeout_secs` | int | `180` | 单次 Agent 执行最大超时时间（秒） |
 | `session_idle_timeout_mins` | int | `30` | 常驻进程空闲自动回收时长（分钟，设为 0 表示不回收） |
@@ -168,11 +142,11 @@ python3 -m groupconnect.cli --config config.json
 
 ---
 
-## 📂 预置工作区模板
+## 📂 场景模板说明 (可选参考)
 
-仓库在 `templates/` 下提供了两套工作区场景模板：
-* 🏡 **家庭管家模板 ([`templates/family_assistant/`](templates/family_assistant/))**：包含家庭档案管理、多模态单据归档及 Telegraph 即时预览转译工具。
-* 💼 **团队助理模板 ([`templates/team_ops_assistant/`](templates/team_ops_assistant/))**：包含敏捷讨论要点提炼与任务跟进规范。
+`templates/` 目录下提供了两个开箱即用的工作区参考模板（**非必选**）：
+* 🏡 **家庭管家模板 ([`templates/family_assistant/`](templates/family_assistant/))**：参考目录结构、家庭管理规则与 Telegraph 预览脚本。
+* 💼 **团队助理模板 ([`templates/team_ops_assistant/`](templates/team_ops_assistant/))**：参考敏捷项目协作规则与任务跟进规范。
 
 ---
 
