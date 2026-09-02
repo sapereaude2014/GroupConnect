@@ -1,6 +1,6 @@
 """
 OpenCode CLI Harness Adapter.
-Connects to official `opencode` CLI via non-interactive `run` execution.
+Connects to official `opencode` CLI via non-interactive `run` execution with session resumption.
 """
 
 import asyncio
@@ -38,7 +38,13 @@ class OpenCodeAdapter(BaseAgentAdapter):
         chat_id: Optional[int] = None,
         attachments: Optional[List[Dict[str, Any]]] = None
     ) -> Tuple[Optional[str], Optional[str]]:
-        cmd = [self.opencode_bin, "run", "--format", "json", "--dir", self.workspace_dir]
+        cmd = [
+            self.opencode_bin,
+            "run",
+            "--format", "json",
+            "--dir", self.workspace_dir,
+            "--auto"
+        ]
         if self.model:
             cmd.extend(["--model", self.model])
         if conversation_id:
@@ -51,11 +57,12 @@ class OpenCodeAdapter(BaseAgentAdapter):
 
         cmd.append(prompt)
 
-        logger.info(f"[OpenCode] Spawning CLI runner for chat {chat_id}...")
+        logger.info(f"[OpenCode] Spawning CLI runner for chat {chat_id}: {' '.join(cmd[:6])}...")
         proc = None
         custom_env = os.environ.copy()
-        if "TMPDIR" not in custom_env or not os.path.exists(custom_env["TMPDIR"]):
-            custom_env["TMPDIR"] = "/tmp"
+        custom_env["TMPDIR"] = "/tmp"
+        if "HOME" not in custom_env:
+            custom_env["HOME"] = "/home/server"
 
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -81,12 +88,15 @@ class OpenCodeAdapter(BaseAgentAdapter):
                 return f"⚠️ OpenCode error (Code {proc.returncode}):\n```\n{stderr_str or stdout_str}\n```", conversation_id
 
             final_text = ""
+            new_cid = conversation_id
             for line in stdout_str.split("\n"):
                 line = line.strip()
                 if not line:
                     continue
                 try:
                     event = json.loads(line)
+                    if event.get("sessionID") or event.get("session_id"):
+                        new_cid = event.get("sessionID") or event.get("session_id")
                     if event.get("type") == "text" and event.get("content"):
                         final_text += event["content"]
                     elif event.get("type") == "message" and event.get("text"):
@@ -95,7 +105,6 @@ class OpenCodeAdapter(BaseAgentAdapter):
                     final_text += f"{line}\n"
 
             result_text = final_text.strip() if final_text.strip() else stdout_str
-            new_cid = conversation_id or f"opencode_cid_{int(time.time())}"
             return result_text, new_cid
 
         except asyncio.TimeoutError:

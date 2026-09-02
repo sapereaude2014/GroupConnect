@@ -1,6 +1,6 @@
 """
 OpenAI Codex CLI Harness Adapter.
-Connects to official `codex` CLI via non-interactive `exec` execution.
+Connects to official `codex` CLI via non-interactive `exec` / `exec resume` execution.
 """
 
 import asyncio
@@ -38,20 +38,34 @@ class CodexAdapter(BaseAgentAdapter):
         chat_id: Optional[int] = None,
         attachments: Optional[List[Dict[str, Any]]] = None
     ) -> Tuple[Optional[str], Optional[str]]:
-        cmd = [self.codex_bin, "exec", "--json"]
-        if self.model:
-            cmd.extend(["-m", self.model])
         if conversation_id:
-            cmd.extend(["--session", conversation_id])
+            cmd = [
+                self.codex_bin, "exec", "resume",
+                "--json",
+                "--dangerously-bypass-approvals-and-sandbox"
+            ]
+            if self.model:
+                cmd.extend(["-m", self.model])
+            if attachments:
+                for att in attachments:
+                    if att.get("type") == "photo" and att.get("path"):
+                        cmd.extend(["-i", att["path"]])
+            cmd.extend([conversation_id, prompt])
+        else:
+            cmd = [
+                self.codex_bin, "exec",
+                "--json",
+                "--dangerously-bypass-approvals-and-sandbox"
+            ]
+            if self.model:
+                cmd.extend(["-m", self.model])
+            if attachments:
+                for att in attachments:
+                    if att.get("type") == "photo" and att.get("path"):
+                        cmd.extend(["-i", att["path"]])
+            cmd.append(prompt)
 
-        if attachments:
-            for att in attachments:
-                if att.get("type") == "photo" and att.get("path"):
-                    cmd.extend(["-i", att["path"]])
-
-        cmd.append(prompt)
-
-        logger.info(f"[Codex] Spawning CLI runner for chat {chat_id}...")
+        logger.info(f"[Codex] Spawning CLI runner for chat {chat_id}: {' '.join(cmd[:6])}...")
         proc = None
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -76,21 +90,25 @@ class CodexAdapter(BaseAgentAdapter):
                 return f"⚠️ OpenAI Codex error (Code {proc.returncode}):\n```\n{stderr_str or stdout_str}\n```", conversation_id
 
             final_text = ""
+            new_cid = conversation_id
             for line in stdout_str.split("\n"):
                 line = line.strip()
                 if not line:
                     continue
                 try:
                     event = json.loads(line)
+                    if event.get("session_id") or event.get("id"):
+                        new_cid = event.get("session_id") or event.get("id")
                     if event.get("type") == "message" and event.get("content"):
                         final_text += event["content"]
                     elif event.get("type") == "agent_response" and event.get("text"):
+                        final_text += event["text"]
+                    elif event.get("type") == "item" and event.get("text"):
                         final_text += event["text"]
                 except json.JSONDecodeError:
                     final_text += f"{line}\n"
 
             result_text = final_text.strip() if final_text.strip() else stdout_str
-            new_cid = conversation_id or f"codex_cid_{int(time.time())}"
             return result_text, new_cid
 
         except asyncio.TimeoutError:

@@ -1,6 +1,6 @@
 """
 Anthropic Claude Code CLI Harness Adapter.
-Connects to official `claude` CLI via non-interactive `-p` execution.
+Connects to official `claude` CLI via non-interactive `-p` execution with session resumption.
 """
 
 import asyncio
@@ -22,10 +22,12 @@ class ClaudeCodeAdapter(BaseAgentAdapter):
         self,
         claude_bin: str = "claude",
         workspace_dir: str = "./workspace",
+        model: Optional[str] = None,
         timeout_secs: int = 180
     ):
         self.claude_bin = claude_bin
         self.workspace_dir = os.path.abspath(workspace_dir)
+        self.model = model
         self.timeout_secs = timeout_secs
         self.active_processes: Dict[int, Any] = {}
 
@@ -36,11 +38,18 @@ class ClaudeCodeAdapter(BaseAgentAdapter):
         chat_id: Optional[int] = None,
         attachments: Optional[List[Dict[str, Any]]] = None
     ) -> Tuple[Optional[str], Optional[str]]:
-        cmd = [self.claude_bin, "-p", prompt]
+        cmd = [
+            self.claude_bin,
+            "-p", prompt,
+            "--output-format", "json",
+            "--dangerously-skip-permissions"
+        ]
+        if self.model:
+            cmd.extend(["--model", self.model])
         if conversation_id:
             cmd.extend(["--resume", conversation_id])
 
-        logger.info(f"[ClaudeCode] Spawning CLI runner for chat {chat_id}...")
+        logger.info(f"[ClaudeCode] Spawning CLI runner for chat {chat_id}: {' '.join(cmd[:6])}...")
         proc = None
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -64,8 +73,24 @@ class ClaudeCodeAdapter(BaseAgentAdapter):
                 logger.error(f"[ClaudeCode] Exited with code {proc.returncode}. Stderr: {stderr_str}")
                 return f"⚠️ Claude Code error (Code {proc.returncode}):\n```\n{stderr_str or stdout_str}\n```", conversation_id
 
-            new_cid = conversation_id or f"claude_cid_{int(time.time())}"
-            return stdout_str, new_cid
+            new_cid = conversation_id
+            response_text = stdout_str
+            try:
+                data = json.loads(stdout_str)
+                if isinstance(data, dict):
+                    if data.get("session_id"):
+                        new_cid = data["session_id"]
+                    elif data.get("conversation_id"):
+                        new_cid = data["conversation_id"]
+
+                    if data.get("result") is not None:
+                        response_text = str(data["result"]).strip()
+                    elif data.get("response") is not None:
+                        response_text = str(data["response"]).strip()
+            except json.JSONDecodeError:
+                response_text = stdout_str
+
+            return response_text, new_cid
 
         except asyncio.TimeoutError:
             logger.error(f"[ClaudeCode] Execution timed out after {self.timeout_secs}s")
