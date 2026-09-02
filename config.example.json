@@ -19,6 +19,7 @@
   "max_chunk_size": 3800,
   "typing_interval_secs": 4.0,
 
+  "allow_open_access": false,
   "allowed_chat_ids": [
     -1001234567890
   ],

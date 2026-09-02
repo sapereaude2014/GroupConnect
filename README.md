@@ -13,6 +13,7 @@
   <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License" />
   <img src="https://img.shields.io/badge/python-3.9+-green.svg" alt="Python" />
   <img src="https://img.shields.io/badge/dependency-httpx_only-brightgreen.svg" alt="Zero Bloat" />
+  <img src="https://img.shields.io/badge/security-Secure_by_Default-brightgreen.svg" alt="Security" />
   <img src="https://img.shields.io/badge/channels-Telegram_|_Discord_&_Feishu_Planned-blue.svg" alt="Channels" />
   <img src="https://img.shields.io/badge/harness-Claude_|_Antigravity_|_Codex_|_OpenCode-orange.svg" alt="Supported Harnesses" />
 </p>
@@ -23,7 +24,7 @@
 
 **GroupConnect** is a lightweight, decoupled gateway designed for group-native AI collaboration. It connects group messaging platforms (launching with deep Telegram support) to local CLI Agents running on your machine—including **Anthropic Claude Code (`claude`)**, **Google Antigravity (`agy`)**, **OpenAI Codex (`codex`)**, and **OpenCode (`opencode`)**.
 
-Standard AI bots only listen to messages where they are explicitly tagged, losing the entire conversational background. GroupConnect silently maintains recent discussion context, automatically ingests media attachments into your local workspace, recognizes team members dynamically, and executes agent tasks with zero cold-start delay.
+Standard AI bots only listen to messages where they are explicitly tagged, losing the entire conversational background. GroupConnect silently maintains recent discussion context, automatically ingests media attachments into your local workspace, recognizes team members dynamically, and executes agent tasks with zero cold-start delay under a strict **Secure-by-Default (Default-Deny)** security model.
 
 ---
 
@@ -54,6 +55,7 @@ In real-world group chats, team members discuss problems organically before call
 ## ✨ Core Features (Platform-Agnostic)
 
 * 🧠 **Silent Sliding Window**: Observes group discussions silently without spamming replies. When tagged, it automatically injects recent context (configurable depth, default 30 messages) so the agent immediately understands what the team was discussing.
+* 🛡️ **Secure-by-Default Access Control**: Implements a strict default-deny policy to protect local shell & files. If no allowlist is configured, the gateway enters **Safe Lockdown Mode** and rejects all strangers unless `allow_open_access: true` is explicitly set.
 * 👥 **Dynamic Member Access Control**: Authenticate users effortlessly by `@username` or automatically grant DM access to active members of authorized groups via dynamic membership checks.
 * 📎 **Automatic Multimodal Inbox**: Photos, voice notes, and documents sent in chat are automatically downloaded to `inbox/attachments/` in your workspace and passed as absolute local paths for native visual and file tools.
 * 🔥 **Zero Cold-Start Worker Pool**: Maintains persistent agent subprocesses to eliminate startup latency and preserve multi-turn conversational memory.
@@ -138,6 +140,7 @@ python3 -m groupconnect.cli --config config.json
 | `timeout_secs` | Core | `180` | Maximum execution timeout per turn in seconds |
 | `session_idle_timeout_mins` | Core | `30` | Minutes of inactivity before recycling warm worker processes |
 | `max_chunk_size` | Channel | `3800` | Safe message chunk size to prevent platform character limit errors |
+| `allow_open_access` | Security | `false` | If `false`, enables Safe Lockdown Mode when allowlist is empty |
 | `allowed_chat_ids` | Security | `[]` | Whitelisted Group Chat IDs (auto-leaves unlisted groups) |
 | `allowed_user_ids` | Security | `[]` | Whitelisted Telegram User IDs for direct messaging |
 | `allowed_usernames` | Security | `[]` | Whitelisted Telegram `@usernames` for direct messaging |

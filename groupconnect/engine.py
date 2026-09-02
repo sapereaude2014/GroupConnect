@@ -28,7 +28,7 @@ class GroupConnectEngine:
     def __init__(self, config: GatewayConfig):
         self.config = config
 
-        # 1. Context & Gatekeeper
+        # 1. Context & Gatekeeper (Secure-by-Default)
         self.context_mgr = ContextManager(
             max_history_len=config.max_history_len,
             chat_logs_dir=config.chat_logs_dir,
@@ -37,7 +37,8 @@ class GroupConnectEngine:
         self.gatekeeper = Gatekeeper(
             allowed_chat_ids=config.allowed_chat_ids,
             allowed_user_ids=config.allowed_user_ids,
-            allowed_usernames=config.allowed_usernames
+            allowed_usernames=config.allowed_usernames,
+            allow_open_access=config.allow_open_access
         )
 
         # 2. Agent Adapter Factory
@@ -99,6 +100,12 @@ class GroupConnectEngine:
 
     async def start(self) -> None:
         self.is_running = True
+        if not self.gatekeeper.is_whitelist_active() and not self.config.allow_open_access:
+            logger.warning(
+                "🔒 [SECURITY ALERT] No allowlist configured. Running in Safe Lockdown Mode. "
+                "All incoming messages will be rejected until allowed_chat_ids, allowed_user_ids, "
+                "or allowed_usernames are configured in config.json."
+            )
         logger.info(f"Starting GroupConnect Gateway (Platform: {self.config.platform}, Engine: {self.config.engine_type})...")
 
         reaper_task = asyncio.create_task(self._reaper_loop())
@@ -123,7 +130,7 @@ class GroupConnectEngine:
         chat_id = msg.chat_id
         chat_type = msg.chat_type
 
-        # 1. Security Gatekeeper Verification
+        # 1. Security Gatekeeper Verification (Default-Deny)
         dynamic_checker = getattr(self.channel, "check_user_membership", None)
         authorized, reason = await self.gatekeeper.verify_sender(
             chat_id=chat_id,
@@ -133,16 +140,32 @@ class GroupConnectEngine:
         )
 
         if not authorized:
-            if reason == "unauthorized_group":
+            if reason == "empty_whitelist_lockdown":
+                logger.warning(
+                    f"[SECURITY] Blocked request from user {msg.from_user.get('id')} ({msg.sender_name}) "
+                    "because allowlist is empty and allow_open_access is false."
+                )
+                if chat_type == "private" and msg.is_triggered:
+                    await self.channel.send_reply(
+                        chat_id,
+                        "🔒 **Safe Lockdown Mode**\n\n"
+                        "No allowlist is configured in `config.json`. To protect local workspace assets, "
+                        "access is locked by default.\n\n"
+                        "👉 **To authorize yourself**, add your Telegram username or numeric ID to `allowed_usernames` "
+                        "or `allowed_user_ids` in `config.json`."
+                    )
+                return
+            elif reason == "unauthorized_group":
                 logger.warning(f"[SECURITY] Unauthorized group message in {chat_id}. Leaving chat...")
                 await self.channel.leave_chat(chat_id)
                 return
             elif reason == "unauthorized_user":
                 logger.warning(f"[SECURITY] Unauthorized private message from {msg.from_user.get('id')} ({msg.sender_name})")
-                await self.channel.send_reply(
-                    chat_id,
-                    "⛔ **Access Restricted**\n\nThis bot is a private assistant limited to authorized members only."
-                )
+                if msg.is_triggered:
+                    await self.channel.send_reply(
+                        chat_id,
+                        "⛔ **Access Restricted**\n\nThis bot is a private assistant limited to authorized members only."
+                    )
                 return
 
         # 2. Clean query
@@ -194,7 +217,7 @@ class GroupConnectEngine:
         elif cmd == "status":
             buf = self.context_mgr.get_buffer(chat_id)
             cid_display = f"`{cid[:8]}...{cid[-6:]}` ({session.get('turns', 0)} turns)" if cid else "Fresh / Idle"
-            auth_str = "🛡️ Active Whitelist" if self.gatekeeper.is_whitelist_active() else "⚠️ Open Access"
+            auth_str = "🛡️ Active Allowlist" if self.gatekeeper.is_whitelist_active() else ("⚠️ Open Access" if self.config.allow_open_access else "🔒 Safe Lockdown")
             status_text = (
                 f"🤖 **GroupConnect Gateway Status**\n\n"
                 f"- **Platform**: `{self.config.platform.title()}` (`@{self.config.bot_username}`)\n"

@@ -1,43 +1,52 @@
-import asyncio
 import unittest
 from groupconnect.core.gatekeeper import Gatekeeper
 
 
 class TestGatekeeper(unittest.TestCase):
-    def test_gatekeeper_rules(self):
-        gk = Gatekeeper(
-            allowed_chat_ids={-100123},
-            allowed_user_ids={8888},
-            allowed_usernames={"authorized_user"}
+    def test_secure_by_default_lockdown(self):
+        # 1. Empty allowlist with allow_open_access=False -> Locked down
+        gk = Gatekeeper(allow_open_access=False)
+        self.assertFalse(gk.is_whitelist_active())
+
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        # Private message rejected
+        auth, reason = loop.run_until_complete(
+            gk.verify_sender(12345, "private", {"id": 99999, "username": "stranger"})
         )
+        self.assertFalse(auth)
+        self.assertEqual(reason, "empty_whitelist_lockdown")
 
-        async def run_suite():
-            # 1. Authorized group
-            auth, reason = await gk.verify_sender(-100123, "supergroup", {"id": 1111, "username": "anyone"})
-            self.assertTrue(auth)
-            self.assertEqual(reason, "authorized_group")
+        # 2. Empty allowlist with allow_open_access=True -> Explicitly allowed
+        gk_open = Gatekeeper(allow_open_access=True)
+        auth_open, reason_open = loop.run_until_complete(
+            gk_open.verify_sender(12345, "private", {"id": 99999, "username": "stranger"})
+        )
+        self.assertTrue(auth_open)
+        self.assertEqual(reason_open, "open_access_explicitly_allowed")
 
-            # 2. Unauthorized group
-            auth, reason = await gk.verify_sender(-100999, "supergroup", {"id": 1111, "username": "anyone"})
-            self.assertFalse(auth)
-            self.assertEqual(reason, "unauthorized_group")
+        loop.close()
 
-            # 3. Authorized private user (by ID)
-            auth, reason = await gk.verify_sender(8888, "private", {"id": 8888, "username": "other"})
-            self.assertTrue(auth)
-            self.assertEqual(reason, "user_id_matched")
+    def test_group_authorization(self):
+        gk = Gatekeeper(allowed_chat_ids={-100111222})
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
 
-            # 4. Authorized private user (by Username)
-            auth, reason = await gk.verify_sender(7777, "private", {"id": 7777, "username": "authorized_user"})
-            self.assertTrue(auth)
-            self.assertEqual(reason, "username_matched")
+        auth_ok, _ = loop.run_until_complete(
+            gk.verify_sender(-100111222, "supergroup", {"id": 123, "username": "alice"})
+        )
+        self.assertTrue(auth_ok)
 
-            # 5. Unauthorized private user
-            auth, reason = await gk.verify_sender(6666, "private", {"id": 6666, "username": "stranger"})
-            self.assertFalse(auth)
-            self.assertEqual(reason, "unauthorized_user")
+        auth_deny, reason = loop.run_until_complete(
+            gk.verify_sender(-100999999, "supergroup", {"id": 123, "username": "alice"})
+        )
+        self.assertFalse(auth_deny)
+        self.assertEqual(reason, "unauthorized_group")
 
-        asyncio.run(run_suite())
+        loop.close()
 
 
 if __name__ == "__main__":

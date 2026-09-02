@@ -1,6 +1,6 @@
 """
 Security Gatekeeper for GroupConnect.
-Enforces group chat isolation, private user allowlisting, and unauthorized intrusion blocking.
+Enforces default-deny access control, group isolation, and dynamic membership verification.
 """
 
 import logging
@@ -17,12 +17,14 @@ class Gatekeeper:
         allowed_chat_ids: Optional[Set[int]] = None,
         allowed_user_ids: Optional[Set[int]] = None,
         allowed_usernames: Optional[Set[str]] = None,
+        allow_open_access: bool = False
     ):
         self.allowed_chat_ids: Set[int] = set(allowed_chat_ids or [])
         self.allowed_user_ids: Set[int] = set(allowed_user_ids or [])
         self.allowed_usernames: Set[str] = set(
             u.lower().lstrip("@") for u in (allowed_usernames or [])
         )
+        self.allow_open_access: bool = allow_open_access
 
     def is_whitelist_active(self) -> bool:
         return bool(self.allowed_chat_ids or self.allowed_user_ids or self.allowed_usernames)
@@ -35,17 +37,16 @@ class Gatekeeper:
         dynamic_checker: Optional[Callable[[int, int], Coroutine[Any, Any, bool]]] = None
     ) -> Tuple[bool, str]:
         """
-        Verifies if an incoming message is authorized.
+        Verifies if an incoming message is authorized under secure-by-default rules.
 
         Returns:
           (is_authorized, reason_code)
-          reason_code can be:
-            'no_whitelist_set', 'authorized_group', 'user_id_matched',
-            'username_matched', 'dynamic_member_verified',
-            'unauthorized_group', 'unauthorized_user'
         """
+        # If no allowlist configured and open access is NOT explicitly enabled, lock down by default
         if not self.is_whitelist_active():
-            return True, "no_whitelist_set"
+            if self.allow_open_access:
+                return True, "open_access_explicitly_allowed"
+            return False, "empty_whitelist_lockdown"
 
         user_id = from_user.get("id")
         username = (from_user.get("username") or "").lower().lstrip("@")

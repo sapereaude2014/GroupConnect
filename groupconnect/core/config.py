@@ -1,6 +1,7 @@
 """
 Configuration manager for GroupConnect.
 Loads and validates settings from JSON configuration files.
+Enforces secure-by-default allowlist policies.
 """
 
 import json
@@ -38,7 +39,8 @@ class GatewayConfig:
         self.max_chunk_size: int = int(data.get("max_chunk_size", 3800))
         self.typing_interval_secs: float = float(data.get("typing_interval_secs", 4.0))
 
-        # Security Whitelist Gatekeeper
+        # Security Allowlist Gatekeeper (Secure-by-Default)
+        self.allow_open_access: bool = bool(data.get("allow_open_access", False))
         self.allowed_chat_ids: Set[int] = set(int(x) for x in data.get("allowed_chat_ids", []))
         self.allowed_user_ids: Set[int] = set(int(x) for x in data.get("allowed_user_ids", []))
         self.allowed_usernames: Set[str] = set(
