@@ -1,6 +1,6 @@
 import asyncio
 import unittest
-from groupagent.core.gatekeeper import Gatekeeper
+from groupconnect.core.gatekeeper import Gatekeeper
 
 
 class TestGatekeeper(unittest.TestCase):

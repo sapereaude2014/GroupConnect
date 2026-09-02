@@ -12,12 +12,12 @@ import re
 from typing import Any, Callable, Coroutine, Dict, List, Optional
 import httpx
 
-from groupagent.channels.base import BaseChannel, InboundMessage
-from groupagent.core.command import parse_bot_command
-from groupagent.core.config import GatewayConfig
-from groupagent.core.context import format_sender
+from groupconnect.channels.base import BaseChannel, InboundMessage
+from groupconnect.core.command import parse_bot_command
+from groupconnect.core.config import GatewayConfig
+from groupconnect.core.context import format_sender
 
-logger = logging.getLogger("groupagent.channel.telegram")
+logger = logging.getLogger("groupconnect.channel.telegram")
 
 
 class TelegramChannel(BaseChannel):

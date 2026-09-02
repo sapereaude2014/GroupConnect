@@ -11,9 +11,9 @@ import signal
 import time
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from groupagent.adapters.base import BaseAgentAdapter
+from groupconnect.adapters.base import BaseAgentAdapter
 
-logger = logging.getLogger("groupagent.adapters.antigravity")
+logger = logging.getLogger("groupconnect.adapters.antigravity")
 
 
 def kill_process_group(proc: Optional[asyncio.subprocess.Process], sig=signal.SIGTERM) -> None:

@@ -11,7 +11,7 @@ import os
 import time
 from typing import Any, Deque, Dict, List, Optional
 
-logger = logging.getLogger("groupagent.context")
+logger = logging.getLogger("groupconnect.context")
 
 
 def format_sender(from_user: Dict[str, Any]) -> str:

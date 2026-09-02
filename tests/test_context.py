@@ -2,7 +2,7 @@ import os
 import shutil
 import tempfile
 import unittest
-from groupagent.core.context import ContextManager, format_sender
+from groupconnect.core.context import ContextManager, format_sender
 
 
 class TestContextManager(unittest.TestCase):

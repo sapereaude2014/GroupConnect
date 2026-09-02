@@ -1,76 +1,59 @@
-# GroupAgent
+# GroupConnect
 
 <p align="center">
   <b>A Group-Context Gateway for Local CLI Agents (Antigravity & Claude Code)</b><br>
-  专为 Telegram 群聊设计的本地 CLI Agent 上下文感知与常驻运行网关
+  专为群聊设计的本地 CLI Agent 静默上下文感知与常驻运行网关
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License" />
   <img src="https://img.shields.io/badge/python-3.9+-green.svg" alt="Python" />
   <img src="https://img.shields.io/badge/dependency-httpx_only-brightgreen.svg" alt="Zero Bloat" />
-  <img src="https://img.shields.io/badge/telegram-Bot_API-blue.svg" alt="Telegram" />
-  <img src="https://img.shields.io/badge/harness-Antigravity_|_Claude_Code-orange.svg" alt="Supported Harnesses" />
+  <img src="https://img.shields.io/badge/platforms-Telegram_|_Discord_&_Feishu_Planned-blue.svg" alt="Platforms" />
+  <img src="https://img.shields.io/badge/harness-Antigravity_|_Claude_Code-orange.svg" alt="Agent Harnesses" />
 </p>
 
 ---
 
 ## 📖 项目简介
 
-GroupAgent 是一个专为群聊协作设计的轻量级网关，用于将 **Telegram 群组与私聊** 连接到本地运行的 CLI Agent（如 **Google Antigravity `agy`** 和 **Anthropic Claude Code `claude`**）。
+GroupConnect 是一个专为群聊协作设计的轻量级网关，用于将群聊平台（首发深度支持 Telegram）连接到本地运行的 CLI Agent（如 **Google Antigravity `agy`** 和 **Anthropic Claude Code `claude`**）。
 
-通过静默滑动窗口与多模态自动化管道，GroupAgent 使本地 CLI Agent 能够自然感知群内前文讨论背景，自动下载落盘多模态附件，并提供低延迟的常驻执行与即时打断能力。
+通过静默滑动窗口与多模态自动化管道，GroupConnect 让本地 CLI Agent 能够自然感知群内前文讨论背景，自动下载落盘多模态附件，并提供低延迟的常驻执行与即时打断能力。
+
+---
+
+## 👥 典型场景对比
+
+在真实群聊协作中，群成员之间的自然讨论往往不包含 `@bot`。普通机器人由于缺乏静默上下文感知，在被唤醒时容易丢失前文：
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│ 💬 真实群聊场景                                                         │
+│                                                                        │
+│ Alice: "这套新方案第 3 节关于并发锁的逻辑有点问题，你看了吗？"            │
+│ Bob:   "看了，没考虑超时和重试，高并发下可能会死锁。"                  │
+│ Alice: "@bot 帮我们分析一下刚才讨论的死锁风险，并把改进方案写入 docs/方案.md"│
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │
+          ┌─────────────────────────┴─────────────────────────┐
+          ▼                                                   ▼
+❌ 普通群聊 Bot (未 @ 消息直接丢弃)                  ✅ GroupConnect (静默感知与本地执行)
+---------------------------------------             ---------------------------------------
+• 表现："请问你要分析什么死锁？请提供前文。"        • 表现：自动提取滑动窗口前文背景，调用本地
+• 结果：上下文丢失，必须手动复制粘贴前文             Tool 直接修改 `docs/方案.md` 并汇报
+```
 
 ---
 
 ## ✨ 核心特性
 
-* 🧠 **群聊静默滑动窗口 (Silent Sliding Window)**：在群成员日常交流时不主动打扰，后台自动维护最近 $N$ 条群聊消息；被唤醒时自动注入讨论背景，连续追问时仅同步增量新消息。
+* 🧠 **群聊静默滑动窗口 (Silent Sliding Window)**：在群成员日常交流时不主动打扰，后台自动维护最近 $N$ 条群聊消息（`max_history_len` 可自由配置，默认 30 条）；被唤醒时自动注入讨论背景，连续追问时仅同步增量新消息。
 * 📎 **多模态附件自动落盘 (Multimodal Auto-Inbox)**：群内发送的照片、语音和文档自动下载保存至工作区的 `inbox/attachments/` 目录，并在提示词中提供本地绝对路径供视觉与分析工具直接读取。
 * 🔥 **常驻引擎工作池 (Resident Worker Pool)**：支持通过全双工 `stream-json` 管道保持 Agent 进程常驻，消除冷启动延迟；支持空闲超时自动回收。
 * 🛑 **抢占式强杀 (`/stop`)**：收到 `/stop` 指令时无需排队等待处理锁，通过 POSIX 独立进程组（`os.killpg`）立即终止当前任务及所有子进程。
 * 🛡️ **双重白名单看门狗 (Security Gatekeeper)**：支持群聊与私聊成员白名单鉴权；被拉入未授权群聊时自动退出，陌生人私聊直接拦截。
 * 📖 **移动端即时预览 (Telegraph Instant View)**：提供长篇文档转译为 Telegraph 页面工具，在 Telegram 移动端内支持 0 秒免密原生弹窗阅读。
-
----
-
-## 🏗 系统架构
-
-```mermaid
-flowchart TD
-    subgraph Client ["客户端 (Telegram)"]
-        User["群成员 / 私聊成员"]
-        Stranger["未授权外部人员"]
-    end
-
-    subgraph Gateway ["GroupAgent 网关 (Pure Python)"]
-        Gatekeeper["🛡️ Gatekeeper<br/>白名单鉴权 & 自动退群"]
-        CmdParser["⚡ CommandParser<br/>严格指令解析"]
-        ContextMgr["🧠 ContextManager<br/>静默滑动窗口 & 增量追问"]
-        WorkerPool["🔥 WorkerPool<br/>常驻进程池 & /stop 强杀"]
-    end
-
-    subgraph CLI_Agent ["本地 CLI Agent (Harness)"]
-        Agy["Google Antigravity (stream-json)"]
-        Claude["Anthropic Claude Code (CLI)"]
-    end
-
-    subgraph Workspace ["本地工作区"]
-        Files["工作区文档 / 知识库"]
-        Inbox["多模态附件 (inbox/attachments/)"]
-        Logs["对话日志 (inbox/chat_logs/)"]
-    end
-
-    User --> Gatekeeper
-    Stranger -.->|拦截 / 自动退群| Gatekeeper
-    Gatekeeper --> CmdParser
-    CmdParser --> ContextMgr
-    CmdParser --> WorkerPool
-    WorkerPool <-->|stdio 管道 / CLI 调起| CLI_Agent
-    CLI_Agent <-->|工具调用 / 本地读写| Files
-    Gateway --> Inbox
-    ContextMgr --> Logs
-```
 
 ---
 
@@ -81,10 +64,12 @@ flowchart TD
 本项目无需数据库，仅需 Python 3.9+ 及 `httpx`：
 
 ```bash
-git clone https://github.com/sapereaude2014/GroupAgent.git
-cd GroupAgent
+git clone https://github.com/sapereaude2014/GroupConnect.git
+cd GroupConnect
 pip install -r requirements.txt
 ```
+
+确保本地环境中已安装并授权对应的 CLI Agent（如 `agy` 或 `claude`）。
 
 ### 2. 配置文件 `config.json`
 
@@ -101,7 +86,7 @@ cp config.example.json config.json
   "platform": "telegram",
   "bot_token": "YOUR_TELEGRAM_BOT_TOKEN",
   "bot_username": "your_group_bot",
-  "bot_name": "GroupAgent",
+  "bot_name": "GroupConnect",
 
   "workspace_dir": "./workspace",
 
@@ -135,12 +120,12 @@ cp config.example.json config.json
 
 **前台调试运行**：
 ```bash
-python3 -m groupagent.cli --config config.json
+python3 -m groupconnect.cli --config config.json
 ```
 
 **后台守护进程运行 (Watchdog 自动拉起)**：
 ```bash
-./scripts/daemon.sh config.json groupagent.log groupagent.pid
+./scripts/daemon.sh config.json groupconnect.log groupconnect.pid
 ```
 
 ---

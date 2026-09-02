@@ -9,9 +9,9 @@ import os
 import signal
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from groupagent.adapters.base import BaseAgentAdapter
+from groupconnect.adapters.base import BaseAgentAdapter
 
-logger = logging.getLogger("groupagent.adapters.claude_code")
+logger = logging.getLogger("groupconnect.adapters.claude_code")
 
 
 class ClaudeCodeAdapter(BaseAgentAdapter):

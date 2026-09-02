@@ -1,5 +1,5 @@
 import unittest
-from groupagent.core.command import parse_bot_command
+from groupconnect.core.command import parse_bot_command
 
 
 class TestCommandParser(unittest.TestCase):

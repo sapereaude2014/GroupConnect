@@ -3,8 +3,8 @@
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIG_FILE="${1:-$DIR/config.json}"
-LOG_FILE="${2:-$DIR/groupagent.log}"
-PID_FILE="${3:-$DIR/groupagent.pid}"
+LOG_FILE="${2:-$DIR/groupconnect.log}"
+PID_FILE="${3:-$DIR/groupconnect.pid}"
 
 echo "$$" > "$PID_FILE"
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting GroupAgent Watchdog (PID: $$)..." >> "$LOG_FILE"
@@ -21,7 +21,7 @@ cleanup() {
 trap cleanup SIGINT SIGTERM
 
 while true; do
-    python3 -m groupagent.cli --config "$CONFIG_FILE" >> "$LOG_FILE" 2>&1 &
+    python3 -m groupconnect.cli --config "$CONFIG_FILE" >> "$LOG_FILE" 2>&1 &
     CHILD_PID=$!
     wait "$CHILD_PID"
     EXIT_CODE=$?

@@ -6,7 +6,7 @@ Enforces group chat isolation, private user allowlisting, and unauthorized intru
 import logging
 from typing import Any, Callable, Coroutine, Dict, Optional, Set, Tuple
 
-logger = logging.getLogger("groupagent.gatekeeper")
+logger = logging.getLogger("groupconnect.gatekeeper")
 
 
 class Gatekeeper:

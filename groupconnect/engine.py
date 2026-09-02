@@ -9,17 +9,17 @@ import re
 import time
 from typing import Any, Dict, Optional
 
-from groupagent.adapters.base import BaseAgentAdapter
-from groupagent.adapters.antigravity import AntigravityAdapter
-from groupagent.adapters.claude_code import ClaudeCodeAdapter
-from groupagent.channels.base import BaseChannel, InboundMessage
-from groupagent.channels.telegram import TelegramChannel
-from groupagent.core.command import parse_bot_command
-from groupagent.core.config import GatewayConfig
-from groupagent.core.context import ContextManager
-from groupagent.core.gatekeeper import Gatekeeper
+from groupconnect.adapters.base import BaseAgentAdapter
+from groupconnect.adapters.antigravity import AntigravityAdapter
+from groupconnect.adapters.claude_code import ClaudeCodeAdapter
+from groupconnect.channels.base import BaseChannel, InboundMessage
+from groupconnect.channels.telegram import TelegramChannel
+from groupconnect.core.command import parse_bot_command
+from groupconnect.core.config import GatewayConfig
+from groupconnect.core.context import ContextManager
+from groupconnect.core.gatekeeper import Gatekeeper
 
-logger = logging.getLogger("groupagent.engine")
+logger = logging.getLogger("groupconnect.engine")
 
 
 class GroupAgentEngine:

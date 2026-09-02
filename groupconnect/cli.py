@@ -9,8 +9,8 @@ import os
 import signal
 import sys
 
-from groupagent.core.config import GatewayConfig
-from groupagent.engine import GroupAgentEngine
+from groupconnect.core.config import GatewayConfig
+from groupconnect.engine import GroupAgentEngine
 
 
 def setup_logging(level: str = "INFO") -> None:
@@ -25,7 +25,7 @@ def main() -> None:
     args = parser.parse_args()
 
     setup_logging(args.log_level)
-    logger = logging.getLogger("groupagent.cli")
+    logger = logging.getLogger("groupconnect.cli")
 
     if not os.path.exists(args.config):
         logger.error(f"Config file not found: {args.config}. Create one from config.example.json.")
