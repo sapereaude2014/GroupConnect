@@ -1,5 +1,5 @@
 """
-Configuration manager for GroupAgent.
+Configuration manager for GroupConnect.
 Loads and validates settings from JSON configuration files.
 """
 
@@ -16,20 +16,22 @@ class GatewayConfig:
         self.platform: str = data.get("platform", "telegram").lower()
         self.bot_token: str = data.get("bot_token", "")
         self.bot_username: str = data.get("bot_username", "group_agent_bot").lower().lstrip("@")
-        self.bot_name: str = data.get("bot_name", "GroupAgent")
+        self.bot_name: str = data.get("bot_name", "GroupConnect")
 
         # Workspace & Storage Settings
         self.workspace_dir: str = os.path.abspath(data.get("workspace_dir", "./workspace"))
         self.attachments_dir: str = os.path.join(self.workspace_dir, "inbox", "attachments")
         self.chat_logs_dir: str = os.path.join(self.workspace_dir, "inbox", "chat_logs")
 
-        # Agent Engine Settings (Currently supports: antigravity, claude)
+        # Agent Engine Settings (Supports: antigravity, claude, codex, opencode)
         self.engine_type: str = data.get("engine_type", "antigravity").lower()
+        self.model: Optional[str] = data.get("model")
         self.agy_bin: str = data.get("agy_bin", "agy")
         self.claude_bin: str = data.get("claude_bin", "claude")
-        self.model: str = data.get("model", "gemini-3.7-flash-high")
+        self.codex_bin: str = data.get("codex_bin", "codex")
+        self.opencode_bin: str = data.get("opencode_bin", "opencode")
 
-        # Context & Window Settings (Configurable)
+        # Context & Window Settings
         self.max_history_len: int = int(data.get("max_history_len", 30))
         self.timeout_secs: int = int(data.get("timeout_secs", 180))
         self.session_idle_timeout_mins: int = int(data.get("session_idle_timeout_mins", 30))

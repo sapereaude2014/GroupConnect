@@ -1,5 +1,5 @@
 """
-Central Orchestrator Engine for GroupAgent.
+Central Orchestrator Engine for GroupConnect.
 Connects Channel, Agent Adapter, Context Manager, Gatekeeper, and Command Parser.
 """
 
@@ -12,6 +12,8 @@ from typing import Any, Dict, Optional
 from groupconnect.adapters.base import BaseAgentAdapter
 from groupconnect.adapters.antigravity import AntigravityAdapter
 from groupconnect.adapters.claude_code import ClaudeCodeAdapter
+from groupconnect.adapters.codex import CodexAdapter
+from groupconnect.adapters.opencode import OpenCodeAdapter
 from groupconnect.channels.base import BaseChannel, InboundMessage
 from groupconnect.channels.telegram import TelegramChannel
 from groupconnect.core.command import parse_bot_command
@@ -22,7 +24,7 @@ from groupconnect.core.gatekeeper import Gatekeeper
 logger = logging.getLogger("groupconnect.engine")
 
 
-class GroupAgentEngine:
+class GroupConnectEngine:
     def __init__(self, config: GatewayConfig):
         self.config = config
 
@@ -54,7 +56,7 @@ class GroupAgentEngine:
             return AntigravityAdapter(
                 agy_bin=self.config.agy_bin,
                 workspace_dir=self.config.workspace_dir,
-                model=self.config.model,
+                model=self.config.model or "gemini-3.7-flash-high",
                 timeout_secs=self.config.timeout_secs,
                 idle_timeout_mins=self.config.session_idle_timeout_mins
             )
@@ -64,8 +66,25 @@ class GroupAgentEngine:
                 workspace_dir=self.config.workspace_dir,
                 timeout_secs=self.config.timeout_secs
             )
+        elif engine_type in ("codex",):
+            return CodexAdapter(
+                codex_bin=self.config.codex_bin,
+                workspace_dir=self.config.workspace_dir,
+                model=self.config.model,
+                timeout_secs=self.config.timeout_secs
+            )
+        elif engine_type in ("opencode", "open-code"):
+            return OpenCodeAdapter(
+                opencode_bin=self.config.opencode_bin,
+                workspace_dir=self.config.workspace_dir,
+                model=self.config.model,
+                timeout_secs=self.config.timeout_secs
+            )
         else:
-            raise ValueError(f"Unsupported engine_type: {engine_type}. Supported: 'antigravity', 'claude'")
+            raise ValueError(
+                f"Unsupported engine_type: '{engine_type}'. "
+                f"Supported adapters: 'antigravity', 'claude', 'codex', 'opencode'"
+            )
 
     def _create_channel(self) -> BaseChannel:
         if self.config.platform == "telegram":
@@ -80,7 +99,7 @@ class GroupAgentEngine:
 
     async def start(self) -> None:
         self.is_running = True
-        logger.info(f"Starting GroupAgent Gateway Engine (Platform: {self.config.platform}, Engine: {self.config.engine_type})...")
+        logger.info(f"Starting GroupConnect Gateway (Platform: {self.config.platform}, Engine: {self.config.engine_type})...")
 
         reaper_task = asyncio.create_task(self._reaper_loop())
         try:
@@ -177,9 +196,9 @@ class GroupAgentEngine:
             cid_display = f"`{cid[:8]}...{cid[-6:]}` ({session.get('turns', 0)} turns)" if cid else "Fresh / Idle"
             auth_str = "🛡️ Active Whitelist" if self.gatekeeper.is_whitelist_active() else "⚠️ Open Access"
             status_text = (
-                f"🤖 **GroupAgent Gateway Status**\n\n"
+                f"🤖 **GroupConnect Gateway Status**\n\n"
                 f"- **Platform**: `{self.config.platform.title()}` (`@{self.config.bot_username}`)\n"
-                f"- **Engine**: `{self.config.engine_type.title()} ({self.config.model})`\n"
+                f"- **Engine**: `{self.config.engine_type.title()}`\n"
                 f"- **Chat Type**: `{'Group Chat' if is_group else 'Private Direct'}`\n"
                 f"- **Security**: `{auth_str}`\n"
                 f"- **Session**: {cid_display}\n"
@@ -191,7 +210,7 @@ class GroupAgentEngine:
             return
         elif cmd in ("help", "start"):
             help_text = (
-                f"👋 Hello! I am **GroupAgent** (`@{self.config.bot_username}`).\n\n"
+                f"👋 Hello! I am **GroupConnect** (`@{self.config.bot_username}`).\n\n"
                 f"🎯 **Key Features**:\n"
                 f"1. **Silent Group Context**: I track recent discussion in the background and catch up instantly when tagged.\n"
                 f"2. **Multimodal Inbox**: Photos, voice notes, and documents are automatically downloaded and parsed.\n"

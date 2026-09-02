@@ -1,8 +1,8 @@
 {
   "platform": "telegram",
-  "bot_token": "YOUR_TELEGRAM_BOT_TOKEN_FROM_BOTFATHER",
+  "bot_token": "YOUR_TELEGRAM_BOT_TOKEN",
   "bot_username": "your_group_bot",
-  "bot_name": "GroupAgent",
+  "bot_name": "GroupConnect",
 
   "workspace_dir": "./workspace",
 
@@ -10,6 +10,8 @@
   "model": "gemini-3.7-flash-high",
   "agy_bin": "agy",
   "claude_bin": "claude",
+  "codex_bin": "codex",
+  "opencode_bin": "opencode",
 
   "max_history_len": 30,
   "timeout_secs": 180,

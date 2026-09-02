@@ -1,7 +1,7 @@
 # GroupConnect
 
 <p align="center">
-  <b>A Group-Context Gateway for Local CLI Agents (Antigravity & Claude Code)</b><br>
+  <b>A Group-Context Gateway for Local CLI Agents (Antigravity, Claude Code, Codex, OpenCode)</b><br>
   专为群聊设计的本地 CLI Agent 静默上下文感知与常驻运行网关
 </p>
 
@@ -9,15 +9,15 @@
   <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License" />
   <img src="https://img.shields.io/badge/python-3.9+-green.svg" alt="Python" />
   <img src="https://img.shields.io/badge/dependency-httpx_only-brightgreen.svg" alt="Zero Bloat" />
-  <img src="https://img.shields.io/badge/platforms-Telegram_|_Discord_&_Feishu_Planned-blue.svg" alt="Platforms" />
-  <img src="https://img.shields.io/badge/harness-Antigravity_|_Claude_Code-orange.svg" alt="Agent Harnesses" />
+  <img src="https://img.shields.io/badge/telegram-Bot_API-blue.svg" alt="Telegram" />
+  <img src="https://img.shields.io/badge/harness-Antigravity_|_Claude_|_Codex_|_OpenCode-orange.svg" alt="Supported Harnesses" />
 </p>
 
 ---
 
 ## 📖 项目简介
 
-GroupConnect 是一个专为群聊协作设计的轻量级网关，用于将群聊平台（首发深度支持 Telegram）连接到本地运行的 CLI Agent（如 **Google Antigravity `agy`** 和 **Anthropic Claude Code `claude`**）。
+GroupConnect 是一个专为群聊协作设计的轻量级网关，用于将群聊平台（首发深度支持 Telegram）连接到本地运行的各类 CLI Agent（已支持 **Google Antigravity `agy`**、**Anthropic Claude Code `claude`**、**OpenAI Codex `codex`** 及 **OpenCode `opencode`**）。
 
 通过静默滑动窗口与多模态自动化管道，GroupConnect 让本地 CLI Agent 能够自然感知群内前文讨论背景，自动下载落盘多模态附件，并提供低延迟的常驻执行与即时打断能力。
 
@@ -57,6 +57,17 @@ GroupConnect 是一个专为群聊协作设计的轻量级网关，用于将群�
 
 ---
 
+## 🧩 支持的本地 CLI Harness
+
+| 引擎类型 (`engine_type`) | 调起指令 | 说明 |
+| :--- | :--- | :--- |
+| `antigravity` (默认) | `agy` | 支持全双工 `stream-json` 管道常驻会话池（零冷启动） |
+| `claude` | `claude -p` | 支持 Anthropic Claude Code CLI 会话恢复与执行 |
+| `codex` | `codex exec` | 支持 OpenAI Codex CLI 非交互式 JSONL 事件流与图片附件传入 |
+| `opencode` | `opencode run` | 支持 OpenCode CLI 非交互式任务执行与多轮会话管理 |
+
+---
+
 ## 🚀 快速开始
 
 ### 1. 安装
@@ -69,7 +80,7 @@ cd GroupConnect
 pip install -r requirements.txt
 ```
 
-确保本地环境中已安装并授权对应的 CLI Agent（如 `agy` 或 `claude`）。
+确保本地环境中已安装并授权对应的 CLI Agent（如 `agy`、`claude`、`codex` 或 `opencode`）。
 
 ### 2. 配置文件 `config.json`
 
@@ -94,6 +105,8 @@ cp config.example.json config.json
   "model": "gemini-3.7-flash-high",
   "agy_bin": "agy",
   "claude_bin": "claude",
+  "codex_bin": "codex",
+  "opencode_bin": "opencode",
 
   "max_history_len": 30,
   "timeout_secs": 180,
@@ -114,8 +127,6 @@ cp config.example.json config.json
 }
 ```
 
-*如果使用 Claude Code，将 `engine_type` 设为 `"claude"`，`claude_bin` 设为 `"claude"` 即可。*
-
 ### 3. 运行服务
 
 **前台调试运行**：
@@ -135,7 +146,7 @@ python3 -m groupconnect.cli --config config.json
 | 参数项 | 类型 | 默认值 | 说明 |
 | :--- | :--- | :--- | :--- |
 | `platform` | string | `"telegram"` | 接入平台（目前支持 `"telegram"`） |
-| `engine_type` | string | `"antigravity"` | 后端 Agent 类型（支持 `"antigravity"` 或 `"claude"`） |
+| `engine_type` | string | `"antigravity"` | 后端 Agent 类型（支持 `"antigravity"`, `"claude"`, `"codex"`, `"opencode"`） |
 | `workspace_dir` | string | `"./workspace"` | Agent 挂载的本地工作区根目录 |
 | `max_history_len` | int | `30` | 静默群聊滑动窗口保留的最大消息条数 |
 | `timeout_secs` | int | `180` | 单次 Agent 执行最大超时时间（秒） |
