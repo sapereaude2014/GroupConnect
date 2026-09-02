@@ -1,0 +1,30 @@
+{
+  "platform": "telegram",
+  "bot_token": "YOUR_TELEGRAM_BOT_TOKEN_FROM_BOTFATHER",
+  "bot_username": "your_group_bot",
+  "bot_name": "GroupAgent",
+
+  "workspace_dir": "./workspace",
+
+  "engine_type": "antigravity",
+  "model": "gemini-3.7-flash-high",
+  "agy_bin": "agy",
+  "claude_bin": "claude",
+
+  "max_history_len": 30,
+  "timeout_secs": 180,
+  "session_idle_timeout_mins": 30,
+  "max_chunk_size": 3800,
+  "typing_interval_secs": 4.0,
+
+  "allowed_chat_ids": [
+    -1001234567890
+  ],
+  "allowed_user_ids": [
+    123456789
+  ],
+  "allowed_usernames": [
+    "alice",
+    "bob"
+  ]
+}

@@ -1,0 +1,19 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Config & local secrets
+config.json
+*.pid
+*.log
+
+# Workspace & inboxes
+workspace/
+inbox/
+
+# Environments
+.env
+.venv
+env/
+venv/
