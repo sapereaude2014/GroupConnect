@@ -51,14 +51,27 @@ In real-world group chats, team members discuss problems organically before call
 
 ---
 
-## ✨ Key Features
+## ✨ Core Features (Platform-Agnostic)
 
 * 🧠 **Silent Sliding Window**: Observes group discussions silently without spamming replies. When tagged, it automatically injects recent context (configurable depth, default 30 messages) so the agent immediately understands what the team was discussing.
-* 👥 **Dynamic Member Access Control**: No need to look up obscure numeric Telegram user IDs. Whitelist by `@username`, or allow members of your authorized group to automatically DM the assistant via dynamic membership verification. Automatically leaves unauthorized groups to protect your local environment.
+* 👥 **Dynamic Member Access Control**: Authenticate users effortlessly by `@username` or automatically grant DM access to active members of authorized groups via dynamic membership checks.
 * 📎 **Automatic Multimodal Inbox**: Photos, voice notes, and documents sent in chat are automatically downloaded to `inbox/attachments/` in your workspace and passed as absolute local paths for native visual and file tools.
 * 🔥 **Zero Cold-Start Worker Pool**: Maintains persistent agent subprocesses to eliminate startup latency and preserve multi-turn conversational memory.
-* ⏹️ **Instant `/stop` Cancellation**: If an agent enters an unwanted loop or you need to abort a command immediately, sending `/stop` preemptively terminates the active process tree without waiting for locks.
-* 📖 **Telegram Instant View Integration**: Long-form research reports and documents can be converted into Telegraph pages for zero-second native popup reading on mobile.
+* ⏹️ **Instant `/stop` Interruption**: If an agent enters an unwanted loop or you need to abort a command immediately, sending `/stop` preemptively terminates the active process tree without waiting for locks.
+
+---
+
+## 🌐 Platform Channel Integrations
+
+### 🟢 Telegram Channel (Built-in)
+* **Auto-Leave Protection (`leaveChat`)**: Immediately leaves unauthorized groups if dragged in by strangers to protect local workspace files.
+* **Smart Long-Message Splitting**: Gracefully splits responses exceeding Telegram's 4096-character limit along paragraph boundaries without cutting code blocks or words in half.
+* **Markdown Fallback Protection**: Automatically strips formatting and retries as clean text if unclosed Markdown tags trigger Telegram parsing errors, guaranteeing 100% message delivery.
+* **Telegraph Instant View**: Converts long-form research reports into zero-authentication Telegraph pages for 0-second native popup reading on mobile.
+
+### 🟡 Planned Channels
+* **Discord**: Rich Embed cards, thread-based conversation isolation.
+* **Feishu / Lark**: Interactive cards and cloud document attachments.
 
 ---
 
