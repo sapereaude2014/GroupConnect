@@ -22,7 +22,7 @@ def setup_logging(level: str = "INFO") -> None:
     logging.basicConfig(level=getattr(logging, level.upper(), logging.INFO), format=log_format)
 
 
-def run_init_wizard(config_path: str = "config.json") -> None:
+def run_init_wizard(target_config_path: Optional[str] = None) -> None:
     """Interactive CLI setup wizard dynamically populated from Channel & Adapter registries."""
     print("=" * 60)
     print("🚀 Welcome to GroupConnect Dynamic Setup Wizard!")
@@ -109,19 +109,27 @@ def run_init_wizard(config_path: str = "config.json") -> None:
         else:
             config_data["allowed_usernames"] = [admin_user.lstrip("@")]
 
+    # 6. Smart Config Path Resolution (Prevents accidental overwrites)
+    default_filename = f"config.{platform}.json"
+    if target_config_path and target_config_path != "config.json":
+        chosen_path = target_config_path
+    else:
+        save_prompt = input(f"\n6. Save configuration filename [default: {default_filename}]: ").strip()
+        chosen_path = save_prompt or default_filename
+
     # Write Config File
-    with open(config_path, "w", encoding="utf-8") as f:
+    with open(chosen_path, "w", encoding="utf-8") as f:
         json.dump(config_data, f, indent=2, ensure_ascii=False)
 
-    print(f"\n✅ Configuration saved to {os.path.abspath(config_path)}!")
+    print(f"\n✅ Configuration saved to {os.path.abspath(chosen_path)}!")
     print("👉 You can now start GroupConnect by running:")
-    print(f"   python3 -m groupconnect.cli --config {config_path}\n")
+    print(f"   python3 -m groupconnect.cli --config {chosen_path}\n")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="GroupConnect: Group-Context Gateway for Local CLI Agents")
-    parser.add_argument("-c", "--config", default="config.json", help="Path to config JSON file")
-    parser.add_argument("--init", action="store_true", help="Run interactive setup wizard to generate config.json")
+    parser.add_argument("-c", "--config", default=None, help="Path to config JSON file")
+    parser.add_argument("--init", action="store_true", help="Run interactive setup wizard to generate config")
     parser.add_argument("--log-level", default="INFO", help="Logging level (DEBUG, INFO, WARNING, ERROR)")
     args = parser.parse_args()
 
@@ -132,21 +140,44 @@ def main() -> None:
     setup_logging(args.log_level)
     logger = logging.getLogger("groupconnect.cli")
 
-    if not os.path.exists(args.config):
-        print(f"⚠️ Config file '{args.config}' not found.")
+    config_file = args.config
+    if not config_file:
+        if os.path.exists("config.json"):
+            config_file = "config.json"
+        else:
+            # Check for any config.*.json
+            import glob
+            configs = glob.glob("config.*.json")
+            if len(configs) == 1:
+                config_file = configs[0]
+                logger.info(f"Auto-detected configuration file: {config_file}")
+            elif len(configs) > 1:
+                print("Found multiple configuration files:")
+                for i, c in enumerate(configs, 1):
+                    print(f"  [{i}] {c}")
+                pick = input(f"Select config [1-{len(configs)}, default: 1]: ").strip() or "1"
+                try:
+                    config_file = configs[int(pick) - 1]
+                except Exception:
+                    config_file = configs[0]
+            else:
+                config_file = "config.json"
+
+    if not os.path.exists(config_file):
+        print(f"⚠️ Config file '{config_file}' not found.")
         choice = input("Would you like to run the interactive setup wizard now? [Y/n]: ").strip().lower()
         if choice in ("", "y", "yes"):
-            run_init_wizard(args.config)
-            if not os.path.exists(args.config):
+            run_init_wizard(config_file)
+            if not os.path.exists(config_file):
                 sys.exit(1)
         else:
-            logger.error(f"Please create {args.config} from config.example.json or run with --init.")
+            logger.error("Please create a configuration file or run with --init.")
             sys.exit(1)
 
     try:
-        config = GatewayConfig.from_file(args.config)
+        config = GatewayConfig.from_file(config_file)
     except Exception as e:
-        logger.error(f"Failed to load configuration file {args.config}: {e}")
+        logger.error(f"Failed to load configuration file {config_file}: {e}")
         sys.exit(1)
 
     engine = GroupConnectEngine(config)

@@ -107,20 +107,27 @@ Run the interactive setup wizard:
 python3 -m groupconnect.cli --init
 ```
 
-The wizard will prompt for your platform, credentials, preferred CLI agent, and local workspace directory, generating `config.json` in seconds.
+The wizard will prompt for your platform and credentials, automatically saving to `config.<platform>.json` (e.g., `config.telegram.json`, `config.feishu.json`, `config.discord.json`).
 
-*(Or copy `config.example.json` to `config.json` and edit it manually).*
+*(Or copy `config.example.json` to `config.telegram.json` and edit it manually).*
 
 ### 3. Run
 
 **Foreground (for development & testing)**:
 ```bash
-python3 -m groupconnect.cli --config config.json
+python3 -m groupconnect.cli --config config.telegram.json
 ```
 
 **Background Daemon (auto-restarts on crash for 24/7 reliability)**:
 ```bash
-./scripts/daemon.sh config.json groupconnect.log groupconnect.pid
+./scripts/daemon.sh config.telegram.json logs/tg.log pids/tg.pid
+```
+
+**Concurrent Multi-Platform Deployment**:
+```bash
+./scripts/daemon.sh config.telegram.json logs/tg.log pids/tg.pid
+./scripts/daemon.sh config.feishu.json logs/feishu.log pids/feishu.pid
+./scripts/daemon.sh config.discord.json logs/discord.log pids/discord.pid
 ```
 
 ---

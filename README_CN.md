@@ -104,18 +104,25 @@ pip install -r requirements.txt
 python3 -m groupconnect.cli --init
 ```
 
-向导会依次询问您的接入平台（Telegram / Discord / Slack / 飞书 / 企微）、凭证、所选 CLI Agent 及本地工作区路径，10 秒内自动生成 `config.json`。
+向导会自动根据你选的平台生成对应的配置文件，默认为 `config.<platform>.json`（例如 `config.telegram.json`、`config.feishu.json`、`config.discord.json`），绝不相互覆盖。
 
 ### 3. 运行服务
 
-**前台调试运行**：
+**前台运行指定平台**：
 ```bash
-python3 -m groupconnect.cli --config config.json
+python3 -m groupconnect.cli --config config.telegram.json
 ```
 
 **后台守护运行 (进程崩溃自动重启，保障 7×24 小时在线)**：
 ```bash
-./scripts/daemon.sh config.json groupconnect.log groupconnect.pid
+./scripts/daemon.sh config.telegram.json logs/tg.log pids/tg.pid
+```
+
+**多平台并发运行 (共享同一个工作区大脑)**：
+```bash
+./scripts/daemon.sh config.telegram.json logs/tg.log pids/tg.pid
+./scripts/daemon.sh config.feishu.json logs/feishu.log pids/feishu.pid
+./scripts/daemon.sh config.discord.json logs/discord.log pids/discord.pid
 ```
 
 ---
