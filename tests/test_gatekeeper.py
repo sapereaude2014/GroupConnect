@@ -48,6 +48,32 @@ class TestGatekeeper(unittest.TestCase):
 
         loop.close()
 
+    def test_dynamic_group_members_dm_toggle(self):
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        async def mock_checker(group_id: int, user_id: int) -> bool:
+            return user_id == 555  # 555 is member of group
+
+        # Case A: allow_group_members_dm = True (default) -> Allowed via dynamic membership
+        gk_enabled = Gatekeeper(allowed_chat_ids={-100123}, allow_group_members_dm=True)
+        auth_a, reason_a = loop.run_until_complete(
+            gk_enabled.verify_sender(555, "private", {"id": 555, "username": "member_bob"}, dynamic_checker=mock_checker)
+        )
+        self.assertTrue(auth_a)
+        self.assertEqual(reason_a, "dynamic_member_verified")
+
+        # Case B: allow_group_members_dm = False -> Rejected even if in group
+        gk_disabled = Gatekeeper(allowed_chat_ids={-100123}, allow_group_members_dm=False)
+        auth_b, reason_b = loop.run_until_complete(
+            gk_disabled.verify_sender(555, "private", {"id": 555, "username": "member_bob"}, dynamic_checker=mock_checker)
+        )
+        self.assertFalse(auth_b)
+        self.assertEqual(reason_b, "unauthorized_user")
+
+        loop.close()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,6 +1,6 @@
 """
 Security Gatekeeper for GroupConnect.
-Enforces default-deny access control, group isolation, and dynamic membership verification.
+Enforces default-deny access control, group isolation, and optional dynamic membership verification.
 """
 
 import logging
@@ -17,7 +17,8 @@ class Gatekeeper:
         allowed_chat_ids: Optional[Set[int]] = None,
         allowed_user_ids: Optional[Set[int]] = None,
         allowed_usernames: Optional[Set[str]] = None,
-        allow_open_access: bool = False
+        allow_open_access: bool = False,
+        allow_group_members_dm: bool = True
     ):
         self.allowed_chat_ids: Set[int] = set(allowed_chat_ids or [])
         self.allowed_user_ids: Set[int] = set(allowed_user_ids or [])
@@ -25,6 +26,7 @@ class Gatekeeper:
             u.lower().lstrip("@") for u in (allowed_usernames or [])
         )
         self.allow_open_access: bool = allow_open_access
+        self.allow_group_members_dm: bool = allow_group_members_dm
 
     def is_whitelist_active(self) -> bool:
         return bool(self.allowed_chat_ids or self.allowed_user_ids or self.allowed_usernames)
@@ -72,8 +74,8 @@ class Gatekeeper:
                 self.allowed_user_ids.add(user_id)
             return True, "username_matched"
 
-        # 3. Dynamic Group Membership Check (if available)
-        if user_id and self.allowed_chat_ids and dynamic_checker:
+        # 3. Dynamic Group Membership Check (if enabled by config)
+        if self.allow_group_members_dm and user_id and self.allowed_chat_ids and dynamic_checker:
             for gid in self.allowed_chat_ids:
                 try:
                     is_member = await dynamic_checker(gid, user_id)

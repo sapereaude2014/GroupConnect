@@ -20,6 +20,7 @@
   "typing_interval_secs": 4.0,
 
   "allow_open_access": false,
+  "allow_group_members_dm": true,
   "allowed_chat_ids": [
     -1001234567890
   ],

@@ -51,14 +51,13 @@
 
 ---
 
-## ✨ 核心通用特性（跨平台通用）
+## ✨ 核心通用特性（核心卖点）
 
-* 🧠 **群聊静默滑动窗口 (Silent Sliding Window)**：群内成员正常交流时不发消息打扰，后台自动维护最近 $N$ 条讨论记录（默认 30 条）；被 `@` 唤醒时自动注入背景，连续追问时仅同步增量新消息。
-* 🛡️ **默认安全锁定机制 (Secure-by-Default)**：遵循默认拒绝策略保护本地命令与文件。若未配置任何白名单，网关**自动进入安全锁定模式**拦截一切陌生请求，除非显式配置 `allow_open_access: true`。
-* 👥 **动态群成员鉴权 (Dynamic Member Access Control)**：免去手动查询数字 User ID 的麻烦，支持直接按 `@username` 授权；**只要是授权群内的成员，私聊 Bot 时自动完成动态成员身份核验**。
-* 📎 **多模态附件自动落盘 (Multimodal Auto-Inbox)**：群内发送的照片、语音和文档自动下载保存至工作区的 `inbox/attachments/` 目录，并在提示词中直接提供本地绝对路径供视觉和文档工具读取。
+* 🧠 **群聊静默滑动窗口与增量追问 (Silent Sliding Window & Delta Sync)**：群内成员正常交流时不发消息打扰，后台自动维护最近 $N$ 条讨论记录（默认 30 条）；被 `@` 唤醒时自动注入背景，连续追问时仅同步增量新消息。
 * 🔥 **零冷启动常驻引擎 (Zero Cold-Start Worker Pool)**：保持 Agent 进程在后台常驻运行，消除每次调用的冷启动延迟，保持多轮会话记忆。
+* 📎 **多模态附件自动落盘 (Multimodal Auto-Inbox)**：群内发送的照片、语音和文档自动下载保存至工作区的 `inbox/attachments/` 目录，并在提示词中直接提供本地绝对物理路径供视觉和文档工具读取。
 * ⏹️ **即时打断 (`/stop`)**：当 Agent 陷入长循环或执行出错时，发送 `/stop` 指令无需排队等待，立即安全终止本地当前运行的任务树。
+* 🛡️ **默认安全锁定与灵活成员鉴权 (Secure-by-Default & Granular Access)**：遵循默认拒绝策略保护本地命令与文件。支持按 `@username` 授权；提供 `allow_group_members_dm` 开关（可自由配置是否允许群成员免配置私聊）。
 
 ---
 
@@ -136,6 +135,7 @@ python3 -m groupconnect.cli --config config.json
 | `session_idle_timeout_mins` | 通用核心 | `30` | 常驻进程空闲自动回收时长（分钟，设为 0 表示不回收） |
 | `max_chunk_size` | 平台通道 | `3800` | 发送给 Telegram 的单条消息安全字符上限 |
 | `allow_open_access` | 安全鉴权 | `false` | 是否允许完全开放访问（为 `false` 时白名单为空会自动进入锁定模式） |
+| `allow_group_members_dm` | 安全鉴权 | `true` | 是否允许授权群内的成员免配置直接私聊 Bot（设为 `false` 则仅限指定用户私聊） |
 | `allowed_chat_ids` | 安全鉴权 | `[]` | 允许接入的群聊 ID 白名单（非白名单群聊自动退群） |
 | `allowed_user_ids` | 安全鉴权 | `[]` | 允许私聊的 Telegram User ID 白名单 |
 | `allowed_usernames` | 安全鉴权 | `[]` | 允许私聊的 Telegram Username 白名单 |

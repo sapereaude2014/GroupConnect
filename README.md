@@ -54,12 +54,11 @@ In real-world group chats, team members discuss problems organically before call
 
 ## ✨ Core Features (Platform-Agnostic)
 
-* 🧠 **Silent Sliding Window**: Observes group discussions silently without spamming replies. When tagged, it automatically injects recent context (configurable depth, default 30 messages) so the agent immediately understands what the team was discussing.
-* 🛡️ **Secure-by-Default Access Control**: Implements a strict default-deny policy to protect local shell & files. If no allowlist is configured, the gateway enters **Safe Lockdown Mode** and rejects all strangers unless `allow_open_access: true` is explicitly set.
-* 👥 **Dynamic Member Access Control**: Authenticate users effortlessly by `@username` or automatically grant DM access to active members of authorized groups via dynamic membership checks.
+* 🧠 **Silent Sliding Window & Delta Sync**: Observes group discussions silently without spamming replies. When tagged, it automatically injects recent discussion context (configurable depth, default 30 messages) so the agent immediately understands what the team was discussing, syncing only incremental messages on continuous follow-ups.
+* 🔥 **Zero Cold-Start Worker Pool**: Maintains persistent background agent subprocesses to eliminate startup latency and preserve multi-turn conversational memory.
 * 📎 **Automatic Multimodal Inbox**: Photos, voice notes, and documents sent in chat are automatically downloaded to `inbox/attachments/` in your workspace and passed as absolute local paths for native visual and file tools.
-* 🔥 **Zero Cold-Start Worker Pool**: Maintains persistent agent subprocesses to eliminate startup latency and preserve multi-turn conversational memory.
 * ⏹️ **Instant `/stop` Interruption**: If an agent enters an unwanted loop or you need to abort a command immediately, sending `/stop` preemptively terminates the active process tree without waiting for locks.
+* 🛡️ **Secure-by-Default & Dynamic Member Control**: Protects local shell & files with default-deny lockdown. Authenticate users via `@username` or toggle `allow_group_members_dm` to automatically grant DM access to authorized group members.
 
 ---
 
@@ -141,6 +140,7 @@ python3 -m groupconnect.cli --config config.json
 | `session_idle_timeout_mins` | Core | `30` | Minutes of inactivity before recycling warm worker processes |
 | `max_chunk_size` | Channel | `3800` | Safe message chunk size to prevent platform character limit errors |
 | `allow_open_access` | Security | `false` | If `false`, enables Safe Lockdown Mode when allowlist is empty |
+| `allow_group_members_dm` | Security | `true` | Allows members of authorized groups to automatically DM the bot |
 | `allowed_chat_ids` | Security | `[]` | Whitelisted Group Chat IDs (auto-leaves unlisted groups) |
 | `allowed_user_ids` | Security | `[]` | Whitelisted Telegram User IDs for direct messaging |
 | `allowed_usernames` | Security | `[]` | Whitelisted Telegram `@usernames` for direct messaging |

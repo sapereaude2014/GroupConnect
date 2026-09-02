@@ -28,7 +28,7 @@ class GroupConnectEngine:
     def __init__(self, config: GatewayConfig):
         self.config = config
 
-        # 1. Context & Gatekeeper (Secure-by-Default)
+        # 1. Context & Gatekeeper (Secure-by-Default with Configurable DM Access)
         self.context_mgr = ContextManager(
             max_history_len=config.max_history_len,
             chat_logs_dir=config.chat_logs_dir,
@@ -38,7 +38,8 @@ class GroupConnectEngine:
             allowed_chat_ids=config.allowed_chat_ids,
             allowed_user_ids=config.allowed_user_ids,
             allowed_usernames=config.allowed_usernames,
-            allow_open_access=config.allow_open_access
+            allow_open_access=config.allow_open_access,
+            allow_group_members_dm=config.allow_group_members_dm
         )
 
         # 2. Agent Adapter Factory

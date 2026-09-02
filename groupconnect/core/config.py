@@ -41,6 +41,7 @@ class GatewayConfig:
 
         # Security Allowlist Gatekeeper (Secure-by-Default)
         self.allow_open_access: bool = bool(data.get("allow_open_access", False))
+        self.allow_group_members_dm: bool = bool(data.get("allow_group_members_dm", True))
         self.allowed_chat_ids: Set[int] = set(int(x) for x in data.get("allowed_chat_ids", []))
         self.allowed_user_ids: Set[int] = set(int(x) for x in data.get("allowed_user_ids", []))
         self.allowed_usernames: Set[str] = set(
