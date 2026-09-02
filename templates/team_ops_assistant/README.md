@@ -1,12 +1,10 @@
-# 💼 研发与项目团队管家模板 (Team Ops Template)
+# 💼 Team Ops Assistant Workspace Template
 
-将本目录作为 `workspace_dir`，即可让 GroupConnect 化身为敏捷开发、日常站会、讨论纪要提炼与任务追踪的团队群助手。
+Point `workspace_dir` to this directory to turn GroupConnect into an agile team assistant for daily standups, discussion summarization, and issue tracking.
 
-## 📁 推荐目录结构
-
-- `docs/`：项目架构方案、SOP、API 文档
-- `tasks/`：待办需求清单、Sprint 迭代排期
-- `meetings/`：会议纪要与群讨论提炼归档
-- `inbox/`：
-  - `attachments/`：群内共享的原型截图、崩溃堆栈、PRD 文档
-  - `chat_logs/`：全量讨论日志
+## 📁 Recommended Directory Structure
+- `docs/`: Architecture proposals, SOPs, and API specifications
+- `tasks/`: Backlog items, sprint milestones, and action items
+- `meetings/`: Meeting minutes and discussion digests
+- `inbox/attachments/`: UI mockups, crash stacks, and PRDs shared in chat (auto-saved)
+- `inbox/chat_logs/`: Full discussion logs (auto-archived monthly in JSONL)

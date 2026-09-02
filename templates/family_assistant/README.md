@@ -1,15 +1,13 @@
-# 🏡 家庭智能管家工作区模板 (Family Assistant Template)
+# 🏡 Family Assistant Workspace Template
 
-将本目录作为 `workspace_dir`，即可让 GroupConnect 化身为具备家庭档案管理、多模态单据归档、生活备忘与智能家居控制的家庭管家。
+Point `workspace_dir` to this directory to turn GroupConnect into a dedicated family manager for archives, multimodal invoice filing, health records, and home organization.
 
-## 📁 推荐目录结构
-
-- `01_家庭成员档案/`：成员信息、偏好、健康档案
-- `02_健康与医疗/`：常备药箱清单、就医记录、体检化验单
-- `03_财务与资产/`：保单台账、大额资产记录
-- `04_房产与车辆/`：维保水电台账、车辆保险
-- `05_教育与成长/`：孩子成长记录、学习计划
-- `06_生活日常与备忘/`：出行攻略、家务SOP、纪念日
-- `inbox/`：
-  - `attachments/`：接收来自群聊的照片、药盒单据、语音（自动落盘）
-  - `chat_logs/`：全量对话日志（按月 JSONL 自动归档）
+## 📁 Recommended Directory Structure
+- `01_members/`: Member profiles, preferences, and personal health archives
+- `02_health_medical/`: First-aid inventory, medical visit logs, checkup reports
+- `03_finance_assets/`: Insurance policies, major asset logs
+- `04_home_vehicles/`: Maintenance logs, utilities, vehicle insurance
+- `05_education_growth/`: Growth milestones, study plans
+- `06_daily_reminders/`: Travel itineraries, household SOPs, anniversaries
+- `inbox/attachments/`: Incoming photos, receipts, and voice files from chat (auto-saved)
+- `inbox/chat_logs/`: Full conversation logs (auto-archived monthly in JSONL)
