@@ -50,6 +50,10 @@ Team chatting ───(Discarded)───> Context Lost ───(@AI tagged)�
 Team chatting ───(Silent Sliding Window)───> Context Captured ───(@AI tagged)───> Updates Local Files
 ```
 
+Local CLI agents like **Anthropic Claude Code (`claude`)**, **Google Antigravity (`agy`)**, **OpenAI Codex (`codex`)**, and **OpenCode (`opencode`)** run on your machine with full access to your local files and tools.
+
+**GroupConnect packages this connection and context logic into a ready-to-use lightweight runtime:**
+
 ```text
                  Group Chat (Natural Discussion)
                                │
@@ -78,6 +82,8 @@ Team chatting ───(Silent Sliding Window)───> Context Captured ──
 
 ## 🧱 The Two-Layer Architecture: Core & Templates
 
+> **Group chats provide the context, Agents take action, and the Workspace preserves the results.**
+
 GroupConnect cleanly separates **the runtime connection layer (Core)** from **long-term asset persistence (Templates)**:
 
 ### 1. Core (Group Chat ➔ Context ➔ Agent)
@@ -87,7 +93,7 @@ GroupConnect cleanly separates **the runtime connection layer (Core)** from **lo
 * **Instant `/stop` Interruption**: Preemptively terminates active CLI agent process trees on `/stop` without waiting for queues or locks.
 * **Default-Deny Security**: Safe lockdown mode by default, preventing unauthorized users from accessing your local machine.
 
-### 2. Templates (Agent ➔ Workspace ➔ Long-Term Persistence)
+### 2. Templates (Workspace Reference Setups)
 *Note: Templates are purely optional reference implementations. GroupConnect imposes zero restrictions on your workspace structure.*
 
 Reference presets in [`templates/`](templates/) demonstrate how to organize local directories when turning a group chat into an ongoing workspace:

@@ -50,6 +50,10 @@ AI:     "好的，已更新至 schedule.md：
 群成员日常讨论 ───(静默滑动窗口)───> 记忆前文 ───(@AI唤醒)───> 自动带入背景并修改本地文件
 ```
 
+像 **Anthropic Claude Code (`claude`)**、**Google Antigravity (`agy`)**、**OpenAI Codex (`codex`)** 和 **OpenCode (`opencode`)** 这类本地 CLI Agent 非常强大，因为它们能直接在你的电脑上读写文件、执行脚本。
+
+**GroupConnect 就是把这套连接与上下文处理逻辑做成一个即装即用的轻量运行时：**
+
 ```text
                  群聊 (自然讨论流)
                          │
@@ -78,7 +82,9 @@ AI:     "好的，已更新至 schedule.md：
 
 ## 🧱 双层架构设计：Core 与 Templates
 
-GroupConnect 严格区分 **连接层机制（Core）** 与 **工作区持久化沉淀（Templates）**：
+> **群聊提供上下文，Agent 负责行动，Workspace 负责沉淀结果。**
+
+GroupConnect 严格区分 **连接层机制（Core）** 与 **工作区组织参考（Templates）**：
 
 ### 1. Core（群聊 ➔ 上下文 ➔ Agent）
 * **静默滑动窗口与增量同步**：后台维护最近 $N$ 条（默认 30 条）群聊记录，连续追问时仅同步增量新消息；
@@ -87,8 +93,8 @@ GroupConnect 严格区分 **连接层机制（Core）** 与 **工作区持久化
 * **即时打断 (`/stop`)**：不排队等待，毫秒级直接强杀当前运行的 Agent 任务树；
 * **默认安全锁定 (Default-Deny)**：白名单为空时自动进入锁定模式，杜绝未经授权的 Shell 执行风险。
 
-### 2. Templates（Agent ➔ 工作区 ➔ 长期资产沉淀）
-> *注：Templates 并非 GroupConnect 的必需组件，GroupConnect 对你的工作区目录结构不做任何强行规定。模板仅作为展示同一套机制在不同场景下的最佳实践参考。*
+### 2. Templates（工作区组织参考）
+> *注：Templates 并非 GroupConnect 的必需组件，GroupConnect 对你的工作区目录结构不做任何强行规定。模板仅作为展示同一机制在不同场景下的最佳实践参考。*
 
 [`templates/`](templates/) 目录下提供了两套开箱即用的参考实现：
 * 🏡 **[家庭管家模板 (family_assistant)](templates/family_assistant/)**：展示如何将家庭群聊转化为健康档案、资产记录与记忆守则的沉淀空间；
