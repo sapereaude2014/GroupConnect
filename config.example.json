@@ -18,7 +18,7 @@
   "workspace_dir": "./workspace",
 
   "engine_type": "antigravity",
-  "model": "gemini-3.7-flash-high",
+  "model": "gemini-3.8-flash-high",
   "agy_bin": "agy",
   "claude_bin": "claude",
   "codex_bin": "codex",

@@ -65,7 +65,7 @@ class GroupConnectEngine:
             return adapter_cls(
                 agy_bin=self.config.agy_bin,
                 workspace_dir=self.config.workspace_dir,
-                model=self.config.model or "gemini-3.7-flash-high",
+                model=self.config.model or "gemini-3.8-flash-high",
                 timeout_secs=self.config.timeout_secs,
                 idle_timeout_mins=self.config.session_idle_timeout_mins
             )

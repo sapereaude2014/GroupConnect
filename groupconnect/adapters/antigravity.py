@@ -22,7 +22,7 @@ class AntigravityAdapter(BaseAgentAdapter):
         self,
         agy_bin: str = "agy",
         workspace_dir: str = "./workspace",
-        model: str = "gemini-3.7-flash-high",
+        model: str = "gemini-3.8-flash-high",
         timeout_secs: int = 180,
         idle_timeout_mins: int = 30
     ):

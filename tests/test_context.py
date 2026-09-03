@@ -47,6 +47,24 @@ class TestContextManager(unittest.TestCase):
         self.assertIn("msg 2", delta_ctx)
         self.assertIn("msg 3", delta_ctx)
 
+    def test_rehydration_after_restart(self):
+        chat_id = 1003
+        # 1. Record 5 messages with instance 1
+        mgr1 = ContextManager(max_history_len=5, chat_logs_dir=self.test_dir)
+        for i in range(1, 6):
+            mgr1.record_message(chat_id, f"User{i}", f"Message {i}", msg_id=i)
+
+        # 2. Simulate gateway restart: create a new ContextManager instance
+        mgr2 = ContextManager(max_history_len=5, chat_logs_dir=self.test_dir)
+        buf = mgr2.get_buffer(chat_id)
+        self.assertEqual(len(buf), 5)
+        self.assertEqual(buf[0]["text"], "Message 1")
+        self.assertEqual(buf[-1]["text"], "Message 5")
+
+        ctx = mgr2.build_group_context(chat_id)
+        self.assertIn("Message 1", ctx)
+        self.assertIn("Message 5", ctx)
+
     def test_format_sender(self):
         self.assertEqual(format_sender({"first_name": "John", "last_name": "Doe"}), "John Doe")
         self.assertEqual(format_sender({"first_name": "John", "username": "johndoe"}), "John (@johndoe)")
