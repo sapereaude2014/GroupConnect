@@ -87,7 +87,7 @@ Local CLI agents like **Anthropic Claude Code (`claude`)**, **Google Antigravity
 GroupConnect cleanly separates **the connection runtime (Core)** from **workspace reference setups (Templates)**:
 
 ### 1. Core (Group Chat ➔ Context ➔ Agent)
-* **Silent Sliding Window & Delta Sync**: Maintains recent group discussion in memory (default: 30 messages). Syncs only incremental messages on continuous follow-ups.
+* **Silent Sliding Window & Warm Rehydration**: Maintains recent group discussion in memory (default: 30 messages) and automatically rehydrates the sliding window from local JSONL logs upon restart. Syncs only incremental messages on continuous follow-ups.
 * **Zero Cold-Start Worker Pool**: Keeps agent subprocesses warm in the background for instant execution and multi-turn conversational memory.
 * **Multimodal Auto-Inbox**: Photos, voice notes, and documents sent in chat are automatically downloaded to `workspace/inbox/attachments/` and passed as absolute local paths.
 * **Instant `/stop` Interruption**: Preemptively terminates active CLI agent process trees on `/stop` without waiting for queues or locks.
