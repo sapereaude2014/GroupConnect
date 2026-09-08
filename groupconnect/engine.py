@@ -344,9 +344,13 @@ class GroupConnectEngine:
         else:
             session["conversation_id"] = None
 
-        sent_msg_id = await self.channel.send_reply(chat_id, reply_text, reply_to_msg_id=msg.msg_id)
-        if sent_msg_id:
-            session["last_bot_msg_id"] = sent_msg_id
+        sent_msg_id = None
+        try:
+            sent_msg_id = await self.channel.send_reply(chat_id, reply_text, reply_to_msg_id=msg.msg_id)
+            if sent_msg_id:
+                session["last_bot_msg_id"] = sent_msg_id
+        except Exception as e:
+            logger.error(f"Failed to deliver reply to chat {chat_id}: {e}")
 
         self.context_mgr.record_message(
             chat_id=chat_id,

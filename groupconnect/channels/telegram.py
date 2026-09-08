@@ -49,10 +49,23 @@ class TelegramChannel(BaseChannel):
         self.is_running = False
         self.last_update_id = 0
 
-    async def _api_call(self, method: str, **kwargs) -> Dict[str, Any]:
+    async def _api_call(self, method: str, retries: int = 3, **kwargs) -> Dict[str, Any]:
         url = f"{self.api_base}/{method}"
-        resp = await self.client.post(url, json=kwargs)
-        return resp.json()
+        last_exc = None
+        for attempt in range(retries):
+            try:
+                resp = await self.client.post(url, json=kwargs)
+                return resp.json()
+            except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
+                last_exc = e
+                if attempt < retries - 1:
+                    logger.warning(f"Telegram API {method} connection failed (attempt {attempt+1}/{retries}): {e}. Retrying in {attempt+1}s...")
+                    await asyncio.sleep(1.0 * (attempt + 1))
+                else:
+                    logger.error(f"Telegram API {method} failed after {retries} attempts: {e}")
+        if last_exc:
+            raise last_exc
+        return {"ok": False, "description": "Unknown API error"}
 
     async def send_typing_action(self, chat_id: Union[int, str]) -> None:
         try:
@@ -76,7 +89,7 @@ class TelegramChannel(BaseChannel):
                 return status in ("creator", "administrator", "member", "restricted")
             return False
         except Exception as e:
-            logger.warning(f"Error checking membership for user {user_id} in {group_id}: {e}")
+            logger.warning(f"Failed to check membership for user {user_id} in {group_id}: {e}")
             return False
 
     async def send_reply(
@@ -90,29 +103,32 @@ class TelegramChannel(BaseChannel):
 
         for i, chunk in enumerate(chunks):
             target_reply_to = reply_to_msg_id if i == 0 else None
-            # Try Markdown first
-            res = await self._api_call(
-                "sendMessage",
-                chat_id=chat_id,
-                text=chunk,
-                parse_mode="Markdown",
-                reply_to_message_id=target_reply_to
-            )
-            # Markdown parse fallback: retry as plain text
-            if not res.get("ok"):
-                logger.warning(f"Markdown parse failed ({res.get('description')}). Retrying as plain text...")
-                clean_chunk = self._strip_markdown(chunk)
+            try:
+                # Try Markdown first
                 res = await self._api_call(
                     "sendMessage",
                     chat_id=chat_id,
-                    text=clean_chunk,
+                    text=chunk,
+                    parse_mode="Markdown",
                     reply_to_message_id=target_reply_to
                 )
+                # Markdown parse fallback: retry as plain text
+                if not res.get("ok"):
+                    logger.warning(f"Markdown parse failed ({res.get('description')}). Retrying as plain text...")
+                    clean_chunk = self._strip_markdown(chunk)
+                    res = await self._api_call(
+                        "sendMessage",
+                        chat_id=chat_id,
+                        text=clean_chunk,
+                        reply_to_message_id=target_reply_to
+                    )
 
-            if res.get("ok"):
-                last_sent_id = res["result"]["message_id"]
-            else:
-                logger.error(f"Failed to deliver Telegram message chunk {i}: {res}")
+                if res.get("ok"):
+                    last_sent_id = res["result"]["message_id"]
+                else:
+                    logger.error(f"Failed to deliver Telegram message chunk {i}: {res}")
+            except Exception as e:
+                logger.error(f"Failed to deliver Telegram message chunk {i} after retries: {e}")
 
         return last_sent_id
 
