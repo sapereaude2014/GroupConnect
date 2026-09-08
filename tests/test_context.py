@@ -47,6 +47,11 @@ class TestContextManager(unittest.TestCase):
         self.assertIn("msg 2", delta_ctx)
         self.assertIn("msg 3", delta_ctx)
 
+        # Delta context excluding the current triggered message (msg_id 13)
+        delta_ctx_excluded = self.mgr.build_group_context(chat_id, since_msg_id=11, exclude_msg_id=13)
+        self.assertIn("msg 2", delta_ctx_excluded)
+        self.assertNotIn("msg 3", delta_ctx_excluded)
+
     def test_rehydration_after_restart(self):
         chat_id = 1003
         # 1. Record 5 messages with instance 1

@@ -280,7 +280,11 @@ class GroupConnectEngine:
             )
         else:
             if cid is None:
-                context_str = self.context_mgr.build_group_context(chat_id, since_msg_id=0) or "(No prior history)"
+                context_str = self.context_mgr.build_group_context(
+                    chat_id,
+                    since_msg_id=0,
+                    exclude_msg_id=msg.msg_id
+                ) or "(No prior history)"
                 full_prompt = (
                     f"【Role Context】\n"
                     f"You are the intelligent group assistant in workspace: {self.config.workspace_dir}\n"
@@ -294,7 +298,11 @@ class GroupConnectEngine:
                 )
             else:
                 last_bot_id = session.get("last_bot_msg_id", 0)
-                inc_context = self.context_mgr.build_group_context(chat_id, since_msg_id=last_bot_id)
+                inc_context = self.context_mgr.build_group_context(
+                    chat_id,
+                    since_msg_id=last_bot_id,
+                    exclude_msg_id=msg.msg_id
+                )
                 inc_section = f"\n【New Group Messages Since Last Response】\n{inc_context}\n" if inc_context else ""
                 full_prompt = (
                     f"{attachments_section}"

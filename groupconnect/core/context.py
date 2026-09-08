@@ -170,10 +170,16 @@ class ContextManager:
 
         return item
 
-    def build_group_context(self, chat_id: Union[int, str], since_msg_id: Union[int, str] = 0) -> str:
+    def build_group_context(
+        self,
+        chat_id: Union[int, str],
+        since_msg_id: Union[int, str] = 0,
+        exclude_msg_id: Union[int, str] = 0
+    ) -> str:
         """
         Builds the context string from buffer.
         If since_msg_id > 0, returns only incremental messages after that message ID.
+        If exclude_msg_id > 0, excludes that specific message ID from the output.
         """
         buf = self.get_buffer(chat_id)
         if not buf:
@@ -181,10 +187,13 @@ class ContextManager:
 
         lines = []
         for item in buf:
-            if since_msg_id and str(item.get("msg_id", "")) == str(since_msg_id):
+            msg_id = item.get("msg_id", 0)
+            if exclude_msg_id and str(msg_id) == str(exclude_msg_id):
                 continue
-            if since_msg_id and isinstance(since_msg_id, int) and isinstance(item.get("msg_id"), int):
-                if item.get("msg_id", 0) <= since_msg_id:
+            if since_msg_id and str(msg_id) == str(since_msg_id):
+                continue
+            if since_msg_id and isinstance(since_msg_id, int) and isinstance(msg_id, int):
+                if msg_id <= since_msg_id:
                     continue
 
             line = f"[{item['time']}] {item['sender']}{item['reply_info']}: {item['text']}"
