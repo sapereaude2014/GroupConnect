@@ -15,6 +15,7 @@ groupconnect/adapters/base.py
 groupconnect/adapters/claude_code.py
 groupconnect/adapters/codex.py
 groupconnect/adapters/opencode.py
+groupconnect/adapters/teleagent.py
 groupconnect/channels/base.py
 groupconnect/channels/discord.py
 groupconnect/channels/feishu.py

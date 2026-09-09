@@ -17,3 +17,6 @@ inbox/
 .venv
 env/
 venv/
+
+# Local-only TeleAgent adapter (not for upstream)
+groupconnect/adapters/teleagent.py

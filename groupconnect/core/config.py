@@ -31,6 +31,7 @@ class GatewayConfig:
         self.claude_bin: str = data.get("claude_bin", "claude")
         self.codex_bin: str = data.get("codex_bin", "codex")
         self.opencode_bin: str = data.get("opencode_bin", "opencode")
+        self.teleworker_bin: str = data.get("teleworker_bin", "tele-worker")
 
         # Context & Window Settings
         self.max_history_len: int = int(data.get("max_history_len", 30))

@@ -16,6 +16,11 @@ import groupconnect.adapters.claude_code
 import groupconnect.adapters.codex
 import groupconnect.adapters.opencode
 
+try:
+    import groupconnect.adapters.teleagent
+except ImportError:
+    pass  # TeleAgent adapter is optional (local-only, not in upstream)
+
 from groupconnect.channels.base import BaseChannel, InboundMessage, get_channel_class
 import groupconnect.channels.telegram
 import groupconnect.channels.discord
@@ -89,6 +94,15 @@ class GroupConnectEngine:
                 model=self.config.model,
                 timeout_secs=self.config.timeout_secs
             )
+        elif self.config.engine_type in ("teleagent", "tele-worker", "teleworker"):
+            return adapter_cls(
+                teleworker_bin=self.config.teleworker_bin,
+                workspace_dir=self.config.workspace_dir,
+                model=self.config.model,
+                timeout_secs=self.config.timeout_secs,
+                idle_timeout_mins=self.config.session_idle_timeout_mins
+            )
+        # --- End local TeleAgent adapter (optional, not in upstream) ---
         else:
             return adapter_cls(workspace_dir=self.config.workspace_dir, timeout_secs=self.config.timeout_secs)
 
