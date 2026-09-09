@@ -297,9 +297,31 @@ class TelegramChannel(BaseChannel):
 
         asyncio.create_task(self.handler(inbound))
 
+    async def _register_bot_commands(self) -> None:
+        """Registers clean slash commands for both default and Chinese locales upon startup."""
+        commands_en = [
+            {"command": "status", "description": "View session, engine, and buffer status"},
+            {"command": "stop", "description": "Immediately terminate in-flight generation"},
+            {"command": "new", "description": "Reset context and start fresh"},
+            {"command": "help", "description": "Show usage guide and available commands"},
+        ]
+        commands_zh = [
+            {"command": "status", "description": "查看当前会话、引擎与滑动窗口状态"},
+            {"command": "stop", "description": "立即打断当前正在生成的任务"},
+            {"command": "new", "description": "重置上下文并开启全新会话"},
+            {"command": "help", "description": "查看管家使用指南与指令说明"},
+        ]
+        try:
+            await self._api_call("setMyCommands", commands=commands_en)
+            await self._api_call("setMyCommands", commands=commands_zh, language_code="zh")
+            logger.info("Synchronized Telegram bot commands menu.")
+        except Exception as e:
+            logger.warning(f"Failed to synchronize Telegram bot commands: {e}")
+
     async def start(self) -> None:
         self.is_running = True
         logger.info(f"Starting Telegram Long-Polling Listener (@{self.bot_username})...")
+        await self._register_bot_commands()
 
         while self.is_running:
             try:
