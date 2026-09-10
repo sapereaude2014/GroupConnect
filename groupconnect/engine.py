@@ -32,6 +32,7 @@ from groupconnect.core.command import parse_bot_command
 from groupconnect.core.config import GatewayConfig
 from groupconnect.core.context import ContextManager
 from groupconnect.core.gatekeeper import Gatekeeper
+from groupconnect.core.relay import CrossBotRelay
 
 logger = logging.getLogger("groupconnect.engine")
 
@@ -75,6 +76,14 @@ class GroupConnectEngine:
 
         # 3. Channel Dynamic Factory
         self.channel: BaseChannel = self._create_channel()
+
+        # 4. Cross-Bot IPC Relay
+        self.relay = CrossBotRelay(
+            bot_username=config.bot_username,
+            bot_name=config.bot_name,
+            ipc_dir=config.ipc_dir,
+            on_event=self.on_relay_event
+        )
 
         # Concurrency Locks & State
         self.chat_locks: Dict[Any, asyncio.Lock] = {}
@@ -141,11 +150,13 @@ class GroupConnectEngine:
             )
         logger.info(f"Starting GroupConnect Gateway (Platform: {self.config.platform}, Engine: {self.config.engine_type})...")
 
+        await self.relay.start()
         reaper_task = asyncio.create_task(self._reaper_loop())
         try:
             await self.channel.start()
         finally:
             reaper_task.cancel()
+            await self.relay.stop()
             self.adapter.close()
 
     async def _reaper_loop(self) -> None:
@@ -158,6 +169,58 @@ class GroupConnectEngine:
                 break
             except Exception as e:
                 logger.warning(f"Error in reaper loop: {e}")
+
+    async def on_relay_event(self, event: Dict[str, Any]) -> None:
+        """Handles cross-bot broadcast events received via local IPC."""
+        if event.get("event") != "bot_reply":
+            return
+
+        chat_id = event.get("chat_id")
+        chat_type = event.get("chat_type", "group")
+        sender_bot = (event.get("from_bot") or "").lower().lstrip("@")
+        sender_name = event.get("from_name", sender_bot)
+        text = event.get("text", "")
+        msg_id = event.get("msg_id", 0)
+        hop_count = int(event.get("hop_count", 0))
+
+        # 1. Skip self events
+        if sender_bot == self.config.bot_username.lower():
+            return
+
+        # 2. Gatekeeper authorization check
+        if self.gatekeeper.is_whitelist_active():
+            try:
+                cid_int = int(chat_id)
+                if self.config.allowed_chat_ids and cid_int not in self.config.allowed_chat_ids:
+                    return
+            except (ValueError, TypeError):
+                return
+
+        # 3. Check trigger conditions (@my_bot_username and within hop limit)
+        bot_tag = f"@{self.config.bot_username}".lower()
+        is_triggered = (bot_tag in text.lower()) and (hop_count < self.config.max_bot_hops)
+
+        inbound = InboundMessage(
+            chat_id=chat_id,
+            chat_type=chat_type,
+            msg_id=msg_id,
+            sender_name=f"{sender_name} (@{sender_bot})",
+            from_user={"id": 0, "first_name": sender_name, "username": sender_bot, "is_bot": True},
+            text=text,
+            reply_to_msg_id=msg_id if is_triggered else None,
+            reply_preview="",
+            is_triggered=is_triggered,
+            attachments=[],
+            reply_attachments=[],
+            is_bot_relay=True,
+            hop_count=hop_count + 1
+        )
+
+        logger.info(
+            f"CrossBotRelay synced reply from @{sender_bot} in {chat_id} "
+            f"(triggered: {is_triggered}, hop: {hop_count})"
+        )
+        await self.on_inbound_message(inbound)
 
     async def on_inbound_message(self, msg: InboundMessage) -> None:
         chat_id = msg.chat_id
@@ -229,7 +292,8 @@ class GroupConnectEngine:
                 text=msg.text,
                 msg_id=msg.msg_id,
                 reply_preview=msg.reply_preview,
-                attachments=msg.attachments
+                attachments=msg.attachments,
+                is_bot_reply=getattr(msg, "is_bot_relay", False)
             )
 
             if msg.is_triggered:
@@ -418,3 +482,16 @@ class GroupConnectEngine:
             msg_id=sent_msg_id,
             is_bot_reply=True
         )
+
+        # Broadcast reply to local peer bots via CrossBotRelay
+        if getattr(self, "relay", None):
+            try:
+                await self.relay.broadcast_reply(
+                    chat_id=chat_id,
+                    chat_type=msg.chat_type,
+                    msg_id=sent_msg_id or 0,
+                    text=reply_text,
+                    hop_count=getattr(msg, "hop_count", 0)
+                )
+            except Exception as e:
+                logger.warning(f"Failed to broadcast reply via relay: {e}")

@@ -53,6 +53,11 @@ class GatewayConfig:
         os.makedirs(self.attachments_dir, exist_ok=True)
         os.makedirs(self.chat_logs_dir, exist_ok=True)
 
+        # Cross-Bot IPC Relay Settings
+        self.ipc_dir: str = os.path.abspath(data.get("ipc_dir", "/home/server/.local/run/groupconnect_ipc"))
+        self.max_bot_hops: int = int(data.get("max_bot_hops", 1))
+        os.makedirs(self.ipc_dir, exist_ok=True)
+
     @classmethod
     def from_file(cls, path: str) -> "GatewayConfig":
         if not os.path.exists(path):
