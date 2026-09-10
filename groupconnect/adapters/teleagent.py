@@ -87,6 +87,70 @@ class TeleAgentAdapter(BaseAgentAdapter):
         if self.skills_manifest:
             logger.info(f"[TeleAgent] Loaded skills manifest from {self.workspace_dir}/.agents/")
 
+    async def _invoke_subprocess(
+        self,
+        cmd: List[str],
+        chat_id: Optional[int] = None
+    ) -> Tuple[int, str, str]:
+        proc = None
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                start_new_session=True
+            )
+            if chat_id is not None:
+                self.workers[chat_id] = proc
+                self.worker_last_used[chat_id] = time.time()
+
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                proc.communicate(),
+                timeout=float(self.timeout_secs)
+            )
+            stdout_str = stdout_bytes.decode("utf-8", errors="replace").strip()
+            stderr_str = stderr_bytes.decode("utf-8", errors="replace").strip()
+            return proc.returncode, stdout_str, stderr_str
+
+        except asyncio.TimeoutError:
+            logger.error(f"[TeleAgent] Task timed out after {self.timeout_secs}s for chat {chat_id}")
+            if proc and proc.returncode is None:
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                except Exception:
+                    pass
+            raise
+        except asyncio.CancelledError:
+            logger.info(f"[TeleAgent] Turn was cancelled for chat {chat_id}")
+            if proc and proc.returncode is None:
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                except Exception:
+                    pass
+            raise
+        finally:
+            if chat_id is not None and chat_id in self.workers:
+                self.workers.pop(chat_id, None)
+
+    @staticmethod
+    def _parse_teleworker_output(stdout_str: str) -> Tuple[str, Optional[str], Optional[str]]:
+        text = ""
+        new_cid = None
+        error_code = None
+        try:
+            data = json.loads(stdout_str)
+            if isinstance(data, dict):
+                if data.get("session_id"):
+                    new_cid = data["session_id"]
+                if data.get("text") is not None:
+                    text = str(data["text"]).strip()
+                raw = data.get("raw")
+                if isinstance(raw, dict) and raw.get("code"):
+                    error_code = raw.get("code")
+        except json.JSONDecodeError:
+            text = stdout_str
+        return text, new_cid, error_code
+
     async def execute_turn(
         self,
         prompt: str,
@@ -110,73 +174,48 @@ class TeleAgentAdapter(BaseAgentAdapter):
             cmd.extend(["-m", self.model])
 
         logger.info(f"[TeleAgent] Spawning runner for chat {chat_id}: tele-worker -p ... {'-s ' + conversation_id[:12] if conversation_id else '(new session)'}")
-        proc = None
+
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                start_new_session=True
-            )
-            if chat_id is not None:
-                self.workers[chat_id] = proc
-                self.worker_last_used[chat_id] = time.time()
+            code, stdout_str, stderr_str = await self._invoke_subprocess(cmd, chat_id)
+            text, new_cid, err_code = self._parse_teleworker_output(stdout_str)
 
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                proc.communicate(),
-                timeout=float(self.timeout_secs)
-            )
-            stdout_str = stdout_bytes.decode("utf-8", errors="replace").strip()
-            stderr_str = stderr_bytes.decode("utf-8", errors="replace").strip()
+            # If resuming an existing session failed (process crash, session_busy, session not found, or empty response)
+            if conversation_id and (code != 0 or err_code in ("session_busy", "internal_error") or not text):
+                logger.warning(
+                    f"[TeleAgent] Resumed session {conversation_id} failed or busy (code={code}, err_code={err_code}, stderr={stderr_str}). "
+                    f"Auto-fallback to a fresh session..."
+                )
+                fallback_prompt = prompt
+                if self.skills_manifest and "【Pre-loaded Skills Manifest】" not in fallback_prompt:
+                    fallback_prompt = f"{self.skills_manifest}\n\n{fallback_prompt}"
 
-            if proc.returncode != 0:
-                logger.error(f"[TeleAgent] Process exited with code {proc.returncode}. Stderr: {stderr_str}")
-                # Reset session on crash to avoid reusing a broken session
-                return f"⚠️ 执行出错（Exit code {proc.returncode}），已重置会话。", None
+                fallback_cmd = [
+                    self.teleworker_bin,
+                    "-p", fallback_prompt,
+                    "-d", self.workspace_dir,
+                    "--json",
+                ]
+                if self.model:
+                    fallback_cmd.extend(["-m", self.model])
 
-            # Parse JSON output from tele-worker
-            new_cid = conversation_id
-            response_text = stdout_str
-            try:
-                data = json.loads(stdout_str)
-                if isinstance(data, dict):
-                    if data.get("session_id"):
-                        new_cid = data["session_id"]
-                    if data.get("text") is not None:
-                        response_text = str(data["text"]).strip()
-            except json.JSONDecodeError:
-                response_text = stdout_str
+                logger.info(f"[TeleAgent] Spawning fresh fallback runner for chat {chat_id}")
+                code, stdout_str, stderr_str = await self._invoke_subprocess(fallback_cmd, chat_id)
+                text, new_cid, err_code = self._parse_teleworker_output(stdout_str)
 
-            # Guard against empty response from TeleAgent
-            if not response_text:
+            if code != 0:
+                logger.error(f"[TeleAgent] Process exited with code {code}. Stderr: {stderr_str}")
+                return f"⚠️ 执行出错（Exit code {code}），已重置会话。", None
+
+            if not text:
                 logger.warning(f"[TeleAgent] Empty response received for chat {chat_id}. Stderr: {stderr_str}")
-                response_text = "⚠️ 管家暂时没能生成回复，请稍后再试。"
-                # Reset session — TeleAgent likely has it stuck in busy state
-                new_cid = None
+                return "⚠️ 管家暂时没能生成回复，请稍后再试。", None
 
-            return response_text, new_cid
+            return text, (new_cid or conversation_id)
 
         except asyncio.TimeoutError:
-            logger.error(f"[TeleAgent] Task timed out after {self.timeout_secs}s for chat {chat_id}")
-            if proc and proc.returncode is None:
-                try:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                except Exception:
-                    pass
-            return "⏳ Error: Generation timed out.", conversation_id
-
+            return "⏳ Error: Generation timed out.", None
         except asyncio.CancelledError:
-            logger.info(f"[TeleAgent] Turn was cancelled for chat {chat_id}")
-            if proc and proc.returncode is None:
-                try:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                except Exception:
-                    pass
             return None, conversation_id
-
-        finally:
-            if chat_id is not None and chat_id in self.workers:
-                self.workers.pop(chat_id, None)
 
     def terminate(self, chat_id: int) -> None:
         proc = self.workers.get(chat_id)
