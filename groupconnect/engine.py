@@ -288,6 +288,8 @@ class GroupConnectEngine:
         # Build Full Prompt with Context
         if not is_group:
             full_prompt = (
+                f"【Role Context】\n"
+                f"You are @{self.config.bot_username} ({self.config.bot_name}) in workspace: {self.config.workspace_dir}\n"
                 f"{attachments_section}\n"
                 f"【Sender】: {msg.sender_name}\n"
                 f"【Query】: {user_query}\n\n"
@@ -302,7 +304,7 @@ class GroupConnectEngine:
                 ) or "(No prior history)"
                 full_prompt = (
                     f"【Role Context】\n"
-                    f"You are the intelligent group assistant in workspace: {self.config.workspace_dir}\n"
+                    f"You are @{self.config.bot_username} ({self.config.bot_name}) in workspace: {self.config.workspace_dir}\n"
                     f"{attachments_section}\n"
                     f"【Recent Group Discussion Context (Sliding Window)】\n"
                     f"{context_str}\n\n"
@@ -320,6 +322,8 @@ class GroupConnectEngine:
                 )
                 inc_section = f"\n【New Group Messages Since Last Response】\n{inc_context}\n" if inc_context else ""
                 full_prompt = (
+                    f"【Role Context】\n"
+                    f"You are @{self.config.bot_username} ({self.config.bot_name})\n"
                     f"{attachments_section}"
                     f"{inc_section}\n"
                     f"【Current Query】\n"
