@@ -44,7 +44,8 @@ class GroupConnectEngine:
         self.context_mgr = ContextManager(
             max_history_len=config.max_history_len,
             chat_logs_dir=config.chat_logs_dir,
-            idle_timeout_mins=config.session_idle_timeout_mins
+            idle_timeout_mins=config.session_idle_timeout_mins,
+            bot_username=config.bot_username
         )
         self.gatekeeper = Gatekeeper(
             allowed_chat_ids=config.allowed_chat_ids,

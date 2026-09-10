@@ -30,10 +30,12 @@ def format_sender(from_user: Dict[str, Any]) -> str:
 class ContextManager:
     """Manages chat buffer history, incremental delta tracking, disk logging, and warm restart rehydration."""
 
-    def __init__(self, max_history_len: int = 30, chat_logs_dir: str = "./inbox/chat_logs", idle_timeout_mins: int = 30):
+    def __init__(self, max_history_len: int = 30, chat_logs_dir: str = "./inbox/chat_logs", idle_timeout_mins: int = 30, bot_username: str = ""):
         self.max_history_len = max_history_len
         self.chat_logs_dir = os.path.abspath(chat_logs_dir)
         self.idle_timeout_mins = idle_timeout_mins
+        self.bot_username = bot_username
+        self._log_prefix = f"chat_{bot_username}_" if bot_username else "chat_"
 
         self.buffers: Dict[Union[int, str], Deque[Dict[str, Any]]] = {}
         self.sessions: Dict[Union[int, str], Dict[str, Any]] = {}
@@ -45,7 +47,7 @@ class ContextManager:
         """Restores recent sliding window messages from persistent JSONL logs on disk."""
         buf = collections.deque(maxlen=self.max_history_len)
         try:
-            pattern = os.path.join(self.chat_logs_dir, f"chat_{chat_id}_*.jsonl")
+            pattern = os.path.join(self.chat_logs_dir, f"{self._log_prefix}{chat_id}_*.jsonl")
             matching_files = sorted(glob.glob(pattern), reverse=True)
 
             collected_lines: List[str] = []
@@ -77,11 +79,12 @@ class ContextManager:
     def rehydrate_all(self) -> None:
         """Discovers and rehydrates all chat buffers found in chat_logs_dir upon startup."""
         try:
-            pattern = os.path.join(self.chat_logs_dir, "chat_*_*.jsonl")
+            pattern = os.path.join(self.chat_logs_dir, f"{self._log_prefix}*_*.jsonl")
             for fpath in glob.glob(pattern):
                 fname = os.path.basename(fpath)
-                # Filename format: chat_{chat_id}_{YYYY-MM}.jsonl
-                parts = fname.split("_")
+                # Filename format: {prefix}_{chat_id}_{YYYY-MM}.jsonl
+                fname_core = fname[len(self._log_prefix):] if fname.startswith(self._log_prefix) else fname[5:] if fname.startswith("chat_") else ""
+                parts = fname_core.split("_")
                 if len(parts) >= 3:
                     cid_str = parts[1]
                     try:
@@ -162,7 +165,7 @@ class ContextManager:
         # Append to monthly JSONL file
         try:
             month_str = datetime.datetime.now().strftime("%Y-%m")
-            log_file = os.path.join(self.chat_logs_dir, f"chat_{chat_id}_{month_str}.jsonl")
+            log_file = os.path.join(self.chat_logs_dir, f"{self._log_prefix}{chat_id}_{month_str}.jsonl")
             with open(log_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(item, ensure_ascii=False) + "\n")
         except Exception as e:
