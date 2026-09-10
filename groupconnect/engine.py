@@ -36,6 +36,21 @@ from groupconnect.core.gatekeeper import Gatekeeper
 logger = logging.getLogger("groupconnect.engine")
 
 
+def _load_soul(workspace_dir: str, bot_username: str) -> str:
+    """Load specific bot soul from .agents/souls/{bot_username}.md if present."""
+    soul_path = os.path.join(workspace_dir, ".agents", "souls", f"{bot_username}.md")
+    if os.path.isfile(soul_path):
+        try:
+            with open(soul_path, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+            if content:
+                logger.info(f"Loaded soul for @{bot_username} from {soul_path}")
+                return f"【Your Soul & Persona】\n{content}\n\n"
+        except Exception as e:
+            logger.warning(f"Failed to load soul from {soul_path}: {e}")
+    return ""
+
+
 class GroupConnectEngine:
     def __init__(self, config: GatewayConfig):
         self.config = config
@@ -285,16 +300,32 @@ class GroupConnectEngine:
             if active_attachments:
                 user_query = "Please inspect and analyze the attached media file(s) and provide a detailed structured response."
 
+        # Prepare Soul Prompt Section (Session Initialization only)
+        soul_section = ""
+        if cid is None:
+            soul_section = _load_soul(self.config.workspace_dir, self.config.bot_username)
+
         # Build Full Prompt with Context
         if not is_group:
-            full_prompt = (
-                f"【Role Context】\n"
-                f"You are @{self.config.bot_username} ({self.config.bot_name}) in workspace: {self.config.workspace_dir}\n"
-                f"{attachments_section}\n"
-                f"【Sender】: {msg.sender_name}\n"
-                f"【Query】: {user_query}\n\n"
-                f"Please provide a helpful, accurate, and structured response."
-            )
+            if cid is None:
+                full_prompt = (
+                    f"【Role Context】\n"
+                    f"You are @{self.config.bot_username} ({self.config.bot_name}) in workspace: {self.config.workspace_dir}\n"
+                    f"{soul_section}"
+                    f"{attachments_section}\n"
+                    f"【Sender】: {msg.sender_name}\n"
+                    f"【Query】: {user_query}\n\n"
+                    f"Please provide a helpful, accurate, and structured response."
+                )
+            else:
+                full_prompt = (
+                    f"【Role Context】\n"
+                    f"You are @{self.config.bot_username} ({self.config.bot_name})\n"
+                    f"{attachments_section}\n"
+                    f"【Sender】: {msg.sender_name}\n"
+                    f"【Query】: {user_query}\n\n"
+                    f"Please continue the conversation naturally."
+                )
         else:
             if cid is None:
                 context_str = self.context_mgr.build_group_context(
@@ -305,6 +336,7 @@ class GroupConnectEngine:
                 full_prompt = (
                     f"【Role Context】\n"
                     f"You are @{self.config.bot_username} ({self.config.bot_name}) in workspace: {self.config.workspace_dir}\n"
+                    f"{soul_section}"
                     f"{attachments_section}\n"
                     f"【Recent Group Discussion Context (Sliding Window)】\n"
                     f"{context_str}\n\n"

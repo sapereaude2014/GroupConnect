@@ -180,6 +180,11 @@ class TelegramChannel(BaseChannel):
 
     async def _download_file(self, file_id: str, dest_filename: str) -> Optional[str]:
         try:
+            local_path = os.path.join(self.config.attachments_dir, dest_filename)
+            if os.path.isfile(local_path) and os.path.getsize(local_path) > 0:
+                logger.debug(f"Attachment already exists locally: {local_path}")
+                return local_path
+
             res = await self._api_call("getFile", file_id=file_id)
             if not res.get("ok"):
                 return None
@@ -190,7 +195,6 @@ class TelegramChannel(BaseChannel):
             download_url = f"{self.file_api_base}/{file_path}"
             resp = await self.client.get(download_url)
             if resp.status_code == 200:
-                local_path = os.path.join(self.config.attachments_dir, dest_filename)
                 with open(local_path, "wb") as f:
                     f.write(resp.content)
                 logger.info(f"Successfully downloaded attachment to {local_path}")
@@ -234,15 +238,15 @@ class TelegramChannel(BaseChannel):
                 if cmd and (target_bot is None or target_bot.lower() == self.bot_username.lower()):
                     is_triggered = True
 
-        # Process Media Attachments
+        # Process Media Attachments (deterministic filename via msg date to deduplicate across bots)
         attachments = []
-        now_ts = int(time.time())
+        msg_date = msg.get("date", int(time.time()))
 
         # Photos (take highest resolution)
         if "photo" in msg:
             highest_photo = msg["photo"][-1]
             fid = highest_photo["file_id"]
-            fname = f"{now_ts}_{chat_id}_{msg_id}_photo.jpg"
+            fname = f"{msg_date}_{chat_id}_{msg_id}_photo.jpg"
             local_path = await self._download_file(fid, fname)
             if local_path:
                 attachments.append({"type": "photo", "path": local_path, "name": fname})
@@ -252,7 +256,7 @@ class TelegramChannel(BaseChannel):
         # Voice Notes
         if "voice" in msg:
             fid = msg["voice"]["file_id"]
-            fname = f"{now_ts}_{chat_id}_{msg_id}_voice.ogg"
+            fname = f"{msg_date}_{chat_id}_{msg_id}_voice.ogg"
             local_path = await self._download_file(fid, fname)
             if local_path:
                 attachments.append({"type": "voice", "path": local_path, "name": fname})
@@ -264,7 +268,7 @@ class TelegramChannel(BaseChannel):
             doc = msg["document"]
             fid = doc["file_id"]
             orig_name = doc.get("file_name", "file")
-            fname = f"{now_ts}_{chat_id}_{msg_id}_{orig_name}"
+            fname = f"{msg_date}_{chat_id}_{msg_id}_{orig_name}"
             local_path = await self._download_file(fid, fname)
             if local_path:
                 attachments.append({"type": "document", "path": local_path, "name": orig_name})
@@ -276,7 +280,8 @@ class TelegramChannel(BaseChannel):
         if reply_to and "photo" in reply_to:
             r_photo = reply_to["photo"][-1]
             r_fid = r_photo["file_id"]
-            r_fname = f"reply_{now_ts}_{chat_id}_{reply_to['message_id']}_photo.jpg"
+            r_date = reply_to.get("date", msg_date)
+            r_fname = f"reply_{r_date}_{chat_id}_{reply_to['message_id']}_photo.jpg"
             r_path = await self._download_file(r_fid, r_fname)
             if r_path:
                 reply_attachments.append({"type": "photo", "path": r_path, "name": r_fname})
