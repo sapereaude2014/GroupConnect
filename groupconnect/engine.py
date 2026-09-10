@@ -6,6 +6,7 @@ Connects Context Manager, Gatekeeper, and Command Parser.
 
 import asyncio
 import logging
+import os
 import re
 import time
 from typing import Any, Dict, Optional
