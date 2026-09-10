@@ -98,6 +98,10 @@ class TelegramChannel(BaseChannel):
         text: str,
         reply_to_msg_id: Optional[Union[int, str]] = None
     ) -> Optional[Union[int, str]]:
+        # Guard against empty text (TeleAgent can return empty on failures)
+        if not text or not text.strip():
+            text = "⚠️ 管家暂时没能生成回复，请稍后再试。"
+
         chunks = self._split_message(text, max_len=self.config.max_chunk_size)
         last_sent_id = None
 
@@ -114,13 +118,16 @@ class TelegramChannel(BaseChannel):
                 )
                 # Markdown parse fallback: retry as plain text
                 if not res.get("ok"):
-                    logger.warning(f"Markdown parse failed ({res.get('description')}). Retrying as plain text...")
+                    desc = res.get('description', '')
+                    logger.warning(f"Markdown parse failed ({desc}). Retrying as plain text...")
                     clean_chunk = self._strip_markdown(chunk)
+                    # If reply target was the problem (deleted/not found), drop it on retry
+                    retry_reply_to = None if ('replied' in desc or 'not found' in desc) else target_reply_to
                     res = await self._api_call(
                         "sendMessage",
                         chat_id=chat_id,
                         text=clean_chunk,
-                        reply_to_message_id=target_reply_to
+                        reply_to_message_id=retry_reply_to
                     )
 
                 if res.get("ok"):
