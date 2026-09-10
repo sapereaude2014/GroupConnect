@@ -208,7 +208,7 @@ class GroupConnectEngine:
             sender_name=f"{sender_name} (@{sender_bot})",
             from_user={"id": 0, "first_name": sender_name, "username": sender_bot, "is_bot": True},
             text=text,
-            reply_to_msg_id=msg_id if is_triggered else None,
+            reply_to_msg_id=None,  # bot-relay messages are invisible on Telegram, reply-to would 400
             reply_preview="",
             is_triggered=is_triggered,
             attachments=[],
