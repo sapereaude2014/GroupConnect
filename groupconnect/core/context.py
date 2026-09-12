@@ -159,7 +159,8 @@ class ContextManager:
         msg_id: Union[int, str] = 0,
         is_bot_reply: bool = False,
         reply_preview: str = "",
-        attachments: Optional[List[Dict[str, Any]]] = None
+        attachments: Optional[List[Dict[str, Any]]] = None,
+        bot_username: str = ""
     ) -> Dict[str, Any]:
         buf = self.get_buffer(chat_id)
         now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -172,6 +173,7 @@ class ContextManager:
             "text": text,
             "reply_info": reply_info,
             "is_bot": is_bot_reply,
+            "bot_username": bot_username,
             "attachments": attachments or []
         }
         buf.append(item)
@@ -192,13 +194,14 @@ class ContextManager:
         chat_id: Union[int, str],
         since_msg_id: Union[int, str] = 0,
         exclude_msg_id: Union[int, str] = 0,
-        skip_bot: bool = False
+        skip_bot_username: str = ""
     ) -> str:
         """
         Builds the context string from buffer.
         If since_msg_id > 0, returns only incremental messages after that message ID.
         If exclude_msg_id > 0, excludes that specific message ID from the output.
-        If skip_bot is True, excludes bot reply messages from the output.
+        If skip_bot_username is set, excludes only that bot's own reply messages
+        from the output (partner bot messages are preserved).
         """
         buf = self.get_buffer(chat_id)
         if not buf:
@@ -207,7 +210,7 @@ class ContextManager:
         lines = []
         for item in buf:
             msg_id = item.get("msg_id", 0)
-            if skip_bot and item.get("is_bot"):
+            if skip_bot_username and item.get("is_bot") and item.get("bot_username") == skip_bot_username:
                 continue
             if exclude_msg_id and str(msg_id) == str(exclude_msg_id):
                 continue

@@ -68,7 +68,7 @@ class TestContextManager(unittest.TestCase):
         self.mgr.record_message(chat_id, "Rong", "hidden msg during processing", msg_id=12)
 
         # Bot finishes and replies (msg_id=13)
-        self.mgr.record_message(chat_id, "Bot", "bot reply", msg_id=13, is_bot_reply=True)
+        self.mgr.record_message(chat_id, "Bot", "bot reply", msg_id=13, is_bot_reply=True, bot_username="my_bot")
         sess["last_bot_msg_id"] = 13
 
         # Next triggered message arrives (msg_id=14)
@@ -80,25 +80,50 @@ class TestContextManager(unittest.TestCase):
 
         # NEW behavior: anchor to last_input_msg_id=10 → includes msg 12, skips bot reply
         new_delta = self.mgr.build_group_context(
-            chat_id, since_msg_id=10, exclude_msg_id=14, skip_bot=True
+            chat_id, since_msg_id=10, exclude_msg_id=14, skip_bot_username="my_bot"
         )
         self.assertIn("hidden msg during processing", new_delta)
-        self.assertNotIn("bot reply", new_delta)  # skip_bot excludes bot's own reply
+        self.assertNotIn("bot reply", new_delta)  # skip_bot_username excludes bot's own reply
 
     def test_skip_bot_filter(self):
-        """skip_bot=True should exclude bot replies from context output."""
+        """skip_bot_username should exclude only the specified bot's own replies."""
         chat_id = 1005
         self.mgr.record_message(chat_id, "Alice", "hello", msg_id=1)
-        self.mgr.record_message(chat_id, "Bot", "hi there", msg_id=2, is_bot_reply=True)
+        self.mgr.record_message(chat_id, "Bot", "hi there", msg_id=2, is_bot_reply=True, bot_username="my_bot")
         self.mgr.record_message(chat_id, "Bob", "world", msg_id=3)
 
         with_bot = self.mgr.build_group_context(chat_id)
         self.assertIn("hi there", with_bot)
 
-        without_bot = self.mgr.build_group_context(chat_id, skip_bot=True)
+        without_bot = self.mgr.build_group_context(chat_id, skip_bot_username="my_bot")
         self.assertNotIn("hi there", without_bot)
         self.assertIn("hello", without_bot)
         self.assertIn("world", without_bot)
+
+    def test_skip_bot_preserves_partner_bot_messages(self):
+        """skip_bot_username must NOT filter partner bot messages — only own replies."""
+        chat_id = 1006
+        self.mgr.record_message(chat_id, "Alice", "user msg", msg_id=1)
+        # Partner bot's message (different bot_username)
+        self.mgr.record_message(
+            chat_id, "PartnerBot (@partner_bot)", "partner reply",
+            msg_id=2, is_bot_reply=True, bot_username="partner_bot"
+        )
+        # Own bot's reply
+        self.mgr.record_message(
+            chat_id, "MyBot (@my_bot)", "my reply",
+            msg_id=3, is_bot_reply=True, bot_username="my_bot"
+        )
+        self.mgr.record_message(chat_id, "Bob", "another user msg", msg_id=4)
+
+        ctx = self.mgr.build_group_context(chat_id, skip_bot_username="my_bot")
+        # Own reply filtered out
+        self.assertNotIn("my reply", ctx)
+        # Partner bot reply PRESERVED (the bug was that it was also filtered)
+        self.assertIn("partner reply", ctx)
+        # User messages preserved
+        self.assertIn("user msg", ctx)
+        self.assertIn("another user msg", ctx)
 
     def test_rehydration_after_restart(self):
         chat_id = 1003

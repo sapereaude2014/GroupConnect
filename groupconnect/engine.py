@@ -287,6 +287,8 @@ class GroupConnectEngine:
         # 4. Message processing under chat lock
         lock = self.get_chat_lock(chat_id)
         async with lock:
+            is_bot = getattr(msg, "is_bot_relay", False)
+            relay_bot_username = msg.from_user.get("username", "") if is_bot else ""
             self.context_mgr.record_message(
                 chat_id=chat_id,
                 sender_name=msg.sender_name,
@@ -294,7 +296,8 @@ class GroupConnectEngine:
                 msg_id=msg.msg_id,
                 reply_preview=msg.reply_preview,
                 attachments=msg.attachments,
-                is_bot_reply=getattr(msg, "is_bot_relay", False)
+                is_bot_reply=is_bot,
+                bot_username=relay_bot_username
             )
 
             if msg.is_triggered:
@@ -416,7 +419,7 @@ class GroupConnectEngine:
                     chat_id,
                     since_msg_id=last_input_id,
                     exclude_msg_id=msg.msg_id,
-                    skip_bot=True
+                    skip_bot_username=self.config.bot_username
                 )
                 inc_section = f"\n【New Group Messages Since Last Response】\n{inc_context}\n" if inc_context else ""
                 full_prompt = (
@@ -486,7 +489,8 @@ class GroupConnectEngine:
             sender_name=f"{self.config.bot_name} (@{self.config.bot_username})",
             text=reply_text,
             msg_id=sent_msg_id,
-            is_bot_reply=True
+            is_bot_reply=True,
+            bot_username=self.config.bot_username
         )
 
         # Broadcast reply to local peer bots via CrossBotRelay
