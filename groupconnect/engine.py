@@ -411,11 +411,12 @@ class GroupConnectEngine:
                     f"Please address the current query taking the group discussion background into account."
                 )
             else:
-                last_bot_id = session.get("last_bot_msg_id", 0)
+                last_input_id = session.get("last_input_msg_id", 0)
                 inc_context = self.context_mgr.build_group_context(
                     chat_id,
-                    since_msg_id=last_bot_id,
-                    exclude_msg_id=msg.msg_id
+                    since_msg_id=last_input_id,
+                    exclude_msg_id=msg.msg_id,
+                    skip_bot=True
                 )
                 inc_section = f"\n【New Group Messages Since Last Response】\n{inc_context}\n" if inc_context else ""
                 full_prompt = (
@@ -428,6 +429,10 @@ class GroupConnectEngine:
                     f"Content: {user_query}\n\n"
                     f"Please continue the conversation naturally."
                 )
+
+        # Update incremental context anchor to current input message,
+        # so messages arriving during processing are included next turn.
+        session["last_input_msg_id"] = msg.msg_id
 
         # Typing Heartbeat Loop
         stop_typing = asyncio.Event()

@@ -110,12 +110,24 @@ class ContextManager:
                 sess = None
 
         if not sess:
-            # Check if there is a recent bot reply in the rehydrated buffer to restore last_bot_msg_id
+            # Restore last bot reply AND last user message from rehydrated buffer.
+            # last_input_msg_id must anchor on the last user (non-bot) message,
+            # NOT the last bot reply — otherwise user messages that arrived
+            # between the last input and the bot reply get silently filtered.
             last_bot_id = 0
+            last_user_id = 0
             buf = self.get_buffer(chat_id)
             for item in reversed(buf):
-                if item.get("is_bot") and item.get("msg_id"):
-                    last_bot_id = item.get("msg_id")
+                msg_id = item.get("msg_id")
+                if not msg_id:
+                    continue
+                if item.get("is_bot"):
+                    if not last_bot_id:
+                        last_bot_id = msg_id
+                else:
+                    if not last_user_id:
+                        last_user_id = msg_id
+                if last_bot_id and last_user_id:
                     break
 
             sess = {
@@ -123,6 +135,7 @@ class ContextManager:
                 "last_active": now,
                 "turns": 0,
                 "last_bot_msg_id": last_bot_id,
+                "last_input_msg_id": last_user_id,
             }
             self.sessions[chat_id] = sess
         return sess
@@ -133,6 +146,7 @@ class ContextManager:
             "last_active": time.time(),
             "turns": 0,
             "last_bot_msg_id": 0,
+            "last_input_msg_id": 0,
         }
         if chat_id in self.buffers:
             self.buffers[chat_id].clear()
@@ -177,12 +191,14 @@ class ContextManager:
         self,
         chat_id: Union[int, str],
         since_msg_id: Union[int, str] = 0,
-        exclude_msg_id: Union[int, str] = 0
+        exclude_msg_id: Union[int, str] = 0,
+        skip_bot: bool = False
     ) -> str:
         """
         Builds the context string from buffer.
         If since_msg_id > 0, returns only incremental messages after that message ID.
         If exclude_msg_id > 0, excludes that specific message ID from the output.
+        If skip_bot is True, excludes bot reply messages from the output.
         """
         buf = self.get_buffer(chat_id)
         if not buf:
@@ -191,6 +207,8 @@ class ContextManager:
         lines = []
         for item in buf:
             msg_id = item.get("msg_id", 0)
+            if skip_bot and item.get("is_bot"):
+                continue
             if exclude_msg_id and str(msg_id) == str(exclude_msg_id):
                 continue
             if since_msg_id and str(msg_id) == str(since_msg_id):

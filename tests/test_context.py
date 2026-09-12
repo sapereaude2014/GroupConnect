@@ -52,6 +52,54 @@ class TestContextManager(unittest.TestCase):
         self.assertIn("msg 2", delta_ctx_excluded)
         self.assertNotIn("msg 3", delta_ctx_excluded)
 
+    def test_incremental_anchor_last_input_not_last_bot(self):
+        """Messages arriving during bot processing must not be lost.
+        Simulate: input(10) -> bot processes -> during processing, user sends
+        msg(12) -> bot replies(13) -> next input(14) arrives. Incremental
+        context anchored to last_input_msg_id(10) should include msg 12,
+        not anchored to last_bot_msg_id(13) which would skip it."""
+        chat_id = 1004
+        self.mgr.record_message(chat_id, "Alice", "trigger msg", msg_id=10)
+        # Simulate: bot sets last_input_msg_id = 10 before processing
+        sess = self.mgr.get_session(chat_id)
+        sess["last_input_msg_id"] = 10
+
+        # During bot processing, a user message arrives
+        self.mgr.record_message(chat_id, "Rong", "hidden msg during processing", msg_id=12)
+
+        # Bot finishes and replies (msg_id=13)
+        self.mgr.record_message(chat_id, "Bot", "bot reply", msg_id=13, is_bot_reply=True)
+        sess["last_bot_msg_id"] = 13
+
+        # Next triggered message arrives (msg_id=14)
+        self.mgr.record_message(chat_id, "Bob", "next trigger", msg_id=14)
+
+        # OLD behavior: anchor to last_bot_msg_id=13 → misses msg 12
+        old_delta = self.mgr.build_group_context(chat_id, since_msg_id=13, exclude_msg_id=14)
+        self.assertNotIn("hidden msg during processing", old_delta)
+
+        # NEW behavior: anchor to last_input_msg_id=10 → includes msg 12, skips bot reply
+        new_delta = self.mgr.build_group_context(
+            chat_id, since_msg_id=10, exclude_msg_id=14, skip_bot=True
+        )
+        self.assertIn("hidden msg during processing", new_delta)
+        self.assertNotIn("bot reply", new_delta)  # skip_bot excludes bot's own reply
+
+    def test_skip_bot_filter(self):
+        """skip_bot=True should exclude bot replies from context output."""
+        chat_id = 1005
+        self.mgr.record_message(chat_id, "Alice", "hello", msg_id=1)
+        self.mgr.record_message(chat_id, "Bot", "hi there", msg_id=2, is_bot_reply=True)
+        self.mgr.record_message(chat_id, "Bob", "world", msg_id=3)
+
+        with_bot = self.mgr.build_group_context(chat_id)
+        self.assertIn("hi there", with_bot)
+
+        without_bot = self.mgr.build_group_context(chat_id, skip_bot=True)
+        self.assertNotIn("hi there", without_bot)
+        self.assertIn("hello", without_bot)
+        self.assertIn("world", without_bot)
+
     def test_rehydration_after_restart(self):
         chat_id = 1003
         # 1. Record 5 messages with instance 1
