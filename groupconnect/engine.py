@@ -9,7 +9,7 @@ import logging
 import os
 import re
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from groupconnect.adapters.base import BaseAgentAdapter, get_adapter_class
 import groupconnect.adapters.antigravity
@@ -51,6 +51,44 @@ def _load_soul(workspace_dir: str, bot_username: str) -> str:
         except Exception as e:
             logger.warning(f"Failed to load soul from {soul_path}: {e}")
     return ""
+
+
+def _extract_outbound_files(reply_text: str, workspace_dir: str) -> List[Tuple[str, Optional[str]]]:
+    """
+    Extract outbound file attachments from bot reply text.
+    Returns a list of (file_path, caption) tuples.
+    """
+    if not reply_text:
+        return []
+
+    found = []
+    seen = set()
+
+    # 1. Markdown file links: [Caption](file:///path/to/file)
+    for m in re.finditer(r"\[([^\]]+)\]\(file://([^\s\"'<>()]+)\)", reply_text):
+        caption, raw_path = m.group(1).strip(), m.group(2).strip()
+        path = raw_path if os.path.isabs(raw_path) else os.path.join(workspace_dir, raw_path)
+        if os.path.isfile(path) and path not in seen:
+            seen.add(path)
+            found.append((path, caption))
+
+    # 2. Explicit send tags: 【SendFile: /path/to/file】 or [SendFile: /path/to/file]
+    for m in re.finditer(r"[【\[](?:send_?file|file|send_document):\s*([^\s`\"'<>\]】]+)[】\]]", reply_text, re.IGNORECASE):
+        raw_path = m.group(1).strip()
+        path = raw_path if os.path.isabs(raw_path) else os.path.join(workspace_dir, raw_path)
+        if os.path.isfile(path) and path not in seen:
+            seen.add(path)
+            found.append((path, None))
+
+    # 3. Bare file URI: file:///path/to/file
+    for m in re.finditer(r"file://([^\s`\"'<>()\[\]]+)", reply_text):
+        raw_path = m.group(1).strip()
+        path = raw_path if os.path.isabs(raw_path) else os.path.join(workspace_dir, raw_path)
+        if os.path.isfile(path) and path not in seen:
+            seen.add(path)
+            found.append((path, None))
+
+    return found
 
 
 class GroupConnectEngine:
@@ -370,8 +408,15 @@ class GroupConnectEngine:
 
         # Prepare Soul Prompt Section (Session Initialization only)
         soul_section = ""
+        delivery_section = ""
         if cid is None:
             soul_section = _load_soul(self.config.workspace_dir, self.config.bot_username)
+            delivery_section = (
+                "【File & Multimedia Delivery】\n"
+                "If you generate, export, or want to send a file (Markdown report, chart/image, audio/voice, PDF, Word, Excel, ZIP) to the user, "
+                "include its URI format `file:///absolute/path/to/file` in your reply. "
+                "GroupConnect will automatically upload and deliver it as a native Telegram attachment.\n\n"
+            )
 
         # Build Full Prompt with Context
         if not is_group:
@@ -380,6 +425,7 @@ class GroupConnectEngine:
                     f"【Role Context】\n"
                     f"You are @{self.config.bot_username} ({self.config.bot_name}) in workspace: {self.config.workspace_dir}\n"
                     f"{soul_section}"
+                    f"{delivery_section}"
                     f"{attachments_section}\n"
                     f"【Sender】: {msg.sender_name}\n"
                     f"【Query】: {user_query}\n\n"
@@ -405,6 +451,7 @@ class GroupConnectEngine:
                     f"【Role Context】\n"
                     f"You are @{self.config.bot_username} ({self.config.bot_name}) in workspace: {self.config.workspace_dir}\n"
                     f"{soul_section}"
+                    f"{delivery_section}"
                     f"{attachments_section}\n"
                     f"【Recent Group Discussion Context (Sliding Window)】\n"
                     f"{context_str}\n\n"
@@ -483,6 +530,20 @@ class GroupConnectEngine:
                 session["last_bot_msg_id"] = sent_msg_id
         except Exception as e:
             logger.error(f"Failed to deliver reply to chat {chat_id}: {e}")
+
+        # Outbound Multimedia / File Delivery
+        outbound_files = _extract_outbound_files(reply_text, self.config.workspace_dir)
+        for file_path, file_caption in outbound_files:
+            try:
+                logger.info(f"Delivering outbound attachment: {file_path} (caption={file_caption}) to chat {chat_id}")
+                await self.channel.send_file(
+                    chat_id=chat_id,
+                    file_path=file_path,
+                    caption=file_caption,
+                    reply_to_msg_id=sent_msg_id or msg.msg_id
+                )
+            except Exception as e:
+                logger.error(f"Failed to deliver outbound attachment {file_path} to chat {chat_id}: {e}")
 
         self.context_mgr.record_message(
             chat_id=chat_id,

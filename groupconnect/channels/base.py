@@ -100,3 +100,14 @@ class BaseChannel(ABC):
     async def leave_chat(self, chat_id: Union[int, str]) -> bool:
         """Leaves an unauthorized group / channel."""
         pass
+
+    async def send_file(
+        self,
+        chat_id: Union[int, str],
+        file_path: str,
+        caption: Optional[str] = None,
+        reply_to_msg_id: Optional[Union[int, str]] = None
+    ) -> Optional[Union[int, str]]:
+        """Sends an outbound file/multimedia attachment to the specified chat (optional)."""
+        return None
+

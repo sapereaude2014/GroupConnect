@@ -67,6 +67,46 @@ class TelegramChannel(BaseChannel):
             raise last_exc
         return {"ok": False, "description": "Unknown API error"}
 
+    async def _upload_file(
+        self,
+        method: str,
+        chat_id: Union[int, str],
+        file_field: str,
+        file_path: str,
+        caption: Optional[str] = None,
+        reply_to_msg_id: Optional[Union[int, str]] = None,
+        retries: int = 3
+    ) -> Dict[str, Any]:
+        url = f"{self.api_base}/{method}"
+        data = {"chat_id": str(chat_id)}
+        if caption:
+            data["caption"] = caption[:1024]
+        if reply_to_msg_id:
+            data["reply_to_message_id"] = str(reply_to_msg_id)
+
+        filename = os.path.basename(file_path)
+        last_exc = None
+        for attempt in range(retries):
+            try:
+                with open(file_path, "rb") as f:
+                    file_content = f.read()
+                files = {file_field: (filename, file_content)}
+                resp = await self.client.post(url, data=data, files=files, timeout=120.0)
+                return resp.json()
+            except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
+                last_exc = e
+                if attempt < retries - 1:
+                    logger.warning(f"Telegram upload {method} failed (attempt {attempt+1}/{retries}): {e}. Retrying...")
+                    await asyncio.sleep(1.0 * (attempt + 1))
+                else:
+                    logger.error(f"Telegram upload {method} failed after {retries} attempts: {e}")
+            except Exception as e:
+                logger.error(f"Telegram upload {method} read error for {file_path}: {e}")
+                return {"ok": False, "description": str(e)}
+        if last_exc:
+            raise last_exc
+        return {"ok": False, "description": "Unknown upload error"}
+
     async def send_typing_action(self, chat_id: Union[int, str]) -> None:
         try:
             await self._api_call("sendChatAction", chat_id=chat_id, action="typing")
@@ -138,6 +178,82 @@ class TelegramChannel(BaseChannel):
                 logger.error(f"Failed to deliver Telegram message chunk {i} after retries: {e}")
 
         return last_sent_id
+
+    async def send_file(
+        self,
+        chat_id: Union[int, str],
+        file_path: str,
+        caption: Optional[str] = None,
+        reply_to_msg_id: Optional[Union[int, str]] = None
+    ) -> Optional[Union[int, str]]:
+        """Sends an outbound file/multimedia attachment to the specified chat."""
+        if not os.path.isfile(file_path):
+            logger.warning(f"send_file called with non-existent file: {file_path}")
+            return None
+
+        # Check Telegram Bot API 50MB limit
+        file_size = os.path.getsize(file_path)
+        if file_size > 50 * 1024 * 1024:
+            logger.warning(f"File {file_path} ({file_size} bytes) exceeds Telegram 50MB bot upload limit")
+            await self.send_reply(
+                chat_id,
+                f"⚠️ 文件超过 Telegram 50MB 大小限制，无法直接上传：`{os.path.basename(file_path)}`",
+                reply_to_msg_id=reply_to_msg_id
+            )
+            return None
+
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext in (".png", ".jpg", ".jpeg", ".webp"):
+            method = "sendPhoto"
+            field_name = "photo"
+        elif ext in (".ogg", ".opus"):
+            method = "sendVoice"
+            field_name = "voice"
+        elif ext in (".mp3", ".m4a", ".wav", ".flac", ".aac"):
+            method = "sendAudio"
+            field_name = "audio"
+        elif ext in (".mp4", ".mov", ".mkv", ".webm"):
+            method = "sendVideo"
+            field_name = "video"
+        elif ext == ".gif":
+            method = "sendAnimation"
+            field_name = "animation"
+        else:
+            method = "sendDocument"
+            field_name = "document"
+
+        try:
+            res = await self._upload_file(
+                method=method,
+                chat_id=chat_id,
+                file_field=field_name,
+                file_path=file_path,
+                caption=caption,
+                reply_to_msg_id=reply_to_msg_id
+            )
+            # If specialized media endpoint failed, fallback to sendDocument
+            if not res.get("ok") and method != "sendDocument":
+                desc = res.get("description", "")
+                logger.warning(f"{method} upload failed ({desc}), falling back to sendDocument for {file_path}...")
+                res = await self._upload_file(
+                    method="sendDocument",
+                    chat_id=chat_id,
+                    file_field="document",
+                    file_path=file_path,
+                    caption=caption,
+                    reply_to_msg_id=reply_to_msg_id
+                )
+
+            if res.get("ok"):
+                msg_id = res["result"]["message_id"]
+                logger.info(f"Delivered outbound file {file_path} as {method} to chat {chat_id} (msg_id: {msg_id})")
+                return msg_id
+            else:
+                logger.error(f"Failed to deliver file {file_path} to chat {chat_id}: {res}")
+                return None
+        except Exception as e:
+            logger.error(f"Exception during outbound file delivery for {file_path}: {e}")
+            return None
 
     def _split_message(self, text: str, max_len: int = 3800) -> List[str]:
         if len(text) <= max_len:
