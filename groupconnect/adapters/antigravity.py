@@ -47,7 +47,8 @@ class AntigravityAdapter(BaseAgentAdapter):
             "-p", prompt,
             "--model", self.model,
             "--output-format", "json",
-            "--dangerously-skip-permissions"
+            "--dangerously-skip-permissions",
+            "--print-timeout", f"{self.timeout_secs}s"
         ]
         if conversation_id:
             cmd.extend(["--conversation", conversation_id])
@@ -89,6 +90,13 @@ class AntigravityAdapter(BaseAgentAdapter):
                         response_text = str(data["response"]).strip()
             except json.JSONDecodeError:
                 response_text = stdout_str
+
+            if not response_text:
+                logger.error(
+                    f"[Antigravity] Empty response parsed for chat {chat_id} "
+                    f"(likely agy internal print-timeout). Stderr tail: {stderr_str[-500:] or '(empty)'}"
+                )
+                return "⏳ 本轮任务执行超时，未产出结果。请重试，或把任务拆小一点分步来。", new_cid
 
             return response_text, new_cid
 
