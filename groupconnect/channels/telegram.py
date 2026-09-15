@@ -342,6 +342,16 @@ class TelegramChannel(BaseChannel):
             sender_name += f" (@{from_user.get('username')})"
 
         raw_text = msg.get("text") or msg.get("caption") or ""
+        if not raw_text:
+            if "location" in msg:
+                loc = msg["location"]
+                raw_text = f"[Location: lat={loc.get('latitude')}, lon={loc.get('longitude')}]"
+            elif "venue" in msg:
+                venue = msg["venue"]
+                title = venue.get("title", "")
+                address = venue.get("address", "")
+                vloc = venue.get("location", {})
+                raw_text = f"[Venue: {title} ({address}), lat={vloc.get('latitude')}, lon={vloc.get('longitude')}]"
         reply_to = msg.get("reply_to_message")
         reply_to_msg_id = reply_to.get("message_id") if reply_to else None
         reply_preview = (reply_to.get("text") or reply_to.get("caption") or "") if reply_to else ""
