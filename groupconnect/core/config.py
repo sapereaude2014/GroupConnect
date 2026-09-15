@@ -33,6 +33,9 @@ class GatewayConfig:
         self.opencode_bin: str = data.get("opencode_bin", "opencode")
         self.teleworker_bin: str = data.get("teleworker_bin", "tele-worker")
 
+        # Location Services (Amap regeo for inbound location messages; AMAP_WEB_KEY env as fallback)
+        self.amap_key: str = str(data.get("amap_key", "")) or os.environ.get("AMAP_WEB_KEY", "")
+
         # Context & Window Settings
         self.max_history_len: int = int(data.get("max_history_len", 30))
         self.timeout_secs: int = int(data.get("timeout_secs", 180))
