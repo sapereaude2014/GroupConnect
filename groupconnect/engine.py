@@ -124,8 +124,10 @@ class GroupConnectEngine:
             on_event=self.on_relay_event
         )
 
-        # Concurrency Locks & State
+        # Concurrency Locks & Queue State
         self.chat_locks: Dict[Any, asyncio.Lock] = {}
+        self.chat_queues: Dict[Any, asyncio.Queue] = {}
+        self.chat_tasks: Dict[Any, asyncio.Task] = {}
         self.is_running = False
 
     def _create_adapter(self) -> BaseAgentAdapter:
@@ -195,6 +197,9 @@ class GroupConnectEngine:
             await self.channel.start()
         finally:
             reaper_task.cancel()
+            for task in self.chat_tasks.values():
+                if not task.done():
+                    task.cancel()
             await self.relay.stop()
             self.adapter.close()
 
@@ -307,11 +312,19 @@ class GroupConnectEngine:
         raw_text = msg.text
         clean_query = re.sub(rf"@{self.config.bot_username}\b", "", raw_text, flags=re.IGNORECASE).strip()
 
-        # 3. Preemptive /stop Intercept (Bypasses lock)
+        # 3. Preemptive /stop Intercept (Bypasses queue & immediately halts in-flight task)
         cmd, target_bot, _ = parse_bot_command(clean_query if clean_query else raw_text, self.config.bot_username)
         if cmd == "stop" and msg.is_triggered:
             logger.info(f"Received preemptive /stop command for chat {chat_id}")
             self.adapter.terminate(chat_id)
+            if chat_id in self.chat_queues:
+                q = self.chat_queues[chat_id]
+                while not q.empty():
+                    try:
+                        q.get_nowait()
+                        q.task_done()
+                    except (asyncio.QueueEmpty, ValueError):
+                        break
             await self.channel.send_reply(chat_id, "⏹ Task execution was stopped.", reply_to_msg_id=msg.msg_id)
             self.context_mgr.record_message(
                 chat_id=chat_id,
@@ -322,26 +335,95 @@ class GroupConnectEngine:
             )
             return
 
-        # 4. Message processing under chat lock
-        lock = self.get_chat_lock(chat_id)
-        async with lock:
-            is_bot = getattr(msg, "is_bot_relay", False)
-            relay_bot_username = msg.from_user.get("username", "") if is_bot else ""
-            self.context_mgr.record_message(
-                chat_id=chat_id,
-                sender_name=msg.sender_name,
-                text=msg.text,
-                msg_id=msg.msg_id,
-                reply_preview=msg.reply_preview,
-                attachments=msg.attachments,
-                is_bot_reply=is_bot,
-                bot_username=relay_bot_username
-            )
+        # 4. Immediate Real-Time Context Recording (Unblocked)
+        is_bot = getattr(msg, "is_bot_relay", False)
+        relay_bot_username = msg.from_user.get("username", "") if is_bot else ""
+        self.context_mgr.record_message(
+            chat_id=chat_id,
+            sender_name=msg.sender_name,
+            text=msg.text,
+            msg_id=msg.msg_id,
+            reply_preview=msg.reply_preview,
+            attachments=msg.attachments,
+            is_bot_reply=is_bot,
+            bot_username=relay_bot_username
+        )
 
-            if msg.is_triggered:
-                await self._handle_triggered_message(msg, clean_query, cmd)
+        # 5. Untriggered messages complete here (already captured in context buffer)
+        if not msg.is_triggered:
+            return
 
-    async def _handle_triggered_message(self, msg: InboundMessage, clean_query: str, cmd: Optional[str]) -> None:
+        # 6. Enqueue triggered message for latest-driven queue draining execution
+        if chat_id not in self.chat_queues:
+            self.chat_queues[chat_id] = asyncio.Queue()
+
+        self.chat_queues[chat_id].put_nowait((msg, clean_query, cmd))
+
+        worker_task = self.chat_tasks.get(chat_id)
+        if worker_task is None or worker_task.done():
+            self.chat_tasks[chat_id] = asyncio.create_task(self._process_chat_queue(chat_id))
+
+    async def _process_chat_queue(self, chat_id: Any) -> None:
+        queue = self.chat_queues.get(chat_id)
+        if not queue:
+            return
+
+        while True:
+            if queue.empty():
+                break
+
+            items = []
+            while not queue.empty():
+                try:
+                    items.append(queue.get_nowait())
+                except asyncio.QueueEmpty:
+                    break
+
+            if not items:
+                break
+
+            try:
+                # Handle reset/clear command if present in batch
+                reset_idx = next((i for i, it in enumerate(items) if it[2] in ("clear", "new", "reset")), -1)
+                if reset_idx != -1:
+                    reset_msg, reset_query, reset_cmd = items[reset_idx]
+                    await self._handle_triggered_message(reset_msg, reset_query, reset_cmd, coalesced_items=[])
+                    remaining = items[reset_idx + 1:]
+                    for it in remaining:
+                        queue.put_nowait(it)
+                elif len(items) == 1:
+                    msg, clean_query, cmd = items[0]
+                    await self._handle_triggered_message(msg, clean_query, cmd, coalesced_items=[])
+                else:
+                    # Latest-driven coalescing: latest message is the primary target
+                    latest_msg, latest_clean_query, latest_cmd = items[-1]
+                    coalesced = items[:-1]
+                    logger.info(
+                        f"Coalescing {len(items)} triggered messages in chat {chat_id}. "
+                        f"Latest query from {latest_msg.sender_name}: '{latest_clean_query[:50]}...'"
+                    )
+                    await self._handle_triggered_message(
+                        latest_msg,
+                        latest_clean_query,
+                        latest_cmd,
+                        coalesced_items=coalesced
+                    )
+            except Exception as e:
+                logger.error(f"Error processing triggered message in chat {chat_id}: {e}", exc_info=True)
+            finally:
+                for _ in items:
+                    try:
+                        queue.task_done()
+                    except ValueError:
+                        pass
+
+    async def _handle_triggered_message(
+        self,
+        msg: InboundMessage,
+        clean_query: str,
+        cmd: Optional[str],
+        coalesced_items: Optional[List[Tuple[InboundMessage, str, Optional[str]]]] = None
+    ) -> None:
         chat_id = msg.chat_id
         is_group = msg.chat_type in ("group", "supergroup")
         session = self.context_mgr.get_session(chat_id)
@@ -392,6 +474,12 @@ class GroupConnectEngine:
             if not any(a.get("path") == att.get("path") for a in active_attachments):
                 active_attachments.append(att)
 
+        if coalesced_items:
+            for c_msg, _, _ in coalesced_items:
+                for att in list(c_msg.attachments) + list(c_msg.reply_attachments):
+                    if not any(a.get("path") == att.get("path") for a in active_attachments):
+                        active_attachments.append(att)
+
         attachments_section = ""
         if active_attachments:
             att_lines = [f"- [{a['type']}] File path: {a['path']} (Name: {a.get('name', 'file')})" for a in active_attachments]
@@ -405,6 +493,18 @@ class GroupConnectEngine:
         if not user_query or user_query.startswith("[Photo") or user_query.startswith("[Voice"):
             if active_attachments:
                 user_query = "Please inspect and analyze the attached media file(s) and provide a detailed structured response."
+
+        coalesce_section = ""
+        if coalesced_items:
+            coalesce_lines = []
+            for c_msg, c_query, _ in coalesced_items:
+                c_text = c_query if c_query else c_msg.text
+                coalesce_lines.append(f"- [{c_msg.sender_name}]: {c_text}")
+            coalesce_section = (
+                "\n【Coalesced Pending Instructions / 排队期间接收到的连续补充要求】\n"
+                "（重要提示：在处理上一任务期间，用户在群内连续发送了以下指令。请结合这些补充要求，以最新的【Current Query】为最终准则一并综合响应）：\n"
+                + "\n".join(coalesce_lines) + "\n"
+            )
 
         # Prepare Soul Prompt Section (Session Initialization only)
         soul_section = ""
@@ -427,6 +527,7 @@ class GroupConnectEngine:
                     f"{soul_section}"
                     f"{delivery_section}"
                     f"{attachments_section}\n"
+                    f"{coalesce_section}"
                     f"【Sender】: {msg.sender_name}\n"
                     f"【Query】: {user_query}\n\n"
                     f"Please provide a helpful, accurate, and structured response."
@@ -436,6 +537,7 @@ class GroupConnectEngine:
                     f"【Role Context】\n"
                     f"You are @{self.config.bot_username} ({self.config.bot_name})\n"
                     f"{attachments_section}\n"
+                    f"{coalesce_section}"
                     f"【Sender】: {msg.sender_name}\n"
                     f"【Query】: {user_query}\n\n"
                     f"Please continue the conversation naturally."
@@ -454,7 +556,8 @@ class GroupConnectEngine:
                     f"{delivery_section}"
                     f"{attachments_section}\n"
                     f"【Recent Group Discussion Context (Sliding Window)】\n"
-                    f"{context_str}\n\n"
+                    f"{context_str}\n"
+                    f"{coalesce_section}\n"
                     f"【Current Query】\n"
                     f"Sender: {msg.sender_name}\n"
                     f"Content: {user_query}\n\n"
@@ -473,7 +576,8 @@ class GroupConnectEngine:
                     f"【Role Context】\n"
                     f"You are @{self.config.bot_username} ({self.config.bot_name})\n"
                     f"{attachments_section}"
-                    f"{inc_section}\n"
+                    f"{inc_section}"
+                    f"{coalesce_section}\n"
                     f"【Current Query】\n"
                     f"Sender: {msg.sender_name}\n"
                     f"Content: {user_query}\n\n"
