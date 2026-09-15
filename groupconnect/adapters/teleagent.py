@@ -73,13 +73,15 @@ class TeleAgentAdapter(BaseAgentAdapter):
         workspace_dir: str = "./workspace",
         model: Optional[str] = None,
         timeout_secs: int = 1800,
-        idle_timeout_mins: int = 120
+        idle_timeout_mins: int = 120,
+        output_grace_secs: int = 15
     ):
         self.teleworker_bin = teleworker_bin
         self.workspace_dir = os.path.abspath(workspace_dir)
         self.model = model
         self.timeout_secs = timeout_secs
         self.idle_timeout_mins = idle_timeout_mins
+        self.output_grace_secs = output_grace_secs
 
         self.workers: Dict[int, Any] = {}
         self.worker_last_used: Dict[int, float] = {}
@@ -87,12 +89,40 @@ class TeleAgentAdapter(BaseAgentAdapter):
         if self.skills_manifest:
             logger.info(f"[TeleAgent] Loaded skills manifest from {self.workspace_dir}/.agents/")
 
+    @staticmethod
+    def _kill_process_group(proc: Any) -> None:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _is_complete_json_document(data: bytes) -> bool:
+        """True when accumulated stdout already forms one complete JSON document.
+        tele-worker --json emits exactly one JSON object as its final answer."""
+        if not data:
+            return False
+        try:
+            json.loads(data.decode("utf-8", errors="replace"))
+            return True
+        except (json.JSONDecodeError, ValueError):
+            return False
+
     async def _invoke_subprocess(
         self,
         cmd: List[str],
         chat_id: Optional[int] = None
-    ) -> Tuple[int, str, str]:
+    ) -> Tuple[int, str, str, bool]:
+        """Run tele-worker; return (returncode, stdout, stderr, output_delivered).
+
+        Guards against workers that write the final JSON answer but never exit
+        (e.g. a leaked child process keeps the pipes open, so communicate()-style
+        reads would block until the hard timeout). Once stdout holds a complete
+        JSON document, the worker gets a short grace window to exit; after that
+        its whole process group is force-killed so the answer can be used.
+        """
         proc = None
+        output_delivered = False
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -104,29 +134,61 @@ class TeleAgentAdapter(BaseAgentAdapter):
                 self.workers[chat_id] = proc
                 self.worker_last_used[chat_id] = time.time()
 
+            async def _read_stdout() -> bytes:
+                nonlocal output_delivered
+                chunks: List[bytes] = []
+                while True:
+                    data = await proc.stdout.read(65536)
+                    if not data:
+                        break
+                    chunks.append(data)
+                    if self._is_complete_json_document(b"".join(chunks)):
+                        # Final answer is in hand; don't wait forever for a stuck worker.
+                        try:
+                            await asyncio.wait_for(proc.wait(), timeout=float(self.output_grace_secs))
+                        except asyncio.TimeoutError:
+                            output_delivered = True
+                            logger.warning(
+                                f"[TeleAgent] Worker for chat {chat_id} delivered final output "
+                                f"but did not exit within {self.output_grace_secs}s; force-killing process group"
+                            )
+                        # In both cases reap any leftover group members (leaked children
+                        # holding the pipes) so both readers get EOF.
+                        self._kill_process_group(proc)
+                        break
+                while True:
+                    data = await proc.stdout.read(65536)
+                    if not data:
+                        break
+                    chunks.append(data)
+                return b"".join(chunks)
+
+            async def _read_stderr() -> bytes:
+                chunks: List[bytes] = []
+                while True:
+                    data = await proc.stderr.read(65536)
+                    if not data:
+                        break
+                    chunks.append(data)
+                return b"".join(chunks)
+
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                proc.communicate(),
+                asyncio.gather(_read_stdout(), _read_stderr()),
                 timeout=float(self.timeout_secs)
             )
             stdout_str = stdout_bytes.decode("utf-8", errors="replace").strip()
             stderr_str = stderr_bytes.decode("utf-8", errors="replace").strip()
-            return proc.returncode, stdout_str, stderr_str
+            return proc.returncode, stdout_str, stderr_str, output_delivered
 
         except asyncio.TimeoutError:
             logger.error(f"[TeleAgent] Task timed out after {self.timeout_secs}s for chat {chat_id}")
             if proc and proc.returncode is None:
-                try:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                except Exception:
-                    pass
+                self._kill_process_group(proc)
             raise
         except asyncio.CancelledError:
             logger.info(f"[TeleAgent] Turn was cancelled for chat {chat_id}")
             if proc and proc.returncode is None:
-                try:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                except Exception:
-                    pass
+                self._kill_process_group(proc)
             raise
         finally:
             if chat_id is not None and chat_id in self.workers:
@@ -177,8 +239,15 @@ class TeleAgentAdapter(BaseAgentAdapter):
         logger.info(f"[TeleAgent] Spawning runner for chat {chat_id}: tele-worker -p ... {'-s ' + conversation_id[:12] if conversation_id else '(new session)'}")
 
         try:
-            code, stdout_str, stderr_str = await self._invoke_subprocess(cmd, chat_id)
+            code, stdout_str, stderr_str, output_delivered = await self._invoke_subprocess(cmd, chat_id)
             text, new_cid, err_code = self._parse_teleworker_output(stdout_str)
+
+            # Worker was force-killed only AFTER the complete final answer was already
+            # delivered on stdout (worker hung post-output, or a /stop landed late).
+            # Trust the delivered answer instead of erroring out or re-running the task.
+            if output_delivered and text:
+                logger.info(f"[TeleAgent] Using output delivered before force-kill for chat {chat_id}")
+                return text, (new_cid or conversation_id)
 
             # If resuming an existing session failed (process crash, session_busy, session not found, or empty response)
             if conversation_id and (code != 0 or err_code in ("session_busy", "internal_error") or not text):
@@ -201,8 +270,12 @@ class TeleAgentAdapter(BaseAgentAdapter):
                     fallback_cmd.extend(["-m", self.model])
 
                 logger.info(f"[TeleAgent] Spawning fresh fallback runner for chat {chat_id}")
-                code, stdout_str, stderr_str = await self._invoke_subprocess(fallback_cmd, chat_id)
+                code, stdout_str, stderr_str, output_delivered = await self._invoke_subprocess(fallback_cmd, chat_id)
                 text, new_cid, err_code = self._parse_teleworker_output(stdout_str)
+
+                if output_delivered and text:
+                    logger.info(f"[TeleAgent] Using output delivered before force-kill for chat {chat_id}")
+                    return text, (new_cid or conversation_id)
 
             if code != 0:
                 logger.error(f"[TeleAgent] Process exited with code {code}. Stderr: {stderr_str}")

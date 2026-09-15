@@ -39,6 +39,7 @@ class GatewayConfig:
         # Context & Window Settings
         self.max_history_len: int = int(data.get("max_history_len", 30))
         self.timeout_secs: int = int(data.get("timeout_secs", 180))
+        self.output_grace_secs: int = int(data.get("output_grace_secs", 15))
         self.session_idle_timeout_mins: int = int(data.get("session_idle_timeout_mins", 30))
         self.max_chunk_size: int = int(data.get("max_chunk_size", 3800))
         self.typing_interval_secs: float = float(data.get("typing_interval_secs", 4.0))

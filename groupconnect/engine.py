@@ -166,7 +166,8 @@ class GroupConnectEngine:
                 workspace_dir=self.config.workspace_dir,
                 model=self.config.model,
                 timeout_secs=self.config.timeout_secs,
-                idle_timeout_mins=self.config.session_idle_timeout_mins
+                idle_timeout_mins=self.config.session_idle_timeout_mins,
+                output_grace_secs=self.config.output_grace_secs
             )
         # --- End local TeleAgent adapter (optional, not in upstream) ---
         else:
