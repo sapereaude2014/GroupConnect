@@ -167,6 +167,7 @@ class TeleAgentAdapter(BaseAgentAdapter):
             "-p", prompt,
             "-d", self.workspace_dir,
             "--json",
+            "--timeout", str(self.timeout_secs),
         ]
         if conversation_id:
             cmd.extend(["-s", conversation_id])
@@ -194,6 +195,7 @@ class TeleAgentAdapter(BaseAgentAdapter):
                     "-p", fallback_prompt,
                     "-d", self.workspace_dir,
                     "--json",
+                    "--timeout", str(self.timeout_secs),
                 ]
                 if self.model:
                     fallback_cmd.extend(["-m", self.model])
