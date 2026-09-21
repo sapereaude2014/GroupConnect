@@ -57,9 +57,22 @@ def _load_soul(workspace_dir: str, bot_username: str) -> str:
     return ""
 
 
+SENDFILE_TAG_PATTERN = re.compile(
+    r"[【\[](?:send_?file|file|send_document|发文件):\s*([^\s`\"'<>|\]】]+)(?:\s*\|\s*([^\]】]+))?[】\]]",
+    re.IGNORECASE
+)
+
+
 def _extract_outbound_files(reply_text: str, workspace_dir: str) -> List[Tuple[str, Optional[str]]]:
     """
     Extract outbound file attachments from bot reply text.
+    Only explicit send tags are recognized:
+      【SendFile: /path/to/file】
+      【SendFile: /path/to/file | caption】
+      [SendFile: /path/to/file]
+      [SendFile: /path/to/file | caption]
+    Markdown file links ([doc](file:///...)) and bare file:// URIs are NOT extracted
+    to prevent accidental spamming of referenced source code or documentation files.
     Returns a list of (file_path, caption) tuples.
     """
     if not reply_text:
@@ -68,31 +81,26 @@ def _extract_outbound_files(reply_text: str, workspace_dir: str) -> List[Tuple[s
     found = []
     seen = set()
 
-    # 1. Markdown file links: [Caption](file:///path/to/file)
-    for m in re.finditer(r"\[([^\]]+)\]\(file://([^\s\"'<>()]+)\)", reply_text):
-        caption, raw_path = m.group(1).strip(), m.group(2).strip()
+    for m in SENDFILE_TAG_PATTERN.finditer(reply_text):
+        raw_path = m.group(1).strip().strip("`'\"")
+        caption = m.group(2).strip() if m.group(2) else None
         path = raw_path if os.path.isabs(raw_path) else os.path.join(workspace_dir, raw_path)
         if os.path.isfile(path) and path not in seen:
             seen.add(path)
             found.append((path, caption))
 
-    # 2. Explicit send tags: 【SendFile: /path/to/file】 or [SendFile: /path/to/file]
-    for m in re.finditer(r"[【\[](?:send_?file|file|send_document):\s*([^\s`\"'<>\]】]+)[】\]]", reply_text, re.IGNORECASE):
-        raw_path = m.group(1).strip()
-        path = raw_path if os.path.isabs(raw_path) else os.path.join(workspace_dir, raw_path)
-        if os.path.isfile(path) and path not in seen:
-            seen.add(path)
-            found.append((path, None))
-
-    # 3. Bare file URI: file:///path/to/file
-    for m in re.finditer(r"file://([^\s`\"'<>()\[\]]+)", reply_text):
-        raw_path = m.group(1).strip()
-        path = raw_path if os.path.isabs(raw_path) else os.path.join(workspace_dir, raw_path)
-        if os.path.isfile(path) and path not in seen:
-            seen.add(path)
-            found.append((path, None))
-
     return found
+
+
+def _strip_sendfile_tags(text: str) -> str:
+    """
+    Remove outbound send tags from reply text so internal markup doesn't appear in chat.
+    """
+    if not text:
+        return ""
+    cleaned = SENDFILE_TAG_PATTERN.sub("", text)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    return cleaned
 
 
 class GroupConnectEngine:
@@ -720,10 +728,11 @@ class GroupConnectEngine:
         if cid is None:
             soul_section = _load_soul(self.config.workspace_dir, self.config.bot_username)
             delivery_section = (
-                "【File & Multimedia Delivery】\n"
-                "If you generate, export, or want to send a file (Markdown report, chart/image, audio/voice, PDF, Word, Excel, ZIP) to the user, "
-                "include its URI format `file:///absolute/path/to/file` in your reply. "
-                "GroupConnect will automatically upload and deliver it as a native Telegram attachment.\n\n"
+                "【File & Multimedia Delivery / 附件外发协议】\n"
+                "If you generate, export, or the user explicitly requests to deliver a file (report, chart/image, audio/voice, PDF, Word, Excel, ZIP) to the chat, "
+                "include `【SendFile: /absolute/path/to/file】` (or `【SendFile: /absolute/path/to/file | Optional Caption】`) in your reply. "
+                "GroupConnect will automatically upload and deliver it as a native Telegram attachment.\n"
+                "IMPORTANT: Do NOT use raw `file:///` URLs or markdown file links for file delivery; normal code/file references should use standard code blocks or backticks to avoid accidental file delivery.\n\n"
             )
 
         # Build Full Prompt with Context
@@ -846,16 +855,25 @@ class GroupConnectEngine:
         except Exception as e:
             logger.warning(f"Error in process_outbound_text: {e}")
 
+        # Outbound Multimedia / File Delivery (searches raw reply_text)
+        outbound_files = _extract_outbound_files(reply_text, self.config.workspace_dir)
+        if outbound_files:
+            processed_reply_text = _strip_sendfile_tags(processed_reply_text)
+
         sent_msg_id = None
         try:
-            sent_msg_id = await self.channel.send_reply(chat_id, processed_reply_text, reply_to_msg_id=msg.msg_id)
-            if sent_msg_id:
-                session["last_bot_msg_id"] = sent_msg_id
+            if processed_reply_text and processed_reply_text.strip():
+                sent_msg_id = await self.channel.send_reply(chat_id, processed_reply_text, reply_to_msg_id=msg.msg_id)
+                if sent_msg_id:
+                    session["last_bot_msg_id"] = sent_msg_id
+            elif not outbound_files:
+                # No files and empty text: trigger default fallback message
+                sent_msg_id = await self.channel.send_reply(chat_id, processed_reply_text, reply_to_msg_id=msg.msg_id)
+                if sent_msg_id:
+                    session["last_bot_msg_id"] = sent_msg_id
         except Exception as e:
             logger.error(f"Failed to deliver reply to chat {chat_id}: {e}")
 
-        # Outbound Multimedia / File Delivery (searches raw reply_text)
-        outbound_files = _extract_outbound_files(reply_text, self.config.workspace_dir)
         for file_path, file_caption in outbound_files:
             try:
                 logger.info(f"Delivering outbound attachment: {file_path} (caption={file_caption}) to chat {chat_id}")
