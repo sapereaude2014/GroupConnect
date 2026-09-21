@@ -59,6 +59,38 @@ class TestFullwidthConversion(unittest.TestCase):
         self.assertEqual(table_rows_to_preformatted_text([], []), "")
         self.assertEqual(table_rows_to_preformatted_text(["a"], []), "")
 
+    def test_table_cell_wrapping_alignment(self):
+        headers = ["目录", "归档范围"]
+        data_rows = [
+            [
+                "01_家庭成员档案/",
+                "每人一份基础档案（身份、称呼、工作地点、设备绑定、权限、生活习惯、长期偏好）+ 双人合画像",
+            ],
+            ["02_健康与医疗/", "体检报告、健康台账、饮食调理方案、就医记录"],
+        ]
+        text = table_rows_to_preformatted_text(headers, data_rows, max_col_width=14)
+        lines = text.split("\n")
+        # Ensure row wrapping occurred:
+        # Header (1) + Sep (1) + Row 1 (4 lines) + Sep (1) + Row 2 (2 lines) = 9 lines
+        self.assertGreater(len(lines), 4)
+        # All lines strictly equal length (pixel-perfect alignment)
+        self.assertEqual(len({len(l) for l in lines}), 1)
+        # All characters are 1em em-width characters
+        for line in lines:
+            self.assertTrue(all(_is_em_width(c) for c in line), f"non-1em char in: {line!r}")
+        self.assertIn("＋", text)
+        self.assertIn("｜", text)
+
+    def test_table_custom_max_col_width(self):
+        headers = ["项目", "描述"]
+        data_rows = [["A", "1234567890abcdefghij"]]
+        # With max_col_width=8, description column must be capped at 8
+        text = table_rows_to_preformatted_text(headers, data_rows, max_col_width=8)
+        lines = text.split("\n")
+        self.assertEqual(len({len(l) for l in lines}), 1)
+        # Check that header line length is 2 (header '项目') + 1 ('｜') + 8 = 11
+        self.assertEqual(len(lines[0]), 11)
+
 
 class TestMarkdownTableToPreNode(unittest.TestCase):
     def test_markdown_table_becomes_pre_node(self):

@@ -52,8 +52,36 @@ def _to_fullwidth(s: str) -> str:
     return ''.join(out)
 
 
-def table_rows_to_preformatted_text(headers: List[str], data_rows: List[List[str]]) -> str:
-    """Render a table as fullwidth-aligned text for a Telegraph <pre> block."""
+def _wrap_fullwidth_cell(text: str, width: int) -> List[str]:
+    """Wrap fullwidth cell text into chunks of at most `width` characters."""
+    if not text:
+        return [""]
+    if width <= 0:
+        return [text]
+    lines = []
+    for part in text.split("\n"):
+        part = part.strip()
+        if not part:
+            lines.append("")
+            continue
+        while len(part) > width:
+            lines.append(part[:width])
+            part = part[width:].lstrip("\u3000 ")
+        if part:
+            lines.append(part)
+    return lines if lines else [""]
+
+
+def table_rows_to_preformatted_text(
+    headers: List[str],
+    data_rows: List[List[str]],
+    max_col_width: int = 14,
+) -> str:
+    """Render a table as fullwidth-aligned text for a Telegraph <pre> block.
+
+    Supports automatic cell wrapping when cell content exceeds max_col_width,
+    keeping columns strictly aligned and preserving mobile screen readability.
+    """
     if not data_rows:
         return ""
     num_cols = max([len(headers)] + [len(r) for r in data_rows])
@@ -64,16 +92,46 @@ def table_rows_to_preformatted_text(headers: List[str], data_rows: List[List[str
         row = (list(row) + [""] * num_cols)[:num_cols]
         return [_to_fullwidth(str(c).strip()) for c in row]
 
-    all_rows = [_norm(headers)] + [_norm(r) for r in data_rows]
-    widths = [max(len(r[i]) for r in all_rows) for i in range(num_cols)]
+    norm_headers = _norm(headers)
+    norm_data = [_norm(r) for r in data_rows]
+    all_rows = [norm_headers] + norm_data
 
-    def _fmt(row: List[str]) -> str:
-        return "\uff5c".join(
-            cell + "\u3000" * (widths[i] - len(cell)) for i, cell in enumerate(row)
-        )
+    widths = []
+    for i in range(num_cols):
+        natural_w = max(len(r[i]) for r in all_rows)
+        w = natural_w
+        if max_col_width and max_col_width > 0:
+            w = min(natural_w, max_col_width)
+        widths.append(max(w, 1))
+
+    def _render_row(cells: List[str]) -> Tuple[List[str], bool]:
+        wrapped = [_wrap_fullwidth_cell(cells[i], widths[i]) for i in range(num_cols)]
+        height = max(len(w) for w in wrapped)
+        sublines = []
+        for h in range(height):
+            line_parts = [wrapped[i][h] if h < len(wrapped[i]) else "" for i in range(num_cols)]
+            sublines.append(
+                "\uff5c".join(
+                    c + "\u3000" * (widths[i] - len(c)) for i, c in enumerate(line_parts)
+                )
+            )
+        return sublines, height > 1
 
     separator = "\uff0b".join("\uff0d" * w for w in widths)
-    lines = [_fmt(all_rows[0]), separator] + [_fmt(r) for r in all_rows[1:]]
+    lines = []
+
+    h_lines, h_wrapped = _render_row(norm_headers)
+    lines.extend(h_lines)
+    lines.append(separator)
+
+    rendered_data = [_render_row(r) for r in norm_data]
+    any_wrapped = h_wrapped or any(is_w for _, is_w in rendered_data)
+
+    for idx, (r_lines, _) in enumerate(rendered_data):
+        if any_wrapped and idx > 0:
+            lines.append(separator)
+        lines.extend(r_lines)
+
     return "\n".join(lines)
 
 
