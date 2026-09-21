@@ -5,6 +5,8 @@ Connects Context Manager, Gatekeeper, and Command Parser.
 """
 
 import asyncio
+import collections
+from datetime import datetime
 import logging
 import os
 import re
@@ -34,6 +36,8 @@ from groupconnect.core.config import GatewayConfig
 from groupconnect.core.context import ContextManager
 from groupconnect.core.gatekeeper import Gatekeeper
 from groupconnect.core.relay import CrossBotRelay
+from groupconnect.core.telegraph import process_outbound_text
+from groupconnect.routing import AutonomousController, AutonomousConfig
 
 logger = logging.getLogger("groupconnect.engine")
 
@@ -128,7 +132,30 @@ class GroupConnectEngine:
         self.chat_locks: Dict[Any, asyncio.Lock] = {}
         self.chat_queues: Dict[Any, asyncio.Queue] = {}
         self.chat_tasks: Dict[Any, asyncio.Task] = {}
+        self._triggered_msg_ids: collections.deque = collections.deque(maxlen=200)
         self.is_running = False
+
+        # 5. Autonomous Routing (免@自主唤醒: single-arbiter + symmetric observers)
+        self.autonomous: Optional[AutonomousController] = None
+        acfg_path = getattr(config, "autonomous_config_path", "")
+        if not acfg_path:
+            from groupconnect.routing.router import find_default_config_path
+            candidate = find_default_config_path()
+            if os.path.exists(candidate):
+                acfg_path = candidate
+        if acfg_path and os.path.exists(acfg_path):
+            try:
+                acfg = AutonomousConfig(acfg_path)
+                if acfg.enabled:
+                    self.autonomous = AutonomousController(
+                        bot_username=config.bot_username,
+                        cfg=acfg,
+                        relay=self.relay,
+                        dispatch=self._dispatch_autonomous,
+                        context_summary_fn=self._build_routing_context,
+                    )
+            except Exception as e:
+                logger.warning(f"Autonomous routing disabled: {e}")
 
     def _create_adapter(self) -> BaseAgentAdapter:
         adapter_cls = get_adapter_class(self.config.engine_type)
@@ -194,10 +221,13 @@ class GroupConnectEngine:
 
         await self.relay.start()
         reaper_task = asyncio.create_task(self._reaper_loop())
+        backup_task = asyncio.create_task(self._backup_scheduler_loop()) if self.config.engine_type == "teleagent" else None
         try:
             await self.channel.start()
         finally:
             reaper_task.cancel()
+            if backup_task:
+                backup_task.cancel()
             for task in self.chat_tasks.values():
                 if not task.done():
                     task.cancel()
@@ -215,8 +245,60 @@ class GroupConnectEngine:
             except Exception as e:
                 logger.warning(f"Error in reaper loop: {e}")
 
+    async def _backup_scheduler_loop(self) -> None:
+        """Weekly scheduled background backup to Samsung T7 (runs Sundays at 04:xx AM)."""
+        last_run_day = ""
+        while self.is_running:
+            try:
+                await asyncio.sleep(1800)  # check every 30 mins
+                now = datetime.now()
+                # Run weekly on Sunday (weekday 6) at 04:xx AM
+                if now.weekday() == 6 and now.hour == 4:
+                    today_str = now.strftime("%Y%m%d")
+                    if today_str != last_run_day:
+                        last_run_day = today_str
+                        backup_script = os.path.expanduser("~/.local/bin/guagua-backup")
+                        if os.path.isfile(backup_script):
+                            logger.info("[BACKUP] Triggering scheduled Sunday weekly backup...")
+                            proc = await asyncio.create_subprocess_exec(
+                                backup_script,
+                                stdout=asyncio.subprocess.PIPE,
+                                stderr=asyncio.subprocess.PIPE
+                            )
+                            stdout, stderr = await proc.communicate()
+                            if proc.returncode != 0:
+                                err_tail = (stderr or b"").decode("utf-8", "replace").strip()[-300:]
+                                logger.error(f"[BACKUP] Weekly backup FAILED (rc={proc.returncode}): {err_tail}")
+                                await self._notify_backup_failure(proc.returncode, err_tail)
+                        else:
+                            logger.error(f"[BACKUP] Backup script missing: {backup_script}")
+                            await self._notify_backup_failure(-1, f"备份脚本不存在: {backup_script}")
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.warning(f"Error in backup scheduler loop: {e}")
+
+    async def _notify_backup_failure(self, returncode: int, err_tail: str) -> None:
+        """Alert the family group when the weekly backup fails (never fail silently)."""
+        try:
+            chat_ids = list(self.config.allowed_chat_ids) if self.config.allowed_chat_ids else []
+            if not chat_ids:
+                return
+            text = (
+                f"⚠️ 周日凌晨自动备份失败 (exit={returncode})，请检查 T7 硬盘是否挂载/磁盘空间。"
+                f"\n错误摘要: {err_tail or '无输出'}"
+            )
+            for cid in chat_ids:
+                await self.channel.send_reply(cid, text)
+        except Exception as e:
+            logger.error(f"[BACKUP] Failed to deliver backup-failure alert to group: {e}")
+
     async def on_relay_event(self, event: Dict[str, Any]) -> None:
         """Handles cross-bot broadcast events received via local IPC."""
+        if event.get("event") == "autonomous_decision":
+            if self.autonomous is not None:
+                self.autonomous.on_relay_event(event)
+            return
         if event.get("event") != "bot_reply":
             return
 
@@ -337,7 +419,7 @@ class GroupConnectEngine:
             return
 
         # 4. Immediate Real-Time Context Recording (Unblocked)
-        is_bot = getattr(msg, "is_bot_relay", False)
+        is_bot = getattr(msg, "is_bot_relay", False) or bool(getattr(msg, "from_user", {}).get("is_bot", False))
         relay_bot_username = msg.from_user.get("username", "") if is_bot else ""
         self.context_mgr.record_message(
             chat_id=chat_id,
@@ -352,14 +434,111 @@ class GroupConnectEngine:
 
         # 5. Untriggered messages complete here (already captured in context buffer)
         if not msg.is_triggered:
+            # Source-level filter: if message is directed to another bot (via @bot, reply, or slash command),
+            # never allow it into autonomous routing pipeline!
+            if getattr(msg, "reply_to_bot_username", ""):
+                return
+            raw_text = (msg.text or "").strip()
+            if raw_text.startswith("/"):
+                return
+            if re.search(r"@\w+bot\b", raw_text, re.IGNORECASE):
+                return
+
+            # Autonomous routing: local preemption check + single-arbiter evaluation
+            au = getattr(self, "autonomous", None)
+            if au is not None and au.cfg.enabled and not is_bot:
+                au.on_human_message(msg)
+                if au.is_arbiter:
+                    asyncio.create_task(au.evaluate_and_publish(msg))
             return
 
         # 6. Enqueue triggered message for latest-driven queue draining execution
+        if msg.msg_id:
+            self._triggered_msg_ids.append(str(msg.msg_id))
+
         if chat_id not in self.chat_queues:
             self.chat_queues[chat_id] = asyncio.Queue()
 
         self.chat_queues[chat_id].put_nowait((msg, clean_query, cmd))
 
+        worker_task = self.chat_tasks.get(chat_id)
+        if worker_task is None or worker_task.done():
+            self.chat_tasks[chat_id] = asyncio.create_task(self._process_chat_queue(chat_id))
+
+    def _build_routing_context(self, chat_id: Any, exclude_msg_id: Any, window: int) -> str:
+        """Recent messages (human + bot) for the routing classifier.
+
+        Bot messages are included with a [Bot <name>] prefix so the model
+        can see the full conversation flow — essential for detecting
+        replies to bot questions (e.g. '方案一吧' answering a bot's proposal).
+        """
+        try:
+            buf = self.context_mgr.get_buffer(chat_id)
+            lines = []
+            for entry in reversed(buf):
+                if len(lines) >= max(window, 1):
+                    break
+                if entry.get("msg_id") == exclude_msg_id:
+                    continue
+                text = (entry.get("text") or "").strip()
+                if not text:
+                    continue
+                sender = entry.get("sender", "?")
+                if entry.get("is_bot"):
+                    lines.append(f"[Bot {sender}]: {text[:120]}")
+                else:
+                    lines.append(f"[{sender}]: {text[:120]}")
+            return "\n".join(reversed(lines))
+        except Exception as e:
+            logger.warning(f"[ROUTING] context build error: {e}")
+            return ""
+
+    async def _dispatch_autonomous(self, decision: Dict[str, Any]) -> None:
+        """Delivers an autonomous decision targeting THIS bot into the normal queue.
+
+        Reuses the full triggered pipeline (session, context, adapter, reply
+        anchoring, file delivery, relay sync). Queue backlog guard prevents
+        autonomous tasks from starving scheduled jobs (e.g. morning brief).
+        """
+        au = getattr(self, "autonomous", None)
+        if au is None:
+            return
+        chat_id = decision.get("chat_id")
+        msg_id = decision.get("msg_id")
+        if msg_id and str(msg_id) in self._triggered_msg_ids:
+            logger.info(
+                f"[ROUTING] Dropping duplicate autonomous dispatch for chat {chat_id}, "
+                f"msg_id {msg_id} (already triggered/handled)"
+            )
+            return
+        if msg_id:
+            self._triggered_msg_ids.append(str(msg_id))
+
+        q = self.chat_queues.get(chat_id)
+        if q is not None and q.qsize() >= au.cfg.max_queue_backlog:
+            logger.warning(
+                f"[ROUTING] Chat {chat_id} queue busy; autonomous task dropped (anti-starvation)."
+            )
+            return
+        inbound = InboundMessage(
+            chat_id=chat_id,
+            chat_type=decision.get("chat_type", "group"),
+            msg_id=decision.get("msg_id"),
+            sender_name=decision.get("sender", ""),
+            from_user={"id": 0, "first_name": decision.get("sender", ""), "username": "", "is_bot": False},
+            text=decision.get("text", ""),
+            reply_to_msg_id=None,
+            reply_preview="",
+            is_triggered=True,  # re-enters the normal triggered pipeline
+            attachments=[],
+            reply_attachments=[],
+            is_bot_relay=False,
+            hop_count=0,
+        )
+        if chat_id not in self.chat_queues:
+            self.chat_queues[chat_id] = asyncio.Queue()
+        cmd, _, _ = parse_bot_command(inbound.text, self.config.bot_username)
+        self.chat_queues[chat_id].put_nowait((inbound, inbound.text, cmd))
         worker_task = self.chat_tasks.get(chat_id)
         if worker_task is None or worker_task.done():
             self.chat_tasks[chat_id] = asyncio.create_task(self._process_chat_queue(chat_id))
@@ -467,6 +646,34 @@ class GroupConnectEngine:
                 f"• `/help` - Show this guide"
             )
             await self.channel.send_reply(chat_id, help_text, reply_to_msg_id=msg.msg_id)
+            return
+        elif cmd in ("login", "vnc"):
+            if self.config.engine_type != "teleagent":
+                return
+            script_path = os.path.expanduser("~/.local/share/TeleAgent/scripts/autologin.py")
+            if os.path.isfile(script_path):
+                force = "force" in (clean_query or "").lower()
+                asyncio.create_task(
+                    self._run_autologin_command(chat_id, script_path, force=force, reply_to_msg_id=msg.msg_id)
+                )
+            else:
+                await self.channel.send_reply(chat_id, f"❌ 未找到登录脚本: {script_path}", reply_to_msg_id=msg.msg_id)
+            return
+        elif cmd in ("backup", "sync_backup"):
+            if self.config.engine_type != "teleagent":
+                return
+            await self.channel.send_reply(
+                chat_id,
+                "📦 [管家备份] 收到小马哥指令！正在执行全量资产备份至三星 T7 固态盘，请稍候...",
+                reply_to_msg_id=msg.msg_id
+            )
+            backup_script = os.path.expanduser("~/.local/bin/guagua-backup")
+            if os.path.isfile(backup_script):
+                asyncio.create_task(
+                    self._run_backup_command(chat_id, backup_script, reply_to_msg_id=msg.msg_id)
+                )
+            else:
+                await self.channel.send_reply(chat_id, f"❌ 未找到备份脚本: {backup_script}", reply_to_msg_id=msg.msg_id)
             return
 
         # Prepare Attachments Prompt Section
@@ -628,15 +835,26 @@ class GroupConnectEngine:
         else:
             session["conversation_id"] = None
 
+        # Outbound Text Processing (Telegraph auto-publisher for long text / tables / explicit tags)
+        processed_reply_text = reply_text
+        try:
+            processed_reply_text = await process_outbound_text(
+                reply_text=reply_text,
+                threshold=self.config.auto_telegraph_threshold,
+                author_name=self.config.telegraph_author_name
+            )
+        except Exception as e:
+            logger.warning(f"Error in process_outbound_text: {e}")
+
         sent_msg_id = None
         try:
-            sent_msg_id = await self.channel.send_reply(chat_id, reply_text, reply_to_msg_id=msg.msg_id)
+            sent_msg_id = await self.channel.send_reply(chat_id, processed_reply_text, reply_to_msg_id=msg.msg_id)
             if sent_msg_id:
                 session["last_bot_msg_id"] = sent_msg_id
         except Exception as e:
             logger.error(f"Failed to deliver reply to chat {chat_id}: {e}")
 
-        # Outbound Multimedia / File Delivery
+        # Outbound Multimedia / File Delivery (searches raw reply_text)
         outbound_files = _extract_outbound_files(reply_text, self.config.workspace_dir)
         for file_path, file_caption in outbound_files:
             try:
@@ -653,7 +871,7 @@ class GroupConnectEngine:
         self.context_mgr.record_message(
             chat_id=chat_id,
             sender_name=f"{self.config.bot_name} (@{self.config.bot_username})",
-            text=reply_text,
+            text=processed_reply_text,
             msg_id=sent_msg_id,
             is_bot_reply=True,
             bot_username=self.config.bot_username
@@ -666,8 +884,84 @@ class GroupConnectEngine:
                     chat_id=chat_id,
                     chat_type=msg.chat_type,
                     msg_id=sent_msg_id or 0,
-                    text=reply_text,
+                    text=processed_reply_text,
                     hop_count=getattr(msg, "hop_count", 0)
                 )
             except Exception as e:
                 logger.warning(f"Failed to broadcast reply via relay: {e}")
+
+    async def _run_autologin_command(
+        self, chat_id: Any, script_path: str, force: bool = False, reply_to_msg_id: Any = None
+    ) -> None:
+        try:
+            logger.info(f"[LOGIN] Checking TeleAgent status for chat {chat_id}...")
+            # 1. Quick status check
+            check_proc = await asyncio.create_subprocess_exec(
+                "python3", script_path, "--check-only",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            await check_proc.communicate()
+            if check_proc.returncode == 0 and not force:
+                status_msg = (
+                    "✅ [管家状态]\n"
+                    "TeleAgent 核心引擎当前处于健康在线状态（ONLINE），会话健康在席，无需重复登录！\n\n"
+                    "💡 如遇界面卡死或需强制重新呼出 VNC 控制台，请输入：`/login force`"
+                )
+                await self.channel.send_reply(chat_id, status_msg, reply_to_msg_id=reply_to_msg_id)
+                return
+
+            # 2. Needs login or force requested
+            await self.channel.send_reply(
+                chat_id,
+                "🚀 [管家指令] 收到指令！正在准备 TeleAgent 登录环境并拉起 VNC 控制台...",
+                reply_to_msg_id=reply_to_msg_id
+            )
+            cmd_args = ["python3", script_path, "--timeout", "600"]
+            if force:
+                cmd_args.append("--force")
+
+            proc = await asyncio.create_subprocess_exec(
+                *cmd_args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await proc.communicate()
+            if proc.returncode == 0:
+                logger.info("[LOGIN] Autologin script completed successfully.")
+            else:
+                err_msg = stderr.decode(errors="ignore").strip()
+                logger.warning(f"[LOGIN] Autologin exited with code {proc.returncode}: {err_msg}")
+        except Exception as e:
+            logger.error(f"[LOGIN] Failed to execute autologin script: {e}", exc_info=True)
+
+    async def _run_backup_command(
+        self, chat_id: Any, script_path: str, reply_to_msg_id: Any = None
+    ) -> None:
+        try:
+            logger.info(f"[BACKUP] Executing backup script for chat {chat_id}...")
+            start_ts = time.time()
+            proc = await asyncio.create_subprocess_exec(
+                script_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await proc.communicate()
+            duration = max(1, int(time.time() - start_ts))
+            if proc.returncode == 0:
+                report = (
+                    f"✅ [管家报告 · 备份完成]\n"
+                    f"全量资产已成功备份至三星 T7 固态盘（耗时 {duration}s）！\n\n"
+                    f"• 📁 **家庭档案**：已完成 1:1 实时增量镜像（`T7/mama_family_files`）\n"
+                    f"• 🗜️ **核心配置**：已生成轻量快照单包（保留最新 3 份历史，自动轮转）\n"
+                    f"• 💾 **存储状态**：三星 T7 局域网物理冷备在席"
+                )
+                await self.channel.send_reply(chat_id, report, reply_to_msg_id=reply_to_msg_id)
+            else:
+                err_msg = stderr.decode(errors="ignore").strip()
+                await self.channel.send_reply(
+                    chat_id, f"❌ [管家警报] 备份执行失败 (Exit {proc.returncode}): {err_msg}",
+                    reply_to_msg_id=reply_to_msg_id
+                )
+        except Exception as e:
+            logger.error(f"[BACKUP] Failed to execute backup script: {e}", exc_info=True)

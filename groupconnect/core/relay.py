@@ -22,7 +22,7 @@ class CrossBotRelay:
         self,
         bot_username: str,
         bot_name: str,
-        ipc_dir: str = "/home/server/.local/run/groupconnect_ipc",
+        ipc_dir: str = "/tmp/groupconnect_ipc",
         on_event: Optional[Callable[[Dict[str, Any]], Coroutine[Any, Any, None]]] = None
     ):
         self.bot_username = bot_username.lower().lstrip("@")
@@ -85,6 +85,38 @@ class CrossBotRelay:
                 await writer.wait_closed()
             except Exception:
                 pass
+
+    async def broadcast_event(self, payload: Dict[str, Any]) -> None:
+        """Broadcasts an arbitrary event (e.g. autonomous_decision) to all peer bot sockets."""
+        if not os.path.isdir(self.ipc_dir):
+            return
+
+        payload = dict(payload)
+        payload.setdefault("from_bot", self.bot_username)
+        raw = json.dumps(payload, ensure_ascii=False).encode("utf-8") + b"\n"
+
+        for sock_file in glob.glob(os.path.join(self.ipc_dir, "*.sock")):
+            if os.path.basename(sock_file) == f"{self.bot_username}.sock":
+                continue
+            try:
+                reader, writer = await asyncio.wait_for(
+                    asyncio.open_unix_connection(sock_file),
+                    timeout=2.0
+                )
+                writer.write(raw)
+                await writer.drain()
+                writer.close()
+                await writer.wait_closed()
+                logger.debug(f"Broadcast event to peer socket {sock_file}")
+            except (ConnectionRefusedError, FileNotFoundError, asyncio.TimeoutError):
+                logger.debug(f"Peer socket {sock_file} unavailable")
+                try:
+                    if os.path.exists(sock_file):
+                        os.remove(sock_file)
+                except OSError:
+                    pass
+            except Exception as e:
+                logger.warning(f"Failed to broadcast event to {sock_file}: {e}")
 
     async def broadcast_reply(
         self,

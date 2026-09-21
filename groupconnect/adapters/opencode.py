@@ -62,7 +62,7 @@ class OpenCodeAdapter(BaseAgentAdapter):
         custom_env = os.environ.copy()
         custom_env["TMPDIR"] = "/tmp"
         if "HOME" not in custom_env:
-            custom_env["HOME"] = "/home/server"
+            custom_env["HOME"] = os.path.expanduser("~")
 
         try:
             proc = await asyncio.create_subprocess_exec(

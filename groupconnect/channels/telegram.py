@@ -175,18 +175,29 @@ class TelegramChannel(BaseChannel):
         for i, chunk in enumerate(chunks):
             target_reply_to = reply_to_msg_id if i == 0 else None
             try:
-                # Try Markdown first
-                res = await self._api_call(
-                    "sendMessage",
-                    chat_id=chat_id,
-                    text=chunk,
-                    parse_mode="Markdown",
-                    reply_to_message_id=target_reply_to
-                )
+                # Detect HTML blockquote for expandable fallback
+                use_html = '<blockquote' in chunk
+                if use_html:
+                    res = await self._api_call(
+                        "sendMessage",
+                        chat_id=chat_id,
+                        text=chunk,
+                        parse_mode="HTML",
+                        reply_to_message_id=target_reply_to
+                    )
+                else:
+                    # Try Markdown first
+                    res = await self._api_call(
+                        "sendMessage",
+                        chat_id=chat_id,
+                        text=chunk,
+                        parse_mode="Markdown",
+                        reply_to_message_id=target_reply_to
+                    )
                 # Markdown parse fallback: retry as plain text
                 if not res.get("ok"):
                     desc = res.get('description', '')
-                    logger.warning(f"Markdown parse failed ({desc}). Retrying as plain text...")
+                    logger.warning(f"Parse failed ({desc}). Retrying as plain text...")
                     clean_chunk = self._strip_markdown(chunk)
                     # If reply target was the problem (deleted/not found), drop it on retry
                     retry_reply_to = None if ('replied' in desc or 'not found' in desc) else target_reply_to
@@ -319,12 +330,16 @@ class TelegramChannel(BaseChannel):
         return chunks
 
     def _strip_markdown(self, text: str) -> str:
-        s = re.sub(r"```[a-zA-Z0-9_-]*\n?(.*?)```", r"\1", text, flags=re.DOTALL)
+        # Strip HTML tags we may have injected (blockquote fallback) so a
+        # plain-text retry never leaks raw tags into the chat.
+        s = re.sub(r"</?blockquote[^>]*>", "", text)
+        s = re.sub(r"```[a-zA-Z0-9_-]*\n?(.*?)```", r"\1", s, flags=re.DOTALL)
         s = re.sub(r"`([^`]+)`", r"\1", s)
         s = re.sub(r"\*\*([^*]+)\*\*", r"\1", s)
         s = re.sub(r"\*([^*]+)\*", r"\1", s)
         s = re.sub(r"__([^_]+)__", r"\1", s)
         s = re.sub(r"_([^_]+)_", r"\1", s)
+        s = re.sub(r"\[([^\]]+)\]\((https?://[^)]+)\)", r"\1: \2", s)
         s = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", s)
         return s
 
@@ -478,6 +493,8 @@ class TelegramChannel(BaseChannel):
             if r_path:
                 reply_attachments.append({"type": "photo", "path": r_path, "name": r_fname})
 
+        reply_to_bot = reply_to.get("from", {}).get("username", "") if (reply_to and reply_to.get("from", {}).get("is_bot")) else ""
+
         inbound = InboundMessage(
             chat_id=chat_id,
             chat_type=chat_type,
@@ -489,7 +506,8 @@ class TelegramChannel(BaseChannel):
             reply_preview=reply_preview,
             is_triggered=is_triggered,
             attachments=attachments,
-            reply_attachments=reply_attachments
+            reply_attachments=reply_attachments,
+            reply_to_bot_username=reply_to_bot
         )
 
         asyncio.create_task(self.handler(inbound))
@@ -500,12 +518,16 @@ class TelegramChannel(BaseChannel):
             {"command": "status", "description": "View session, engine, and buffer status"},
             {"command": "stop", "description": "Immediately terminate in-flight generation"},
             {"command": "new", "description": "Reset context and start fresh"},
+            {"command": "login", "description": "Prepare TeleAgent login form and start VNC console"},
+            {"command": "backup", "description": "Backup all assets and configs to Samsung T7 SSD"},
             {"command": "help", "description": "Show usage guide and available commands"},
         ]
         commands_zh = [
             {"command": "status", "description": "查看当前会话、引擎与滑动窗口状态"},
             {"command": "stop", "description": "立即打断当前正在生成的任务"},
             {"command": "new", "description": "重置上下文并开启全新会话"},
+            {"command": "login", "description": "准备TeleAgent登录环境并开启VNC控制台"},
+            {"command": "backup", "description": "执行全量资产备份至三星T7固态盘"},
             {"command": "help", "description": "查看管家使用指南与指令说明"},
         ]
         try:

@@ -20,62 +20,68 @@
 
 ---
 
-## 💬 The Experience
+## 💬 The Zero-@ Experience
 
-In real-world group chats, discussions happen organically before anyone calls an AI assistant:
+In real-world group chats, conversations flow naturally without anyone typing robot commands or `@mention` tags:
 
 ```text
 Alice: "Hiking this Saturday?"
 Bob:   "Sure, I can drive."
 Carol: "Let's meet at 8:00 AM then?"
-Alice: "@AI Please take note of this in our schedule."
+Alice: "Can someone log this into our schedule?"
 
-AI:    "Got it, recorded in schedule.md:
-       • Event: Hiking trip
-       • Time: Saturday 08:00 AM
-       • Transportation: Bob will drive"
+Assistant: "Recorded in schedule.md:
+           • Event: Saturday Hiking trip
+           • Departure: 08:00 AM
+           • Transportation: Bob will drive"
 ```
 
-> **No one wrote a lengthy prompt. No one copied and pasted chat history. The AI simply read what just happened in the chat and updated the workspace.**
+> **Notice: Nobody tagged `@AI`. Nobody wrote a lengthy prompt or copied chat logs. The assistant autonomously perceived the intent from recent conversation context, stepped in without being `@mentioned`, and updated the local workspace.**
 
 ---
 
-## 🎯 Standard Bots vs GroupConnect
+## 🎯 Traditional Bots vs GroupConnect
 
 ```text
-❌ Standard Group Bots (Discards non-@ messages)
-Team chatting ───(Discarded)───> Context Lost ───(@AI tagged)───> "What were you talking about?"
+❌ Traditional Group Bots (Blind, Isolated, and Tag-Dependent)
+Group Chatting ───(Discarded)───> Context Lost ───(@Bot explicitly tagged)───> "Sorry, what were you talking about?"
 
-✅ GroupConnect (Silent Context + Local Workspace Execution)
-Team chatting ───(Silent Sliding Window)───> Context Captured ───(@AI tagged)───> Updates Local Files
+✅ GroupConnect (Zero-@ Autonomous Perception + Workspace Execution)
+Group Chatting ───(Sliding Context + Semantic Arbiter)───> Intent Recognized (Zero-@) ───> Updates Local Workspace
 ```
 
 Local CLI agents like **Anthropic Claude Code (`claude`)**, **Google Antigravity (`agy`)**, **OpenAI Codex (`codex`)**, and **OpenCode (`opencode`)** run on your machine with full access to your local files and tools.
 
-**GroupConnect packages this connection and context logic into a ready-to-use lightweight runtime:**
+**GroupConnect packages connection, context buffering, and autonomous perception into a ready-to-use lightweight runtime:**
 
 ```text
                  Group Chat (Natural Discussion)
                                │
                                ▼
-                     ┌──────────────────┐
-                     │   GroupConnect   │
-                     │  Context Capture │
-                     │  Agent Invocation│
-                     └────────┬─────────┘
-                              │
-                              ▼
-                       Local CLI Agent
-               (Claude / Antigravity / Codex)
-                              │
-                     ┌────────┴────────┐
-                     │                 │
-                     ▼                 ▼
-                Direct Reply       Workspace (Persistent Assets)
-                                       │
-                              ┌────────┼────────┐
-                              ▼        ▼        ▼
-                            Tasks    Docs    History
+               ┌───────────────────────────────┐
+               │         GroupConnect          │
+               │  ┌─────────────────────────┐  │
+               │  │ Silent Context Buffer   │  │
+               │  └────────────┬────────────┘  │
+               │               ▼               │
+               │  ┌─────────────────────────┐  │
+               │  │ Autonomous Arbiter (IPC)│  │
+               │  │ (TypeSafe Jev / Gemini) │  │
+               │  └────────────┬────────────┘  │
+               └───────────────┼───────────────┘
+                               │ (Zero-@ Perception or Direct Call)
+                               ▼
+                        Local CLI Agents
+                 (Claude / Antigravity / Codex)
+                               │
+                      ┌────────┴────────┐
+                      │                 │
+                      ▼                 ▼
+                 Direct Reply       Workspace (Persistent Local Assets)
+                                        │
+                               ┌────────┼────────┐
+                               ▼        ▼        ▼
+                             Tasks    Docs    Automations
 ```
 
 ---
@@ -92,6 +98,7 @@ GroupConnect cleanly separates **the connection runtime (Core)** from **workspac
 * **Multimodal Auto-Inbox**: Photos, voice notes, and documents sent in chat are automatically downloaded to `workspace/inbox/attachments/` and passed as absolute local paths.
 * **Instant `/stop` Interruption**: Preemptively terminates active CLI agent process trees on `/stop` without waiting for queues or locks.
 * **Default-Deny Security**: Safe lockdown mode by default, preventing unauthorized users from accessing your local machine.
+* **Autonomous Multi-Bot Perception (Zero-@ Routing)**: Single Arbiter + Peer IPC Relay architecture. Automatically senses when an assistant should reply without explicit `@` mentions. Runs a 3-tier pipeline (L0 noise drop ➔ L1 alias bypass ➔ L2 semantic classification), supporting **TypeSafe Jev** (ultrafast System-One decision model with free output tokens) and **Google Gemini Flash-Lite**, with dual countdown windows (1s immediate / 4s silence) and human preemption.
 
 ### 2. Templates (Workspace Reference Setups)
 *Note: Templates are purely optional reference implementations. GroupConnect imposes zero restrictions on your workspace structure.*
@@ -102,15 +109,44 @@ Reference presets in [`templates/`](templates/) demonstrate how to organize loca
 
 ---
 
+## 🤖 Autonomous Routing (Zero-@ Perception & Multi-Bot Collaboration)
+
+In natural group conversations, constantly typing `@bot` creates friction. GroupConnect features an **Autonomous Routing Engine** that allows multiple specialized bots to listen and selectively awaken without being explicitly mentioned:
+
+```text
+Incoming Message
+       │
+       ├─ L0: Physical Noise Filter (0-Token)
+       │      Empty text, pure emojis, or standard acknowledgments ("ok", "got it") -> Drop
+       │
+       ├─ L1: Alias Direct Bypass (0-Token)
+       │      Direct keyword match ("assistant", "helper") -> Instant wake
+       │      (Protected by regex against self-referencing and echoing)
+       │
+       └─ L2: Classifier Pipeline (Single Arbiter Decision)
+              Evaluates recent sliding context with TypeSafe Jev or Gemini Flash-Lite:
+              • Reply to Bot Question -> Target Bot (Immediate 1.0s window)
+              • Interpersonal Chitchat -> Silence (Drop)
+              • Imperative Instruction -> Target Bot (Immediate 1.0s window)
+              • Open Question/Query   -> Target Bot (Silence 4.0s window)
+```
+
+* **Single Arbiter + Symmetric Observers**: Exactly one primary bot evaluates incoming messages and broadcasts decisions via Unix domain socket IPC (`CrossBotRelay`). Zero redundant model calls.
+* **Dual Windows & Human Preemption**: Urgent commands trigger after a 1.0s window. Open questions wait for 4.0s of chat silence, leaving room for human members to discuss first. If another human speaks during the countdown, the bot's pending response is immediately cancelled.
+* **Pluggable Backends**: Out-of-the-box support for **TypeSafe Jev** (specialized System-One decision model with sub-second latency and zero output token cost) and **Google Gemini Flash-Lite**.
+* **Zero Secrets in Code**: Configuration and prompt templates are cleanly externalized in `rules/autonomous_config.json` and `rules/router_prompt.txt` (see [`rules/autonomous_config.example.json`](rules/autonomous_config.example.json)).
+
+---
+
 ## 🌐 Platform Context Matrix
 
-| Platform (`platform`) | Status | Required Setting for Silent Group Context | Context Support |
+| Platform (`platform`) | Status | Required Setting for Silent Group Context | Silent Context & Zero-@ Support |
 | :--- | :--- | :--- | :--- |
-| **`telegram`** | 🟢 Built-in | Set `/setprivacy -> Disable` in `@BotFather`. | 🌟 Full (No public IP needed) |
-| **`discord`** | 🟢 Built-in | Enable `Message Content Intent` in Discord Developer Portal. | 🌟 Full (REST & Webhook) |
-| **`slack`** | 🟢 Built-in | Subscribe to `message.channels` and `app_mention` in Slack App. | 🌟 Full (Events API) |
-| **`feishu`** (Lark) | 🟢 Built-in | Request `im:message.group_msg` permission in Feishu Developer Console. | 🌟 Full (Requires Webhook) |
-| **`wecom`** (WeChat Work) | 🟢 Built-in | **None (Unsupported)**: WeChat protocol does not push unmentioned group messages. | ⚠️ Mention-only |
+| **`telegram`** | 🟢 Built-in | Set `/setprivacy -> Disable` in `@BotFather`. | 🌟 Full (Zero-@ Autonomous Wake enabled) |
+| **`discord`** | 🟢 Built-in | Enable `Message Content Intent` in Discord Developer Portal. | 🌟 Full (Zero-@ Autonomous Wake enabled) |
+| **`slack`** | 🟢 Built-in | Subscribe to `message.channels` and `app_mention` in Slack App. | 🌟 Full (Zero-@ Autonomous Wake enabled) |
+| **`feishu`** (Lark) | 🟢 Built-in | Request `im:message.group_msg` permission in Feishu Developer Console. | 🌟 Full (Zero-@ Autonomous Wake enabled) |
+| **`wecom`** (WeChat Work) | 🟢 Built-in | **None (Unsupported)**: WeChat protocol does not push unmentioned group messages. | ⚠️ Mention-only (Falls back to @-triggered mode) |
 
 ---
 
@@ -156,6 +192,61 @@ bash scripts/daemon.sh status
 # Stop bot
 bash scripts/daemon.sh stop config.telegram.json
 ```
+
+### 4. Enable Autonomous Zero-@ Perception (Optional)
+
+Allow the bot to infer intent from recent group context and reply intelligently without requiring explicit `@` mentions:
+
+1. **Configure routing rules**:
+   ```bash
+   cp rules/autonomous_config.example.json rules/autonomous_config.json
+   cp rules/router_prompt.example.txt rules/router_prompt.txt
+   ```
+   Configure zero-token aliases (`aliases`) and job boundaries (`roles`) in `rules/autonomous_config.json`, then export your classifier API key (`JEV_API_KEY` for TypeSafe Jev or `GEMINI_ROUTER_API_KEY` for Google Gemini Flash-Lite).
+
+2. **Restart the service**:
+   ```bash
+   bash scripts/daemon.sh restart config.telegram.json
+   ```
+   The bot will automatically enter perception mode, using the 3-tier pipeline (L0 noise filter ➔ L1 alias bypass ➔ L2 semantic classification) to decide when to answer.
+
+### 5. Multi-Bot Collaboration (Optional)
+
+When deploying multiple specialized bots in the same group, coordinate responses and prevent overlapping answers via local IPC:
+
+1. **Share IPC and rules across bot configs**:
+   Create dedicated config files pointing to the same `ipc_dir` and `autonomous_config_path`, designating one instance as the arbiter (`arbiter_bot`):
+   ```json
+   // config.ops.json (Arbiter instance: Ops & Decision)
+   {
+     "platform": "telegram",
+     "bot_token": "YOUR_OPS_BOT_TOKEN",
+     "bot_username": "ops_bot",
+     "ipc_dir": "/tmp/groupconnect_ipc",
+     "autonomous_config_path": "rules/autonomous_config.json",
+     "workspace_dir": "./workspace_ops",
+     "engine_type": "antigravity"
+   }
+   ```
+   ```json
+   // config.chat.json (Worker instance: Planning & Assistant)
+   {
+     "platform": "telegram",
+     "bot_token": "YOUR_CHAT_BOT_TOKEN",
+     "bot_username": "chat_bot",
+     "ipc_dir": "/tmp/groupconnect_ipc",
+     "autonomous_config_path": "rules/autonomous_config.json",
+     "workspace_dir": "./workspace_chat",
+     "engine_type": "claude"
+   }
+   ```
+
+2. **Launch each bot daemon**:
+   ```bash
+   bash scripts/daemon.sh start config.ops.json
+   bash scripts/daemon.sh start config.chat.json
+   ```
+   The arbiter evaluates intents once and coordinates task dispatch over Unix Socket (IPC) broadcasts, so multiple bots collaborate cleanly by role without talking over each other.
 
 ---
 

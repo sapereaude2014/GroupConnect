@@ -44,6 +44,10 @@ class GatewayConfig:
         self.max_chunk_size: int = int(data.get("max_chunk_size", 3800))
         self.typing_interval_secs: float = float(data.get("typing_interval_secs", 4.0))
 
+        # Auto-Telegraph Settings (0 = disabled, >0 = char threshold for auto-publishing to Telegraph)
+        self.auto_telegraph_threshold: int = int(data.get("auto_telegraph_threshold", 60))
+        self.telegraph_author_name: str = str(data.get("telegraph_author_name", self.bot_name))
+
         # Security Allowlist Gatekeeper (Secure-by-Default)
         self.allow_open_access: bool = bool(data.get("allow_open_access", False))
         self.allow_group_members_dm: bool = bool(data.get("allow_group_members_dm", True))
@@ -58,9 +62,12 @@ class GatewayConfig:
         os.makedirs(self.chat_logs_dir, exist_ok=True)
 
         # Cross-Bot IPC Relay Settings
-        self.ipc_dir: str = os.path.abspath(data.get("ipc_dir", "/home/server/.local/run/groupconnect_ipc"))
+        self.ipc_dir: str = os.path.abspath(data.get("ipc_dir", "/tmp/groupconnect_ipc"))
         self.max_bot_hops: int = int(data.get("max_bot_hops", 1))
         os.makedirs(self.ipc_dir, exist_ok=True)
+
+        # Autonomous Routing (免@自主唤醒; shared config across instances)
+        self.autonomous_config_path: str = str(data.get("autonomous_config_path", ""))
 
     @classmethod
     def from_file(cls, path: str) -> "GatewayConfig":

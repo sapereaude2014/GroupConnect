@@ -5,8 +5,18 @@ __pycache__/
 
 # Config & local secrets
 config.json
+config.*.json
 *.pid
 *.log
+
+# Rules & runtime secrets (keep examples only)
+rules/*.json
+!rules/*.example.json
+rules/*.txt
+!rules/*.example.txt
+
+# Local replay benchmark with private group chat logs
+tests/replay_arbiter.py
 
 # Workspace & inboxes
 workspace/
@@ -17,6 +27,3 @@ inbox/
 .venv
 env/
 venv/
-
-# Local-only TeleAgent adapter (not for upstream)
-groupconnect/adapters/teleagent.py

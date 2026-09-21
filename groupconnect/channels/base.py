@@ -74,6 +74,7 @@ class InboundMessage:
     is_triggered: bool = False
     attachments: List[Dict[str, Any]] = field(default_factory=list)
     reply_attachments: List[Dict[str, Any]] = field(default_factory=list)
+    reply_to_bot_username: str = ""
     is_bot_relay: bool = False
     hop_count: int = 0
 

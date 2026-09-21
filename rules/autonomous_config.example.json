@@ -1,0 +1,59 @@
+{
+  "autonomous": {
+    "enabled": true,
+    "arbiter_bot": "primary_bot",
+    "ipc_dir": "/tmp/groupconnect_ipc",
+    "windows": {
+      "immediate_secs": 1.0,
+      "silence_secs": 4.0
+    },
+    "context": {
+      "window_size": 5
+    },
+    "aliases": {
+      "primary_bot": [
+        "assistant",
+        "bot"
+      ],
+      "ops_bot": [
+        "ops",
+        "helper"
+      ]
+    },
+    "alias_mode": "bypass",
+    "noise_regex": [
+      "^(ok|OK|yes|no|got it|好的|嗯|收到|行)+[~！!。\\s]*$",
+      "^[\\W_]+$"
+    ],
+    "classifier": {
+      "provider": "typesafe",
+      "model": "jev-latest",
+      "api_key_env": "JEV_API_KEY",
+      "api_key": "",
+      "timeout_ms": 5000,
+      "confidence_threshold": 0.8,
+      "daily_budget": 800
+    },
+    "roles": {
+      "primary_bot": "Home automation, device control, finance, objective data lookup, alarms and scheduling.",
+      "ops_bot": "Travel, leisure, dining recommendations, entertainment, and general life assistance."
+    },
+    "prompt_file": "rules/router_prompt.txt",
+    "concurrency": {
+      "max_queue_backlog": 2,
+      "throttle_min_interval": 2.5
+    },
+    "degrade": "alias_only",
+    "allowed_chat_ids": [
+      -1001234567890
+    ],
+    "allowed_senders": [
+      "Alice",
+      "Bob"
+    ],
+    "alias_drop_regex": [
+      "(I am|call me) {alias}",
+      "{alias} (is right|agreed|said so)"
+    ]
+  }
+}

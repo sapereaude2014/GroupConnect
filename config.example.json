@@ -16,6 +16,8 @@
   "wecom_agent_id": "1000002",
 
   "workspace_dir": "./workspace",
+  "ipc_dir": "/tmp/groupconnect_ipc",
+  "autonomous_config_path": "rules/autonomous_config.json",
 
   "engine_type": "antigravity",
   "model": "gemini-3.8-flash-high",
