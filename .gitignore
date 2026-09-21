@@ -12,6 +12,7 @@ config.*.json
 # Autonomous routing runtime config & prompt (examples are tracked)
 /autonomous_config.json
 /router_prompt.txt
+/routing_rules.md
 
 # Local replay benchmark with private group chat logs
 tests/replay_arbiter.py

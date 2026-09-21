@@ -27,6 +27,7 @@
     ],
     "classifier": {
       "active": "typesafe",
+      "rules_file": "routing_rules.md",
       "confidence_threshold": 0.8,
       "daily_budget": 800,
       "providers": {

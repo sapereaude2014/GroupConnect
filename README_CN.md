@@ -201,8 +201,9 @@ bash scripts/daemon.sh stop config.telegram.json
    ```bash
    cp autonomous_config.example.json autonomous_config.json
    cp router_prompt.example.txt router_prompt.txt
+   cp routing_rules.example.md routing_rules.md
    ```
-   在 `autonomous_config.json` 中配置别名（`aliases`）与职责描述（`roles`），并导出判决模型 API Key（支持 TypeSafe Jev 的 `JEV_API_KEY` 或 Google Gemini 的 `GEMINI_ROUTER_API_KEY`）。`classifier` 块为自描述注册表：`active` 一行即总开关，`providers` 下各后端自带 `engine`、模型、密钥与所属文件（`prompt_template` 仅归属 gemini 引擎），切换后端改一行 `active` 即可，热加载零重启。
+   在 `autonomous_config.json` 中配置别名（`aliases`）与职责描述（`roles`），将 `classifier.rules_file`（默认 `routing_rules.md`）指向共享判决文案并按本群实际改写。`classifier` 块为自描述注册表：`active` 一行即总开关，`providers` 下各后端自带 `engine`、模型、密钥与所属文件（`prompt_template` 仅归属 gemini 引擎），切换后端改一行 `active` 即可，热加载零重启。
 
 2. **重启服务生效**：
    ```bash

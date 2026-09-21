@@ -133,8 +133,8 @@ Incoming Message
 
 * **Single Arbiter + Symmetric Observers**: Exactly one primary bot evaluates incoming messages and broadcasts decisions via Unix domain socket IPC (`CrossBotRelay`). Zero redundant model calls.
 * **Dual Windows & Human Preemption**: Urgent commands trigger after a 1.0s window. Open questions wait for 4.0s of chat silence, leaving room for human members to discuss first. If another human speaks during the countdown, the bot's pending response is immediately cancelled.
-* **Pluggable Backends**: Out-of-the-box support for **TypeSafe Jev** (specialized System-One decision model with sub-second latency and zero output token cost) and **Google Gemini Flash-Lite**.
-* **Zero Secrets in Code**: Configuration and prompt templates are cleanly externalized in `autonomous_config.json` and `router_prompt.txt` at the repository root (see [`autonomous_config.example.json`](autonomous_config.example.json)).
+* **Pluggable Backends (Self-Describing Registry)**: Out-of-the-box support for **TypeSafe Jev** (specialized System-One decision model with sub-second latency and zero output token cost) and **Google Gemini Flash-Lite** as a fallback backend. The `classifier` block is a provider registry: `active` is the one-line master switch, and each entry under `providers` carries its own `engine` (`jev` structured / `gemini` free-text JSON), model, API key and engine-specific resources (`prompt_template` belongs to the gemini engine only).
+* **Zero Secrets in Code**: All aliases, role boundaries, the classifier registry and access lists live entirely outside the codebase in `autonomous_config.json`; shared decision wording resides in `rules_file` as the single source of truth consumed by every engine (see [`autonomous_config.example.json`](autonomous_config.example.json)), zero code intrusion.
 
 ---
 
@@ -201,8 +201,9 @@ Allow the bot to infer intent from recent group context and reply intelligently 
    ```bash
    cp autonomous_config.example.json autonomous_config.json
    cp router_prompt.example.txt router_prompt.txt
+   cp routing_rules.example.md routing_rules.md
    ```
-   Configure zero-token aliases (`aliases`) and job boundaries (`roles`) in `autonomous_config.json`, then export your classifier API key (`JEV_API_KEY` for TypeSafe Jev or `GEMINI_ROUTER_API_KEY` for Google Gemini Flash-Lite).
+   Configure zero-token aliases (`aliases`) and job boundaries (`roles`) in `autonomous_config.json`, then export your classifier API key (`JEV_API_KEY` for TypeSafe Jev or `GEMINI_ROUTER_API_KEY` for Google Gemini Flash-Lite). Point `classifier.rules_file` (default `routing_rules.md`) at your shared decision wording and adapt it to your group.
 
    The `classifier` block is a **self-describing provider registry**: `active` is the one-line switch for the live backend, and each entry under `providers` declares its own `engine` (`jev` for TypeSafe structured classification, `gemini` for Google AI Studio free-text JSON), `model`, `api_key_env`, `timeout_ms` and engine-specific resources — e.g. `prompt_template` supplies the gemini engine's prompt skeleton. Shared decision wording lives in `rules_file` (single source of truth) and is consumed by every engine, so switching backends never drifts judgment semantics. A one-line `active` change is hot-reloaded with zero restart.
 
