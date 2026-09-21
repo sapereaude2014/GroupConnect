@@ -724,16 +724,8 @@ class GroupConnectEngine:
 
         # Prepare Soul Prompt Section (Session Initialization only)
         soul_section = ""
-        delivery_section = ""
         if cid is None:
             soul_section = _load_soul(self.config.workspace_dir, self.config.bot_username)
-            delivery_section = (
-                "【File & Multimedia Delivery / 附件外发协议】\n"
-                "If you generate, export, or the user explicitly requests to deliver a file (report, chart/image, audio/voice, PDF, Word, Excel, ZIP) to the chat, "
-                "include `【SendFile: /absolute/path/to/file】` (or `【SendFile: /absolute/path/to/file | Optional Caption】`) in your reply. "
-                "GroupConnect will automatically upload and deliver it as a native Telegram attachment.\n"
-                "IMPORTANT: Do NOT use raw `file:///` URLs or markdown file links for file delivery; normal code/file references should use standard code blocks or backticks to avoid accidental file delivery.\n\n"
-            )
 
         # Build Full Prompt with Context
         if not is_group:
@@ -742,7 +734,6 @@ class GroupConnectEngine:
                     f"【Role Context】\n"
                     f"You are @{self.config.bot_username} ({self.config.bot_name}) in workspace: {self.config.workspace_dir}\n"
                     f"{soul_section}"
-                    f"{delivery_section}"
                     f"{attachments_section}\n"
                     f"{coalesce_section}"
                     f"【Sender】: {msg.sender_name}\n"
@@ -770,7 +761,6 @@ class GroupConnectEngine:
                     f"【Role Context】\n"
                     f"You are @{self.config.bot_username} ({self.config.bot_name}) in workspace: {self.config.workspace_dir}\n"
                     f"{soul_section}"
-                    f"{delivery_section}"
                     f"{attachments_section}\n"
                     f"【Recent Group Discussion Context (Sliding Window)】\n"
                     f"{context_str}\n"
