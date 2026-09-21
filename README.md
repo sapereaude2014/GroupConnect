@@ -134,7 +134,7 @@ Incoming Message
 * **Single Arbiter + Symmetric Observers**: Exactly one primary bot evaluates incoming messages and broadcasts decisions via Unix domain socket IPC (`CrossBotRelay`). Zero redundant model calls.
 * **Dual Windows & Human Preemption**: Urgent commands trigger after a 1.0s window. Open questions wait for 4.0s of chat silence, leaving room for human members to discuss first. If another human speaks during the countdown, the bot's pending response is immediately cancelled.
 * **Pluggable Backends**: Out-of-the-box support for **TypeSafe Jev** (specialized System-One decision model with sub-second latency and zero output token cost) and **Google Gemini Flash-Lite**.
-* **Zero Secrets in Code**: Configuration and prompt templates are cleanly externalized in `rules/autonomous_config.json` and `rules/router_prompt.txt` (see [`rules/autonomous_config.example.json`](rules/autonomous_config.example.json)).
+* **Zero Secrets in Code**: Configuration and prompt templates are cleanly externalized in `autonomous_config.json` and `router_prompt.txt` at the repository root (see [`autonomous_config.example.json`](autonomous_config.example.json)).
 
 ---
 
@@ -199,10 +199,10 @@ Allow the bot to infer intent from recent group context and reply intelligently 
 
 1. **Configure routing rules**:
    ```bash
-   cp rules/autonomous_config.example.json rules/autonomous_config.json
-   cp rules/router_prompt.example.txt rules/router_prompt.txt
+   cp autonomous_config.example.json autonomous_config.json
+   cp router_prompt.example.txt router_prompt.txt
    ```
-   Configure zero-token aliases (`aliases`) and job boundaries (`roles`) in `rules/autonomous_config.json`, then export your classifier API key (`JEV_API_KEY` for TypeSafe Jev or `GEMINI_ROUTER_API_KEY` for Google Gemini Flash-Lite).
+   Configure zero-token aliases (`aliases`) and job boundaries (`roles`) in `autonomous_config.json`, then export your classifier API key (`JEV_API_KEY` for TypeSafe Jev or `GEMINI_ROUTER_API_KEY` for Google Gemini Flash-Lite).
 
 2. **Restart the service**:
    ```bash
@@ -223,7 +223,7 @@ When deploying multiple specialized bots in the same group, coordinate responses
      "bot_token": "YOUR_OPS_BOT_TOKEN",
      "bot_username": "ops_bot",
      "ipc_dir": "/tmp/groupconnect_ipc",
-     "autonomous_config_path": "rules/autonomous_config.json",
+      "autonomous_config_path": "autonomous_config.json",
      "workspace_dir": "./workspace_ops",
      "engine_type": "antigravity"
    }
@@ -235,7 +235,7 @@ When deploying multiple specialized bots in the same group, coordinate responses
      "bot_token": "YOUR_CHAT_BOT_TOKEN",
      "bot_username": "chat_bot",
      "ipc_dir": "/tmp/groupconnect_ipc",
-     "autonomous_config_path": "rules/autonomous_config.json",
+      "autonomous_config_path": "autonomous_config.json",
      "workspace_dir": "./workspace_chat",
      "engine_type": "claude"
    }

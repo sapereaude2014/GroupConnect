@@ -38,7 +38,7 @@
       "primary_bot": "Home automation, device control, finance, objective data lookup, alarms and scheduling.",
       "ops_bot": "Travel, leisure, dining recommendations, entertainment, and general life assistance."
     },
-    "prompt_file": "rules/router_prompt.txt",
+    "prompt_file": "router_prompt.txt",
     "concurrency": {
       "max_queue_backlog": 2,
       "throttle_min_interval": 2.5

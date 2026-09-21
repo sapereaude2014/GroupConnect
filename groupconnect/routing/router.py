@@ -31,8 +31,8 @@ def find_default_config_path() -> str:
     Standard discovery precedence:
     1. GROUPCONNECT_ROUTING_CONFIG environment variable
     2. ~/.config/guaguahome/autonomous_config.json or ~/.config/groupconnect/autonomous_config.json
-    3. rules/autonomous_config.json (inside repository / package)
-    4. rules/autonomous_config.example.json (fallback example)
+    3. autonomous_config.json (repository root)
+    4. autonomous_config.example.json (repository root, fallback example)
     """
     env_path = os.environ.get("GROUPCONNECT_ROUTING_CONFIG")
     if env_path and os.path.isfile(env_path):
@@ -43,16 +43,15 @@ def find_default_config_path() -> str:
         if os.path.isfile(candidate):
             return candidate
 
-    repo_rules = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-        "rules",
+    repo_root = os.path.dirname(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     )
     for name in ("autonomous_config.json", "autonomous_config.example.json"):
-        p = os.path.join(repo_rules, name)
+        p = os.path.join(repo_root, name)
         if os.path.isfile(p):
             return p
 
-    return os.path.join(repo_rules, "autonomous_config.example.json")
+    return os.path.join(repo_root, "autonomous_config.example.json")
 
 
 DEFAULT_CONFIG_PATH = find_default_config_path()

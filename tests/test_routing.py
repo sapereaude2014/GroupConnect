@@ -8,7 +8,7 @@ from groupconnect.routing import AutonomousConfig, AutonomousController
 class TestAutonomousRouting(unittest.TestCase):
     def setUp(self):
         repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        self.example_cfg_path = os.path.join(repo_root, "rules", "autonomous_config.example.json")
+        self.example_cfg_path = os.path.join(repo_root, "autonomous_config.example.json")
         self.cfg = AutonomousConfig(self.example_cfg_path)
         self.relay = CrossBotRelay("primary_bot", "Primary", ipc_dir="/tmp/test_ipc")
         self.ctrl = AutonomousController(

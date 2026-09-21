@@ -134,7 +134,7 @@ GroupConnect 严格区分 **连接层机制（Core）** 与 **工作区组织参
 * **单点判决 + 对称执行 (Single-Arbiter)**：仅由单个指定的主 Bot 进程调阅轻量模型进行裁决，并通过本地 Unix Domain Socket (`CrossBotRelay`) 将裁决广播给同行 Bot。杜绝多次重复调用模型，成本与延迟最低；
 * **双段窗口与真人抢断 (Human Preemption)**：明确指令 1.0 秒即时派发；客观提问预留 4.0 秒静默期（留足人类成员先相互回答的社交空间）。若在等待期内有人类成员发言接话，Bot 的回复计划立即熔断取消，绝不抢戏；
 * **可插拔判决引擎**：开箱即用支持专为分类判断打造的 **TypeSafe Jev**（System-One 模型，70~500ms 极低延迟，输出 Token 永久免费），亦支持配置 **Google Gemini Flash-Lite** 作为判决后端；
-* **业务规则与代码完全解耦**：所有别名、职责定位、Prompt 模板与名单完全外置于 `rules/autonomous_config.json` 与 `rules/router_prompt.txt` 中（参见参考配置 [`rules/autonomous_config.example.json`](rules/autonomous_config.example.json)），零代码侵入。
+* **业务规则与代码完全解耦**：所有别名、职责定位、Prompt 模板与名单完全外置于仓库根目录的 `autonomous_config.json` 与 `router_prompt.txt` 中（参见参考配置 [`autonomous_config.example.json`](autonomous_config.example.json)），零代码侵入。
 
 ---
 
@@ -199,10 +199,10 @@ bash scripts/daemon.sh stop config.telegram.json
 
 1. **配置感知规则模板**：
    ```bash
-   cp rules/autonomous_config.example.json rules/autonomous_config.json
-   cp rules/router_prompt.example.txt rules/router_prompt.txt
+   cp autonomous_config.example.json autonomous_config.json
+   cp router_prompt.example.txt router_prompt.txt
    ```
-   在 `rules/autonomous_config.json` 中配置别名（`aliases`）与职责描述（`roles`），并导出判决模型 API Key（支持 TypeSafe Jev 的 `JEV_API_KEY` 或 Google Gemini 的 `GEMINI_ROUTER_API_KEY`）。
+   在 `autonomous_config.json` 中配置别名（`aliases`）与职责描述（`roles`），并导出判决模型 API Key（支持 TypeSafe Jev 的 `JEV_API_KEY` 或 Google Gemini 的 `GEMINI_ROUTER_API_KEY`）。
 
 2. **重启服务生效**：
    ```bash
@@ -223,7 +223,7 @@ bash scripts/daemon.sh stop config.telegram.json
      "bot_token": "YOUR_OPS_BOT_TOKEN",
      "bot_username": "ops_bot",
      "ipc_dir": "/tmp/groupconnect_ipc",
-     "autonomous_config_path": "rules/autonomous_config.json",
+      "autonomous_config_path": "autonomous_config.json",
      "workspace_dir": "./workspace_ops",
      "engine_type": "antigravity"
    }
@@ -235,7 +235,7 @@ bash scripts/daemon.sh stop config.telegram.json
      "bot_token": "YOUR_CHAT_BOT_TOKEN",
      "bot_username": "chat_bot",
      "ipc_dir": "/tmp/groupconnect_ipc",
-     "autonomous_config_path": "rules/autonomous_config.json",
+      "autonomous_config_path": "autonomous_config.json",
      "workspace_dir": "./workspace_chat",
      "engine_type": "claude"
    }

@@ -9,11 +9,9 @@ config.*.json
 *.pid
 *.log
 
-# Rules & runtime secrets (keep examples only)
-rules/*.json
-!rules/*.example.json
-rules/*.txt
-!rules/*.example.txt
+# Autonomous routing runtime config & prompt (examples are tracked)
+/autonomous_config.json
+/router_prompt.txt
 
 # Local replay benchmark with private group chat logs
 tests/replay_arbiter.py
