@@ -133,8 +133,8 @@ GroupConnect 严格区分 **连接层机制（Core）** 与 **工作区组织参
 
 * **单点判决 + 对称执行 (Single-Arbiter)**：仅由单个指定的主 Bot 进程调阅轻量模型进行裁决，并通过本地 Unix Domain Socket (`CrossBotRelay`) 将裁决广播给同行 Bot。杜绝多次重复调用模型，成本与延迟最低；
 * **双段窗口与真人抢断 (Human Preemption)**：明确指令 1.0 秒即时派发；客观提问预留 4.0 秒静默期（留足人类成员先相互回答的社交空间）。若在等待期内有人类成员发言接话，Bot 的回复计划立即熔断取消，绝不抢戏；
-* **可插拔判决引擎**：开箱即用支持专为分类判断打造的 **TypeSafe Jev**（System-One 模型，70~500ms 极低延迟，输出 Token 永久免费），亦支持配置 **Google Gemini Flash-Lite** 作为判决后端；
-* **业务规则与代码完全解耦**：所有别名、职责定位、Prompt 模板与名单完全外置于仓库根目录的 `autonomous_config.json` 与 `router_prompt.txt` 中（参见参考配置 [`autonomous_config.example.json`](autonomous_config.example.json)），零代码侵入。
+* **可插拔判决引擎（自描述注册表）**：开箱即用支持专为分类判断打造的 **TypeSafe Jev**（System-One 模型，70~500ms 极低延迟，输出 Token 永久免费），亦支持配置 **Google Gemini Flash-Lite** 作为备援后端。`classifier` 块为 provider 注册表结构：`active` 一行即总开关，`providers` 下每个后端条目自带 `engine`（`jev` 结构化 / `gemini` 自由文本 JSON）、模型、密钥与专属资源（`prompt_template` 仅归属 gemini 引擎）；
+* **业务规则与代码完全解耦**：所有别名、职责定位、分类器注册表与名单完全外置于 `autonomous_config.json`，共享判决文案存放于 `rules_file` 单一事实源、全部引擎共用（参见参考配置 [`autonomous_config.example.json`](autonomous_config.example.json)），零代码侵入。
 
 ---
 
@@ -202,7 +202,7 @@ bash scripts/daemon.sh stop config.telegram.json
    cp autonomous_config.example.json autonomous_config.json
    cp router_prompt.example.txt router_prompt.txt
    ```
-   在 `autonomous_config.json` 中配置别名（`aliases`）与职责描述（`roles`），并导出判决模型 API Key（支持 TypeSafe Jev 的 `JEV_API_KEY` 或 Google Gemini 的 `GEMINI_ROUTER_API_KEY`）。
+   在 `autonomous_config.json` 中配置别名（`aliases`）与职责描述（`roles`），并导出判决模型 API Key（支持 TypeSafe Jev 的 `JEV_API_KEY` 或 Google Gemini 的 `GEMINI_ROUTER_API_KEY`）。`classifier` 块为自描述注册表：`active` 一行即总开关，`providers` 下各后端自带 `engine`、模型、密钥与所属文件（`prompt_template` 仅归属 gemini 引擎），切换后端改一行 `active` 即可，热加载零重启。
 
 2. **重启服务生效**：
    ```bash

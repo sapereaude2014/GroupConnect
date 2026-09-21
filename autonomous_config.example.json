@@ -26,19 +26,29 @@
       "^[\\W_]+$"
     ],
     "classifier": {
-      "provider": "typesafe",
-      "model": "jev-latest",
-      "api_key_env": "JEV_API_KEY",
-      "api_key": "",
-      "timeout_ms": 5000,
+      "active": "typesafe",
       "confidence_threshold": 0.8,
-      "daily_budget": 800
+      "daily_budget": 800,
+      "providers": {
+        "typesafe": {
+          "engine": "jev",
+          "model": "jev-latest",
+          "api_key_env": "JEV_API_KEY",
+          "timeout_ms": 5000
+        },
+        "google_ai_studio": {
+          "engine": "gemini",
+          "model": "gemini-3.5-flash-lite",
+          "api_key_env": "GEMINI_ROUTER_API_KEY",
+          "timeout_ms": 3000,
+          "prompt_template": "router_prompt.txt"
+        }
+      }
     },
     "roles": {
       "primary_bot": "Home automation, device control, finance, objective data lookup, alarms and scheduling.",
       "ops_bot": "Travel, leisure, dining recommendations, entertainment, and general life assistance."
     },
-    "prompt_file": "router_prompt.txt",
     "concurrency": {
       "max_queue_backlog": 2,
       "throttle_min_interval": 2.5

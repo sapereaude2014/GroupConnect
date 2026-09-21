@@ -204,6 +204,8 @@ Allow the bot to infer intent from recent group context and reply intelligently 
    ```
    Configure zero-token aliases (`aliases`) and job boundaries (`roles`) in `autonomous_config.json`, then export your classifier API key (`JEV_API_KEY` for TypeSafe Jev or `GEMINI_ROUTER_API_KEY` for Google Gemini Flash-Lite).
 
+   The `classifier` block is a **self-describing provider registry**: `active` is the one-line switch for the live backend, and each entry under `providers` declares its own `engine` (`jev` for TypeSafe structured classification, `gemini` for Google AI Studio free-text JSON), `model`, `api_key_env`, `timeout_ms` and engine-specific resources — e.g. `prompt_template` supplies the gemini engine's prompt skeleton. Shared decision wording lives in `rules_file` (single source of truth) and is consumed by every engine, so switching backends never drifts judgment semantics. A one-line `active` change is hot-reloaded with zero restart.
+
 2. **Restart the service**:
    ```bash
    bash scripts/daemon.sh restart config.telegram.json

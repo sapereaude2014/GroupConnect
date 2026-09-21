@@ -126,6 +126,64 @@ class TestAutonomousRouting(unittest.TestCase):
         # Multi-word headings never parse as template keys
         self.assertEqual(len(t), 4)
 
+    def test_classifier_registry(self):
+        # New self-describing registry: active switch + per-provider params.
+        self.assertEqual(self.cfg.active_provider, "typesafe")
+        self.assertIn("typesafe", self.cfg.providers)
+        self.assertIn("google_ai_studio", self.cfg.providers)
+        self.assertEqual(self.cfg.engine, "jev")
+        self.assertEqual(self.cfg.model, "jev-latest")
+        self.assertEqual(self.cfg.api_key, os.environ.get("JEV_API_KEY", ""))
+        # jev engine carries no prompt skeleton; gemini's stays declared but inert
+        self.assertEqual(self.cfg.prompt_file, "")
+        self.assertEqual(
+            self.cfg.providers["google_ai_studio"]["prompt_template"], "router_prompt.txt"
+        )
+
+    def test_classifier_legacy_flat_config(self):
+        import json
+        import tempfile
+
+        # Legacy flat layout must keep working (auto-synthesized registry).
+        cfg_json = {"autonomous": {
+            "classifier": {
+                "provider": "typesafe",
+                "model": "jev-legacy",
+                "api_key_env": "JEV_API_KEY",
+                "timeout_ms": 5000
+            },
+            "prompt_file": "router_prompt.txt",
+            "rules_file": "routing_rules.md"
+        }}
+        with tempfile.TemporaryDirectory() as d:
+            cfg_path = os.path.join(d, "autonomous_config.json")
+            with open(cfg_path, "w") as f:
+                f.write(json.dumps(cfg_json))
+            cfg = AutonomousConfig(cfg_path)
+            self.assertEqual(cfg.active_provider, "typesafe")
+            self.assertEqual(cfg.engine, "jev")
+            self.assertEqual(cfg.model, "jev-legacy")
+            self.assertEqual(cfg.rules_file, "routing_rules.md")
+            self.assertEqual(cfg.prompt_file, "router_prompt.txt")
+
+    def test_classifier_active_missing_fails_closed(self):
+        import json
+        import tempfile
+
+        # active points at an unregistered provider -> empty params, no key
+        cfg_json = {"autonomous": {"classifier": {
+            "active": "nonexistent",
+            "providers": {"typesafe": {"engine": "jev", "model": "m"}}
+        }}}
+        with tempfile.TemporaryDirectory() as d:
+            cfg_path = os.path.join(d, "autonomous_config.json")
+            with open(cfg_path, "w") as f:
+                f.write(json.dumps(cfg_json))
+            cfg = AutonomousConfig(cfg_path)
+            self.assertEqual(cfg.active_provider, "nonexistent")
+            self.assertEqual(cfg.model, "")
+            self.assertEqual(cfg.api_key, "")
+
     def test_jev_criteria_uses_rules_file_templates(self):
         import json
         import tempfile
@@ -138,7 +196,7 @@ class TestAutonomousRouting(unittest.TestCase):
         )
         cfg_json = {"autonomous": {
             "roles": {"bot_a": "RoleA"},
-            "rules_file": "routing_rules.md",
+            "classifier": {"rules_file": "routing_rules.md"},
         }}
         with tempfile.TemporaryDirectory() as d:
             with open(os.path.join(d, "routing_rules.md"), "w") as f:

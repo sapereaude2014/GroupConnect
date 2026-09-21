@@ -4,7 +4,7 @@ Core implementation of Autonomous Routing (免@自主感知唤醒).
 Decision pipeline (arbiter side only):
     L0 physical noise  - empty / punctuation-only / emoji-only  (0 token)
     L1 alias bypass    - contains a bot alias -> direct wake    (0 token)
-    L2 lite classifier - Gemini Flash-Lite tri-state judgment   (1 API call)
+    L2 classifier     - active provider engine (jev|gemini) judgment (1 API call)
 
 Tri-state output:
     {"target_bot": <bot|none>, "urgency": "immediate"|"wait_silence"|"drop"}
@@ -149,21 +149,63 @@ class AutonomousConfig:
         self.alias_drop_regex: list = list(cfg.get("alias_drop_regex", []))
         self.noise_regex: list = [re.compile(p) for p in cfg.get("noise_regex", [])]
 
+        # ---- Classifier provider registry (self-describing) ----
+        # classifier.active            -> the switch: which providers entry is live
+        # classifier.rules_file        -> shared wording (single source of truth) for ALL engines
+        # classifier.providers.<name> -> per-provider params + resources:
+        #   engine           "jev" (TypeSafe structured) | "gemini" (free-text JSON prompt)
+        #   model / api_key_env / api_key / timeout_ms
+        #   prompt_template gemini-engine skeleton file (jev engines need none)
         clf = cfg.get("classifier", {})
-        self.provider: str = str(clf.get("provider", "google_ai_studio"))
-        self.model: str = clf.get("model", "gemini-3.5-flash-lite")
-        self.api_key: str = os.environ.get(clf.get("api_key_env", "GEMINI_ROUTER_API_KEY"), "") \
-            or str(clf.get("api_key", ""))
-        self.timeout_ms: int = int(clf.get("timeout_ms", 3000))
         self.confidence_threshold: float = float(clf.get("confidence_threshold", 0.80))
         self.daily_budget: int = int(clf.get("daily_budget", 800))
+        self.rules_file: str = str(clf.get("rules_file", cfg.get("rules_file", "")))
+
+        providers = clf.get("providers")
+        if not providers:
+            # Legacy flat layout (provider/model/api_key_env directly under
+            # classifier): synthesize a one-entry registry, warn to migrate.
+            legacy = str(clf.get("provider", "google_ai_studio"))
+            entry = {
+                "engine": "jev" if legacy == "typesafe" else "gemini",
+                "model": clf.get("model", "gemini-3.5-flash-lite"),
+                "api_key_env": clf.get("api_key_env", "GEMINI_ROUTER_API_KEY"),
+                "timeout_ms": clf.get("timeout_ms", 3000),
+            }
+            if cfg.get("prompt_file"):
+                entry["prompt_template"] = cfg.get("prompt_file")
+            providers = {legacy: entry}
+            default_active = legacy
+            logger.warning(
+                "[ROUTING] Flat 'classifier' block is deprecated; migrate to "
+                "'classifier.providers' registry (synthesized legacy provider '%s').", legacy
+            )
+        else:
+            default_active = "google_ai_studio"
+        self.providers: Dict[str, dict] = {
+            str(name).lower().lstrip("@"): (p if isinstance(p, dict) else {})
+            for name, p in providers.items()
+        }
+        self.active_provider: str = str(clf.get("active", default_active)).lower()
+        pcfg = self.providers.get(self.active_provider)
+        if pcfg is None:
+            logger.warning(
+                "[ROUTING] classifier.active '%s' not found in providers %s; "
+                "classifier fails closed until fixed.",
+                self.active_provider, sorted(self.providers),
+            )
+            pcfg = {}
+        self.engine: str = str(pcfg.get("engine", "gemini")).lower()
+        self.model: str = str(pcfg.get("model", ""))
+        self.api_key: str = os.environ.get(str(pcfg.get("api_key_env", "")), "") \
+            or str(pcfg.get("api_key", ""))
+        self.timeout_ms: int = int(pcfg.get("timeout_ms", 3000))
+        self.prompt_file: str = str(pcfg.get("prompt_template", ""))
 
         self.roles: Dict[str, str] = {
             str(bot).lower().lstrip("@"): role
             for bot, role in cfg.get("roles", {}).items()
         }
-        self.prompt_file: str = cfg.get("prompt_file", "")
-        self.rules_file: str = str(cfg.get("rules_file", ""))
         # Classifier wording (immediate/wait/drop/group) lives in the rules
         # file - the single source of truth - parsed from '## <key>' sections.
         # Code keeps only fail-safe defaults when the file is missing.
@@ -417,7 +459,7 @@ class AutonomousArbiter:
 
     async def classify(self, text: str, sender: str, context: str, alias_hint: str = "") -> Dict[str, Any]:
         """L3: single classifier tri-state call. Fail-closed -> drop.
-        Dispatches to Gemini or Jev based on provider config."""
+        Dispatches on the ACTIVE provider's engine (jev | gemini)."""
         drop = {"target_bot": "none", "urgency": "drop", "confidence": 0.0, "source": "classifier"}
         if not self.cfg.api_key:
             logger.warning("[ROUTING] No API key configured; fail-closed drop.")
@@ -426,9 +468,13 @@ class AutonomousArbiter:
             if self.cfg.degrade == "alias_only":
                 logger.warning("[ROUTING] Daily budget exceeded; fail-closed drop (alias bypass still active).")
                 return drop
-        if self.cfg.provider == "typesafe":
+        engine = self.cfg.engine
+        if engine == "jev":
             return await self._classify_jev(text, sender, context, alias_hint, drop)
-        return await self._classify_gemini(text, sender, context, alias_hint, drop)
+        if engine == "gemini":
+            return await self._classify_gemini(text, sender, context, alias_hint, drop)
+        logger.warning(f"[ROUTING] Unknown classifier engine '{engine}'; fail-closed drop.")
+        return drop
 
     def _jev_criteria(self) -> Tuple[dict, dict, str]:
         """Builds Jev choice criteria + map + group description from the
