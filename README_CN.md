@@ -239,12 +239,43 @@ bash scripts/daemon.sh stop config.telegram.json
 
 ---
 
-## 🛠 内置指令
+## 🛠 斜杠指令与自定义扩展
 
+### 内置通用指令
 * `/status` — 查看当前会话状态、常驻进程运行状态、群缓存深度与白名单信息；
-* `/stop` — 即时停止当前正在执行的 Agent 任务；
+* `/stop` — 即时打断当前正在执行的 Agent 任务；
 * `/new` 或 `/clear` — 重置当前会话并清空群聊滑动缓存；
-* `/help` — 查看使用帮助。
+* `/help` — 查看使用指南与已注册的自定义命令。
+
+### 声明式自定义指令与定时任务 (`custom_commands`)
+无需修改 GroupConnect 核心代码，直接在 `config.json` 中声明自定义运维脚本或后台定时任务。启动时网关会自动向 Telegram API（`setMyCommands`）同步专属指令菜单：
+
+```json
+"custom_commands": [
+  {
+    "command": "backup",
+    "description": "执行工作区资产备份脚本",
+    "description_en": "Trigger workspace backup script",
+    "script": "scripts/backup.sh",
+    "ack_message": "📦 [{bot_name}] 正在执行备份任务，请稍候...",
+    "success_message": "✅ [{bot_name}] 备份已完成（耗时 {duration}s）。",
+    "error_message": "❌ [{bot_name}] 备份失败 (Exit {returncode}): {stderr}",
+    "lock": true,
+    "arbiter_only_on_broadcast": true,
+    "schedule": {
+      "weekday": 6,
+      "hour": 4
+    }
+  }
+]
+```
+
+* **`script`**：脚本或执行程序路径（支持 `~` 路径自动展开）；
+* **`pass_args`**：是否将用户指令后携带的参数追加至脚本调用；
+* **`check_args` / `check_success_message`**：执行前状态探针巡检（如服务健康则直接返回状态说明，跳过完整耗时流程）；
+* **`lock`**：单命令并发排他锁，杜绝重入与并发冲突；
+* **`arbiter_only_on_broadcast`**：在多 Bot 协同群聊中，群内发送不带后缀的广播 `/cmd` 时仅由裁决官（Arbiter）响应，而显式带后缀的 `/cmd@bot` 精准由该 Bot 单独接单；
+* **`schedule`**：可选后台周期定时调度器（如每周日凌晨 4 点），脱离外部 cron 自包含运行。
 
 ---
 

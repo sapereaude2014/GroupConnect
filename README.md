@@ -241,12 +241,43 @@ When deploying multiple specialized bots in the same group, coordinate responses
 
 ---
 
-## 🛠 Built-in Slash Commands
+## 🛠 Slash Commands & Custom Extensions
 
+### Built-in Commands
 * `/status` — View current session, engine status, sliding buffer depth, and whitelist info.
 * `/stop` — Preemptively terminate in-flight agent tasks immediately.
 * `/new` or `/clear` — Reset session and clear sliding context buffer.
-* `/help` — Display help information.
+* `/help` — Display help information and registered custom commands.
+
+### Declarative Custom Commands (`custom_commands`)
+Easily extend your bot with custom shell scripts, operational tooling, or periodic background tasks declared in `config.json` without modifying GroupConnect core. GroupConnect dynamically synchronizes declared commands with platform menus (e.g. Telegram `setMyCommands`):
+
+```json
+"custom_commands": [
+  {
+    "command": "backup",
+    "description": "Trigger workspace backup script",
+    "description_en": "Trigger workspace backup script",
+    "script": "scripts/backup.sh",
+    "ack_message": "📦 [{bot_name}] Backup job started...",
+    "success_message": "✅ [{bot_name}] Backup completed in {duration}s.",
+    "error_message": "❌ [{bot_name}] Backup failed (Exit {returncode}): {stderr}",
+    "lock": true,
+    "arbiter_only_on_broadcast": true,
+    "schedule": {
+      "weekday": 6,
+      "hour": 4
+    }
+  }
+]
+```
+
+* **`script`**: Path to executable script (supports `~` expansion);
+* **`pass_args`**: Appends trailing arguments to the subprocess execution;
+* **`check_args` / `check_success_message`**: Pre-flight inspection (e.g. status check before launching full routine);
+* **`lock`**: Single-instance concurrency lock preventing duplicate overlapping runs;
+* **`arbiter_only_on_broadcast`**: In multi-bot groups, only the Arbiter bot executes untargeted broadcast `/cmd`, while explicit `/cmd@bot` invokes that specific instance;
+* **`schedule`**: Optional background weekly/daily scheduler running autonomously without external cron.
 
 ---
 

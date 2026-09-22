@@ -43,5 +43,22 @@
   "allowed_usernames": [
     "alice",
     "bob"
+  ],
+  "custom_commands": [
+    {
+      "command": "backup",
+      "description": "Trigger workspace backup script",
+      "description_en": "Trigger workspace backup script",
+      "script": "scripts/backup.sh",
+      "ack_message": "📦 [{bot_name}] Backup job started, please wait...",
+      "success_message": "✅ [{bot_name}] Backup completed successfully in {duration}s.",
+      "error_message": "❌ [{bot_name}] Backup failed (Exit {returncode}): {stderr}",
+      "lock": true,
+      "arbiter_only_on_broadcast": true,
+      "schedule": {
+        "weekday": 6,
+        "hour": 4
+      }
+    }
   ]
 }
