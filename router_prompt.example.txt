@@ -29,10 +29,11 @@ Decide by these rules (check in order, first match wins):
     - DISPATCH: One bot is asked to handle a task involving another bot
       (causative grammar: e.g. "A, ask B to do X") ->
       The first-mentioned bot is the dispatcher:
-      {"target_bot": "<dispatcher bot>", "urgency": "immediate"}
-    - PARALLEL: The sender wants ALL bots to respond or work together
+      {"target_bots": ["<dispatcher_bot>"], "target_bot": "<dispatcher_bot>", "urgency": "immediate"}
+    - PARALLEL: The sender wants multiple bots to respond or work together
       (coordinative grammar: e.g. "A and B both look at this", "A with B together") ->
-      {"target_bot": "all", "urgency": "immediate"}
+      {"target_bots": ["<bot_a>", "<bot_b>"], "target_bot": "all", "urgency": "immediate"}
 
 Output STRICT JSON only, no other text:
-{"target_bot": "<bot_name>"|"all"|"none", "urgency": "immediate"|"wait_silence"|"drop", "confidence": 0.0}
+{"target_bots": ["<bot_name>"], "target_bot": "<bot_name>"|"all"|"none", "urgency": "immediate"|"wait_silence"|"drop", "confidence": 0.0}
+(Note: target_bots is [] when none, or an array of any matching bots to respond).
