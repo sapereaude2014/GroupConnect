@@ -22,7 +22,7 @@ import groupconnect.adapters.opencode
 try:
     import groupconnect.adapters.teleagent
 except ImportError:
-    pass  # TeleAgent adapter is optional (local-only, not in upstream)
+    pass  # TeleAgent adapter is optional
 
 from groupconnect.channels.base import BaseChannel, InboundMessage, get_channel_class
 import groupconnect.channels.telegram
@@ -36,7 +36,6 @@ from groupconnect.core.config import GatewayConfig
 from groupconnect.core.context import ContextManager
 from groupconnect.core.gatekeeper import Gatekeeper
 from groupconnect.core.relay import CrossBotRelay
-from groupconnect.core.telegraph import process_outbound_text
 from groupconnect.routing import AutonomousController, AutonomousConfig
 
 logger = logging.getLogger("groupconnect.engine")
@@ -866,31 +865,19 @@ class GroupConnectEngine:
         else:
             session["conversation_id"] = None
 
-        # Outbound Text Processing (Telegraph auto-publisher for long text / tables)
-        processed_reply_text = reply_text
-        try:
-            processed_reply_text = await process_outbound_text(
-                reply_text=reply_text,
-                threshold=self.config.auto_telegraph_threshold,
-                author_name=self.config.telegraph_author_name
-            )
-        except Exception as e:
-            logger.warning(f"Error in process_outbound_text: {e}")
-
-        # Outbound Multimedia / File Delivery (searches raw reply_text)
+        # Outbound Multimedia / File Delivery
         outbound_files = _extract_outbound_files(reply_text, self.config.workspace_dir)
-        if outbound_files:
-            processed_reply_text = _strip_sendfile_tags(processed_reply_text)
+        clean_reply_text = _strip_sendfile_tags(reply_text) if outbound_files else reply_text
 
         sent_msg_id = None
         try:
-            if processed_reply_text and processed_reply_text.strip():
-                sent_msg_id = await self.channel.send_reply(chat_id, processed_reply_text, reply_to_msg_id=msg.msg_id)
+            if clean_reply_text and clean_reply_text.strip():
+                sent_msg_id = await self.channel.send_reply(chat_id, clean_reply_text, reply_to_msg_id=msg.msg_id)
                 if sent_msg_id:
                     session["last_bot_msg_id"] = sent_msg_id
             elif not outbound_files:
                 # No files and empty text: trigger default fallback message
-                sent_msg_id = await self.channel.send_reply(chat_id, processed_reply_text, reply_to_msg_id=msg.msg_id)
+                sent_msg_id = await self.channel.send_reply(chat_id, clean_reply_text, reply_to_msg_id=msg.msg_id)
                 if sent_msg_id:
                     session["last_bot_msg_id"] = sent_msg_id
         except Exception as e:

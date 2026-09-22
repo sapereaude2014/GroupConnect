@@ -17,6 +17,7 @@ import httpx
 from groupconnect.channels.base import BaseChannel, ChannelField, InboundMessage, register_channel
 from groupconnect.core.command import parse_bot_command
 from groupconnect.core.config import GatewayConfig
+from groupconnect.core.telegraph import process_outbound_text
 
 logger = logging.getLogger("groupconnect.channel.telegram")
 
@@ -168,6 +169,18 @@ class TelegramChannel(BaseChannel):
         # Guard against empty text (TeleAgent can return empty on failures)
         if not text or not text.strip():
             text = "⚠️ 暂时未能生成有效回复，请稍后再试。"
+        else:
+            # Outbound Text Processing (Telegraph auto-publisher for long text / tables)
+            try:
+                threshold = getattr(self.config, "auto_telegraph_threshold", 60)
+                author_name = getattr(self.config, "telegraph_author_name", getattr(self.config, "bot_name", "GroupConnect"))
+                text = await process_outbound_text(
+                    reply_text=text,
+                    threshold=threshold,
+                    author_name=author_name
+                )
+            except Exception as e:
+                logger.warning(f"Error in process_outbound_text: {e}")
 
         chunks = self._split_message(text, max_len=self.config.max_chunk_size)
         last_sent_id = None
