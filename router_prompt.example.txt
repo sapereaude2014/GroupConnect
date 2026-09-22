@@ -25,6 +25,14 @@ Decide by these rules (check in order, first match wins):
  4. ANY QUESTION (contains question words or a question mark) that needs
     objective information, data lookup, or a recommendation ->
     {"target_bot": "<the matching bot>", "urgency": "wait_silence"}
+ 5. MULTI-BOT DISPATCH (When multiple bot aliases appear in one message):
+    - DISPATCH: One bot is asked to handle a task involving another bot
+      (causative grammar: e.g. "A, ask B to do X") ->
+      The first-mentioned bot is the dispatcher:
+      {"target_bot": "<dispatcher bot>", "urgency": "immediate"}
+    - PARALLEL: The sender wants ALL bots to respond or work together
+      (coordinative grammar: e.g. "A and B both look at this", "A with B together") ->
+      {"target_bot": "all", "urgency": "immediate"}
 
 Output STRICT JSON only, no other text:
-{"target_bot": "<bot_name>"|"none", "urgency": "immediate"|"wait_silence"|"drop", "confidence": 0.0}
+{"target_bot": "<bot_name>"|"all"|"none", "urgency": "immediate"|"wait_silence"|"drop", "confidence": 0.0}
