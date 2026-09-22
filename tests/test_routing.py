@@ -55,30 +55,38 @@ class TestAutonomousRouting(unittest.TestCase):
         self.assertEqual(decision["target_bot"], "primary_bot")
         self.assertEqual(decision["urgency"], "immediate")
 
-    def test_multiple_aliases_first_mentioned_wins(self):
+    def test_single_alias_bypasses_to_classifier(self):
         self.cfg.aliases = {
             "bot_a": ["alpha", "小迷妹"],
             "bot_b": ["beta", "管家"]
         }
 
-        # Single bot hit
-        target1 = self.cfg.alias_hit("alpha please check this")
-        self.assertEqual(target1, "bot_a")
-
-        target2 = self.cfg.alias_hit("beta please check this")
-        self.assertEqual(target2, "bot_b")
-
-        # Multiple bots hit -> first-mentioned wins (NOT 'all')
-        target_first = self.cfg.alias_hit("alpha please ask beta to check this")
-        self.assertEqual(target_first, "bot_a")
-
-        target_second = self.cfg.alias_hit("beta please ask alpha to check this")
-        self.assertEqual(target_second, "bot_b")
-
-        decision = self.ctrl.arbiter.evaluate_sync("小迷妹给蓉汇报，最大的问题是管家", "Alice")
+        # Single bot hit -> bypass (unchanged behavior)
+        decision = self.ctrl.arbiter.evaluate_sync("alpha please check this", "Alice")
         self.assertIsNotNone(decision)
         self.assertEqual(decision["target_bot"], "bot_a")
         self.assertEqual(decision["urgency"], "immediate")
+
+        decision = self.ctrl.arbiter.evaluate_sync("beta please check this", "Alice")
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision["target_bot"], "bot_b")
+
+    def test_multi_alias_defers_to_classifier(self):
+        self.cfg.aliases = {
+            "bot_a": ["alpha", "小迷妹"],
+            "bot_b": ["beta", "管家"]
+        }
+
+        # Multiple bots hit -> defer to classifier (return None)
+        decision = self.ctrl.arbiter.evaluate_sync("alpha please ask beta to check this", "Alice")
+        self.assertIsNone(decision)
+
+        decision = self.ctrl.arbiter.evaluate_sync("beta please ask alpha to check this", "Alice")
+        self.assertIsNone(decision)
+
+        # Multi-alias self-referential banter also defers (not auto-drop)
+        decision = self.ctrl.arbiter.evaluate_sync("小迷妹给蓉汇报，最大的问题是管家", "Alice")
+        self.assertIsNone(decision)
 
     def test_alias_hits_uses_earliest_position_across_aliases(self):
         # Regression: the same bot matched by MULTIPLE aliases must use the
@@ -212,11 +220,41 @@ class TestAutonomousRouting(unittest.TestCase):
             self.assertEqual(criteria["none_drop"], "DROP")
             self.assertEqual(group, "GRP")
             self.assertEqual(jev_map["none_drop"], ("none", "drop"))
+            # all_immediate absent when not in rules file
+            self.assertNotIn("all_immediate", criteria)
+            self.assertNotIn("all_immediate", jev_map)
             # Instructions must carry the rules prose but never the templates
             instructions = arb._load_rules_instructions()
             self.assertIn("Decision Rules prose.", instructions)
             self.assertNotIn("Classifier Templates", instructions)
             self.assertNotIn("IMM", instructions)
+
+    def test_jev_criteria_includes_all_immediate(self):
+        import json
+        import tempfile
+        from groupconnect.routing.router import AutonomousArbiter
+
+        rules_md = (
+            "# Rules\n\nDecision Rules prose.\n\n# Classifier Templates\n\n"
+            "## immediate\nIMM {bot}|{role}\n\n## wait\nWAIT {bot}\n\n"
+            "## drop\nDROP\n\n## all_immediate\nALL BOTS respond\n\n## group\nGRP\n"
+        )
+        cfg_json = {"autonomous": {
+            "roles": {"bot_a": "RoleA", "bot_b": "RoleB"},
+            "classifier": {"rules_file": "routing_rules.md"},
+        }}
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "routing_rules.md"), "w") as f:
+                f.write(rules_md)
+            cfg_path = os.path.join(d, "autonomous_config.json")
+            with open(cfg_path, "w") as f:
+                f.write(json.dumps(cfg_json))
+            cfg = AutonomousConfig(cfg_path)
+            arb = AutonomousArbiter(cfg)
+            criteria, jev_map, group = arb._jev_criteria()
+            self.assertIn("all_immediate", criteria)
+            self.assertEqual(criteria["all_immediate"], "ALL BOTS respond")
+            self.assertEqual(jev_map["all_immediate"], ("all", "immediate"))
 
     def test_jev_criteria_falls_back_to_defaults(self):
         from groupconnect.routing.router import (

@@ -448,10 +448,14 @@ class AutonomousArbiter:
         if self.cfg.alias_mode == "bypass":
             hits = self.cfg.alias_hits(text)
             if hits:
-                # First-mentioned wins: return the bot whose alias appears earliest
-                # in the text, even if multiple bots' aliases are present.
-                return {"target_bot": hits[0], "urgency": "immediate",
-                        "confidence": 1.0, "source": "alias_bypass"}
+                if len(hits) == 1:
+                    # Single alias hit: bypass directly, zero-token
+                    return {"target_bot": hits[0], "urgency": "immediate",
+                            "confidence": 1.0, "source": "alias_bypass"}
+                # Multiple aliases: defer to classifier — it understands
+                # dispatch vs. parallel semantics (e.g. "A, let B handle X"
+                # vs. "A and B both look at this").
+                return None
             elif self.cfg.alias_self_reference(text):
                 return {"target_bot": "none", "urgency": "drop",
                         "confidence": 1.0, "source": "alias_self_reference"}
@@ -491,6 +495,11 @@ class AutonomousArbiter:
             criteria[f"{bot}_wait"] = wait.replace("{bot}", bot).replace("{role}", role)
             jev_map[f"{bot}_immediate"] = (bot, "immediate")
             jev_map[f"{bot}_wait"] = (bot, "wait_silence")
+        # Multi-bot dispatch: wake ALL bots simultaneously
+        all_imm = t.get("all_immediate", "")
+        if all_imm:
+            criteria["all_immediate"] = all_imm
+            jev_map["all_immediate"] = ("all", "immediate")
         criteria["none_drop"] = drop
         jev_map["none_drop"] = ("none", "drop")
         return criteria, jev_map, group
@@ -556,13 +565,21 @@ class AutonomousArbiter:
             if probs:
                 bot_probs = {b: 0.0 for b in self.cfg.roles.keys()}
                 none_prob = float(probs.get("none_drop", 0.0) or 0.0)
+                all_prob = float(probs.get("all_immediate", 0.0) or 0.0)
                 for k, p in probs.items():
+                    if k == "all_immediate":
+                        continue
                     for b in bot_probs:
                         if k.startswith(b):
                             bot_probs[b] += float(p or 0.0)
 
                 best_bot, best_bot_prob = max(bot_probs.items(), key=lambda x: x[1])
-                if best_bot_prob >= self.cfg.confidence_threshold and best_bot_prob > none_prob:
+                # Three-way comparison: all bots vs best single bot vs none
+                if all_prob >= self.cfg.confidence_threshold and all_prob > best_bot_prob and all_prob > none_prob:
+                    target_bot = "all"
+                    urgency = "immediate"
+                    confidence = all_prob
+                elif best_bot_prob >= self.cfg.confidence_threshold and best_bot_prob > none_prob:
                     target_bot = best_bot
                     confidence = best_bot_prob
                     p_imm = float(probs.get(f"{best_bot}_immediate", 0.0) or 0.0)

@@ -29,6 +29,14 @@ Decision Rules (Evaluate in order, first match wins):
    An explicit question asking for objective knowledge, schedules, data, or recommendations:
    -> Assign to the matching bot with wait_silence (leaves social space for humans to reply first).
 
+5. MULTI-BOT DISPATCH (When multiple bot aliases appear in one message):
+   - DISPATCH: One bot is asked to handle a task involving another bot (e.g. "assistant, ask helper to check this").
+     The addressee (dispatcher) is the first-mentioned bot; the other bot is the task target, NOT a wake target.
+     -> Assign to the DISPATCHER only.
+   - PARALLEL: The sender wants ALL mentioned bots to respond together (e.g. "assistant and helper both look at this").
+     -> Assign target_bot "all" with immediate urgency.
+   - Distinguish by grammar: causative markers (ask/make/have...go/do) = dispatch; coordinative markers (and/with...both/together) = parallel.
+
 # Classifier Templates
 
 ## immediate
@@ -42,3 +50,6 @@ Direct human-to-human talk only: 2nd-person pronouns, intimate/personal address,
 
 ## group
 A private group chat whose human members share one or more specialized assistant bots.
+
+## all_immediate
+The sender wants ALL bots to respond or work together simultaneously. Indicated by coordinative grammar: "A and B both", "A with B together". NOT triggered by causative grammar ("A asks B to...") where only A is the dispatcher.

@@ -119,9 +119,10 @@ Incoming Message
        ├─ L0: Physical Noise Filter (0-Token)
        │      Empty text, pure emojis, or standard acknowledgments ("ok", "got it") -> Drop
        │
-       ├─ L1: Alias Direct Bypass (0-Token)
-       │      Direct keyword match ("assistant", "helper") -> Instant wake
-       │      (Protected by regex against self-referencing and echoing)
+        ├─ L1: Alias Direct Bypass (0-Token)
+        │      Single alias match ("assistant", "helper") -> Instant wake
+        │      Multiple aliases -> Defer to L2 (dispatcher vs. parallel ambiguity)
+        │      (Protected by regex against self-referencing and echoing)
        │
        └─ L2: Classifier Pipeline (Single Arbiter Decision)
               Evaluates recent sliding context with TypeSafe Jev or Gemini Flash-Lite:
