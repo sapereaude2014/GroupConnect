@@ -271,6 +271,160 @@ class TestAutonomousRouting(unittest.TestCase):
             DEFAULT_IMMEDIATE_CRITERIA.replace("{bot}", bot).replace("{role}", self.cfg.roles[bot]),
         )
 
+    def test_jev_parallel_templates(self):
+        from groupconnect.routing.router import AutonomousArbiter, DEFAULT_PARALLEL_CRITERIA
+        import tempfile, json
+
+        # Fallback to default
+        arb = AutonomousArbiter(self.cfg)
+        pt = arb._jev_parallel_templates()
+        self.assertIn("primary_bot", pt)
+        self.assertIn("Home automation", pt["primary_bot"])
+
+        # Custom from rules file
+        rules_md = "# Rules\n\n# Classifier Templates\n\n## parallel\nPARALLEL {bot} as {role}\n"
+        cfg_json = {"autonomous": {
+            "roles": {"bot_a": "RoleA", "bot_b": "RoleB"},
+            "classifier": {"rules_file": "routing_rules.md"},
+        }}
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "routing_rules.md"), "w") as f:
+                f.write(rules_md)
+            cfg_path = os.path.join(d, "autonomous_config.json")
+            with open(cfg_path, "w") as f:
+                f.write(json.dumps(cfg_json))
+            cfg = AutonomousConfig(cfg_path)
+            arb2 = AutonomousArbiter(cfg)
+            pt2 = arb2._jev_parallel_templates()
+            self.assertEqual(pt2["bot_a"], "PARALLEL bot_a as RoleA")
+            self.assertEqual(pt2["bot_b"], "PARALLEL bot_b as RoleB")
+
+    def test_jev_classify_choice_and_noul_parallel(self):
+        import asyncio
+        from unittest.mock import patch, MagicMock
+        import tempfile, json
+        from groupconnect.routing.router import AutonomousArbiter
+
+        cfg_json = {"autonomous": {
+            "roles": {"bot_a": "RoleA", "bot_b": "RoleB"},
+            "classifier": {"provider": "typesafe", "model": "jev-latest", "api_key": "test_key"},
+            "confidence_threshold": 0.6,
+            "parallel_threshold": 0.6,
+        }}
+        with tempfile.TemporaryDirectory() as d:
+            cfg_path = os.path.join(d, "autonomous_config.json")
+            with open(cfg_path, "w") as f:
+                f.write(json.dumps(cfg_json))
+            cfg = AutonomousConfig(cfg_path)
+            arb = AutonomousArbiter(cfg)
+
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = {
+                "answers": {
+                    "routing": {
+                        "type": "choice",
+                        "choice": "bot_a_immediate",
+                        "confidence": 0.95,
+                        "probabilities": {"bot_a_immediate": 0.95, "none_drop": 0.05},
+                    },
+                    "parallel_bot_b": {
+                        "type": "noul",
+                        "noul": 0.88,
+                    },
+                }
+            }
+
+            async def run():
+                with patch("httpx.AsyncClient.post", return_value=mock_resp):
+                    res = await arb.classify("Both bots look at this", "Alice", "")
+                    self.assertEqual(res["target_bot"], "all")
+                    self.assertEqual(set(res["target_bots"]), {"bot_a", "bot_b"})
+                    self.assertEqual(res["urgency"], "immediate")
+
+            asyncio.run(run())
+
+    def test_jev_classify_fail_closed_ignores_noul(self):
+        import asyncio
+        from unittest.mock import patch, MagicMock
+        import tempfile, json
+        from groupconnect.routing.router import AutonomousArbiter
+
+        cfg_json = {"autonomous": {
+            "roles": {"bot_a": "RoleA", "bot_b": "RoleB"},
+            "classifier": {"provider": "typesafe", "model": "jev-latest", "api_key": "test_key"},
+            "confidence_threshold": 0.6,
+            "parallel_threshold": 0.6,
+        }}
+        with tempfile.TemporaryDirectory() as d:
+            cfg_path = os.path.join(d, "autonomous_config.json")
+            with open(cfg_path, "w") as f:
+                f.write(json.dumps(cfg_json))
+            cfg = AutonomousConfig(cfg_path)
+            arb = AutonomousArbiter(cfg)
+
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = {
+                "answers": {
+                    "routing": {
+                        "type": "choice",
+                        "choice": "none_drop",
+                        "confidence": 0.9,
+                        "probabilities": {"none_drop": 0.9, "bot_a_immediate": 0.1},
+                    },
+                    "parallel_bot_b": {
+                        "type": "noul",
+                        "noul": 0.99,
+                    },
+                }
+            }
+
+            async def run():
+                with patch("httpx.AsyncClient.post", return_value=mock_resp):
+                    res = await arb.classify("Spouse talk", "Alice", "")
+                    self.assertEqual(res["target_bot"], "none")
+                    self.assertEqual(res["target_bots"], [])
+                    self.assertEqual(res["urgency"], "drop")
+
+            asyncio.run(run())
+
+    def test_observer_target_bots_subset(self):
+        import asyncio
+        from groupconnect.routing.router import AutonomousObserver
+
+        async def run():
+            dispatched = []
+            obs_b = AutonomousObserver("bot_b", self.cfg, lambda d: dispatched.append("b"))
+            obs_c = AutonomousObserver("bot_c", self.cfg, lambda d: dispatched.append("c"))
+
+            dec = {
+                "target_bot": "bot_a",
+                "target_bots": ["bot_a", "bot_b"],
+                "urgency": "immediate",
+                "chat_id": 456,
+            }
+            obs_b.on_decision(dec)
+            obs_c.on_decision(dec)
+
+            self.assertIn(456, obs_b.pending)
+            self.assertNotIn(456, obs_c.pending)
+            obs_b._cancel(456)
+
+        asyncio.run(run())
+
+    def test_evaluate_sync_target_bots(self):
+        # Noise
+        d_noise = self.ctrl.arbiter.evaluate_sync("好的", "Alice")
+        self.assertEqual(d_noise["target_bots"], [])
+        self.assertEqual(d_noise["target_bot"], "none")
+
+        # Alias bypass
+        d_alias = self.ctrl.arbiter.evaluate_sync("assistant 帮我查天气", "Alice")
+        self.assertEqual(d_alias["target_bots"], ["primary_bot"])
+        self.assertEqual(d_alias["target_bot"], "primary_bot")
+
 
 if __name__ == "__main__":
     unittest.main()
+

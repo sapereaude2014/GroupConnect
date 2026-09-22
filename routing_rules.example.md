@@ -51,5 +51,5 @@ Direct human-to-human talk only: 2nd-person pronouns, intimate/personal address,
 ## group
 A private group chat whose human members share one or more specialized assistant bots.
 
-## all_immediate
-The sender wants ALL bots to respond or work together simultaneously. Indicated by coordinative grammar: "A and B both", "A with B together". NOT triggered by causative grammar ("A asks B to...") where only A is the dispatcher.
+## parallel
+The sender explicitly wants {bot} ({role}) to participate, respond, or collaborate simultaneously alongside other assistants (e.g. coordinative phrases: "A and B both", "A with B together", "both of you"). Causative dispatch ("A asks B to...") where only A is the dispatcher does NOT trigger parallel response.

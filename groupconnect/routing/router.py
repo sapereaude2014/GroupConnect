@@ -71,6 +71,9 @@ DEFAULT_DROP_CRITERIA = (
 DEFAULT_GROUP_DESCRIPTION = (
     "Private group chat. Configured assistant bots handle different specialized tasks."
 )
+DEFAULT_PARALLEL_CRITERIA = (
+    "The sender explicitly wants {bot} ({role}) to participate, respond, or collaborate simultaneously alongside other assistants (e.g. coordinative phrases: 'A and B both', 'together'). Not causative dispatch ('A ask B to do X')."
+)
 
 
 def parse_rule_templates(content: str) -> Dict[str, str]:
@@ -158,6 +161,7 @@ class AutonomousConfig:
         #   prompt_template gemini-engine skeleton file (jev engines need none)
         clf = cfg.get("classifier", {})
         self.confidence_threshold: float = float(clf.get("confidence_threshold", 0.80))
+        self.parallel_threshold: float = float(clf.get("parallel_threshold", self.confidence_threshold))
         self.daily_budget: int = int(clf.get("daily_budget", 800))
         self.rules_file: str = str(clf.get("rules_file", cfg.get("rules_file", "")))
 
@@ -170,6 +174,7 @@ class AutonomousConfig:
                 "engine": "jev" if legacy == "typesafe" else "gemini",
                 "model": clf.get("model", "gemini-3.5-flash-lite"),
                 "api_key_env": clf.get("api_key_env", "GEMINI_ROUTER_API_KEY"),
+                "api_key": clf.get("api_key", ""),
                 "timeout_ms": clf.get("timeout_ms", 3000),
             }
             if cfg.get("prompt_file"):
@@ -315,15 +320,25 @@ class AutonomousObserver:
     def on_decision(self, decision: Dict[str, Any]) -> None:
         """Called on both sides: locally by the arbiter, remotely via relay."""
         target = str(decision.get("target_bot", "none")).lower().lstrip("@")
+        targets_raw = decision.get("target_bots")
+        if targets_raw and isinstance(targets_raw, (list, set, tuple)):
+            target_set = {str(t).lower().lstrip("@") for t in targets_raw}
+        else:
+            target_set = {target}
+
         urgency = decision.get("urgency", "drop")
         chat_id = decision.get("chat_id")
-        if (target != self.my_bot and target != "all") or urgency == "drop" or chat_id is None:
+        should_act = (self.my_bot in target_set) or ("all" in target_set) or (target == "all")
+        if not should_act or urgency == "drop" or chat_id is None:
             return
         secs = self.cfg.immediate_secs if urgency == "immediate" else self.cfg.silence_secs
         self._cancel(chat_id)  # always cancel stale pending first: no orphan tasks
         task = asyncio.create_task(self._countdown(decision, secs))
         self.pending[chat_id] = {"task": task, "sender": decision.get("sender", "")}
-        logger.info(f"[ROUTING] Armed {urgency} window ({secs}s) for chat {chat_id}, target {target}.")
+        logger.info(
+            f"[ROUTING] Armed {urgency} window ({secs}s) for chat {chat_id}, "
+            f"target {self.my_bot} (targets={sorted(target_set)})."
+        )
 
     def _cancel(self, chat_id: Any) -> None:
         p = self.pending.pop(chat_id, None)
@@ -443,28 +458,28 @@ class AutonomousArbiter:
         """
         self.cfg.reload_if_modified()
         if self.cfg.is_noise(text):
-            return {"target_bot": "none", "urgency": "drop",
+            return {"target_bot": "none", "target_bots": [], "urgency": "drop",
                     "confidence": 1.0, "source": "noise"}
         if self.cfg.alias_mode == "bypass":
             hits = self.cfg.alias_hits(text)
             if hits:
                 if len(hits) == 1:
                     # Single alias hit: bypass directly, zero-token
-                    return {"target_bot": hits[0], "urgency": "immediate",
+                    return {"target_bot": hits[0], "target_bots": [hits[0]], "urgency": "immediate",
                             "confidence": 1.0, "source": "alias_bypass"}
                 # Multiple aliases: defer to classifier — it understands
                 # dispatch vs. parallel semantics (e.g. "A, let B handle X"
                 # vs. "A and B both look at this").
                 return None
             elif self.cfg.alias_self_reference(text):
-                return {"target_bot": "none", "urgency": "drop",
+                return {"target_bot": "none", "target_bots": [], "urgency": "drop",
                         "confidence": 1.0, "source": "alias_self_reference"}
         return None  # -> L3
 
     async def classify(self, text: str, sender: str, context: str, alias_hint: str = "") -> Dict[str, Any]:
         """L3: single classifier tri-state call. Fail-closed -> drop.
         Dispatches on the ACTIVE provider's engine (jev | gemini)."""
-        drop = {"target_bot": "none", "urgency": "drop", "confidence": 0.0, "source": "classifier"}
+        drop = {"target_bot": "none", "target_bots": [], "urgency": "drop", "confidence": 0.0, "source": "classifier"}
         if not self.cfg.api_key:
             logger.warning("[ROUTING] No API key configured; fail-closed drop.")
             return drop
@@ -479,6 +494,14 @@ class AutonomousArbiter:
             return await self._classify_gemini(text, sender, context, alias_hint, drop)
         logger.warning(f"[ROUTING] Unknown classifier engine '{engine}'; fail-closed drop.")
         return drop
+
+    def _jev_parallel_templates(self) -> Dict[str, str]:
+        t = self.cfg.rule_templates
+        parallel = t.get("parallel", DEFAULT_PARALLEL_CRITERIA)
+        templates = {}
+        for bot, role in self.cfg.roles.items():
+            templates[bot] = parallel.replace("{bot}", bot).replace("{role}", role)
+        return templates
 
     def _jev_criteria(self) -> Tuple[dict, dict, str]:
         """Builds Jev choice criteria + map + group description from the
@@ -495,7 +518,7 @@ class AutonomousArbiter:
             criteria[f"{bot}_wait"] = wait.replace("{bot}", bot).replace("{role}", role)
             jev_map[f"{bot}_immediate"] = (bot, "immediate")
             jev_map[f"{bot}_wait"] = (bot, "wait_silence")
-        # Multi-bot dispatch: wake ALL bots simultaneously
+        # Legacy fallback if someone still has all_immediate in templates
         all_imm = t.get("all_immediate", "")
         if all_imm:
             criteria["all_immediate"] = all_imm
@@ -505,8 +528,9 @@ class AutonomousArbiter:
         return criteria, jev_map, group
 
     async def _classify_jev(self, text: str, sender: str, context: str, alias_hint: str, drop: dict) -> Dict[str, Any]:
-        """Jev (TypeSafe) classifier: structured choice question."""
+        """Jev (TypeSafe) classifier: structured Choice + per-bot Noul questions."""
         criteria, jev_map, group_description = self._jev_criteria()
+        parallel_templates = self._jev_parallel_templates()
 
         state = {
             "group": group_description,
@@ -522,6 +546,16 @@ class AutonomousArbiter:
                 "criteria": criteria,
             }
         }
+        # Multi-bot perception: add per-bot Noul questions for parallel collaboration detection
+        if len(self.cfg.roles) > 1:
+            for bot in self.cfg.roles:
+                p_inst = parallel_templates.get(bot)
+                if p_inst:
+                    questions[f"parallel_{bot}"] = {
+                        "type": "noul",
+                        "instructions": p_inst,
+                    }
+
         url = "https://api.typesafe.ai/v1/systemone"
         timeout = self.cfg.timeout_ms / 1000.0
         payload = {"state": state, "model": self.cfg.model, "questions": questions}
@@ -554,11 +588,12 @@ class AutonomousArbiter:
             if res is None or res.status_code != 200:
                 logger.warning(f"[ROUTING] Jev exhausted retries; fail-closed drop.")
                 return drop
-            answer = res.json().get("answers", {}).get("routing", {})
-            choice = answer.get("choice", "none_drop")
-            confidence = float(answer.get("confidence", 0.0) or 0.0)
+            answers = res.json().get("answers", {})
+            routing_ans = answers.get("routing", {})
+            choice = routing_ans.get("choice", "none_drop")
+            confidence = float(routing_ans.get("confidence", 0.0) or 0.0)
             target_bot, urgency = jev_map.get(choice, ("none", "drop"))
-            probs = answer.get("probabilities", {})
+            probs = routing_ans.get("probabilities", {})
 
             # Marginal probability aggregation across immediate & wait per bot:
             # Prevents probability split between immediate/wait from causing false drops.
@@ -574,7 +609,7 @@ class AutonomousArbiter:
                             bot_probs[b] += float(p or 0.0)
 
                 best_bot, best_bot_prob = max(bot_probs.items(), key=lambda x: x[1])
-                # Three-way comparison: all bots vs best single bot vs none
+                # Three-way comparison if all_immediate was in Choice (legacy backward-compat)
                 if all_prob >= self.cfg.confidence_threshold and all_prob > best_bot_prob and all_prob > none_prob:
                     target_bot = "all"
                     urgency = "immediate"
@@ -590,15 +625,41 @@ class AutonomousArbiter:
                     urgency = "drop"
                     confidence = max(none_prob, 1.0 - best_bot_prob)
 
+            # Fail-closed check: if below threshold or drop, reject immediately
+            if urgency == "drop" or confidence < self.cfg.confidence_threshold or target_bot == "none":
+                decision = {
+                    "target_bot": "none",
+                    "target_bots": [],
+                    "urgency": "drop",
+                    "confidence": round(confidence, 2),
+                    "source": "classifier",
+                }
+                self._budget_used += 1
+                return decision
+
+            # Primary bot succeeded! Check per-bot Noul answers for parallel co-respondents
+            if target_bot == "all":
+                target_bots = list(self.cfg.roles.keys())
+            else:
+                target_bots = [target_bot]
+                for b in self.cfg.roles:
+                    if b == target_bot:
+                        continue
+                    noul_ans = answers.get(f"parallel_{b}", {})
+                    noul_prob = float(noul_ans.get("noul", 0.0) or 0.0)
+                    if noul_prob >= self.cfg.parallel_threshold:
+                        target_bots.append(b)
+
+            is_all = len(target_bots) == len(self.cfg.roles) and len(self.cfg.roles) > 1
+            final_target = "all" if is_all else target_bot
+
             decision = {
-                "target_bot": target_bot,
+                "target_bot": final_target,
+                "target_bots": target_bots,
                 "urgency": urgency,
                 "confidence": round(confidence, 2),
                 "source": "classifier",
             }
-            if decision["urgency"] != "drop" and decision["confidence"] < self.cfg.confidence_threshold:
-                logger.info(f"[ROUTING] Jev confidence {decision['confidence']} below threshold; drop.")
-                decision.update(urgency="drop")
             self._budget_used += 1
             return decision
 
@@ -645,8 +706,32 @@ class AutonomousArbiter:
             except Exception as e:
                 logger.warning(f"[ROUTING] Classifier failed: {e}; fail-closed drop.")
                 return drop
+
+            raw_target = data.get("target_bots") or data.get("target_bot", "none")
+            if isinstance(raw_target, list):
+                target_bots = [str(t).lower().lstrip("@") for t in raw_target]
+            elif isinstance(raw_target, str):
+                t_str = str(raw_target).lower().lstrip("@")
+                if t_str == "all":
+                    target_bots = list(self.cfg.roles.keys())
+                elif t_str in self.cfg.roles:
+                    target_bots = [t_str]
+                else:
+                    target_bots = []
+            else:
+                target_bots = []
+
+            is_all = len(target_bots) == len(self.cfg.roles) and len(self.cfg.roles) > 1
+            if is_all:
+                primary_target = "all"
+            elif target_bots:
+                primary_target = target_bots[0]
+            else:
+                primary_target = "none"
+
             decision = {
-                "target_bot": str(data.get("target_bot", "none")).lower().lstrip("@"),
+                "target_bot": primary_target,
+                "target_bots": target_bots,
                 "urgency": str(data.get("urgency", "drop")).lower(),
                 "confidence": float(data.get("confidence", 0.0) or 0.0),
                 "source": "classifier",
@@ -655,7 +740,7 @@ class AutonomousArbiter:
                 decision["urgency"] = "drop"
             if decision["urgency"] != "drop" and decision["confidence"] < self.cfg.confidence_threshold:
                 logger.info(f"[ROUTING] Confidence {decision['confidence']} below threshold; drop.")
-                decision.update(urgency="drop")
+                decision.update(urgency="drop", target_bot="none", target_bots=[])
             self._budget_used += 1
             return decision
 

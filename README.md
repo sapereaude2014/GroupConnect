@@ -86,56 +86,43 @@ Local CLI agents like **Anthropic Claude Code (`claude`)**, **Google Antigravity
 
 ---
 
-## 🧱 The Two-Layer Architecture: Core & Templates
+## ✨ Key Features: Engineered for Natural Group Chat Workflows
 
-> **Group chats provide the context, Agents take action, and the Workspace preserves the results.**
+> **Group chat coordinates, CLI Agents execute locally, Workspace persists knowledge.**
 
-GroupConnect cleanly separates **the connection runtime (Core)** from **workspace reference setups (Templates)**:
+### 1. 🗣️ Zero-@ Autonomous Perception (Listens Like a Human Teammate)
+- **No robotic `@bot` mentions required**: Converse naturally in group chats. GroupConnect reads conversation context to decide when it is genuinely expected to answer;
+- **Strictly silent during interpersonal chitchat**: Social banter, casual chat, and private emotional exchanges are strictly ignored—eliminating accidental interruptions;
+- **Polite silence & human preemption**: For open-ended questions or discussions, the bot pauses for 4 seconds to give humans room to answer first. If any human responds, the bot immediately cancels its pending reply.
 
-### 1. Core (Group Chat ➔ Context ➔ Agent)
-* **Silent Sliding Window & Warm Rehydration**: Maintains recent group discussion in memory (default: 30 messages) and automatically rehydrates the sliding window from local JSONL logs upon restart. Syncs only incremental messages on continuous follow-ups.
-* **Zero Cold-Start Worker Pool**: Keeps agent subprocesses warm in the background for instant execution and multi-turn conversational memory.
-* **Multimodal Auto-Inbox**: Photos, voice notes, and documents sent in chat are automatically downloaded to `workspace/inbox/attachments/` and passed as absolute local paths.
-* **Instant `/stop` Interruption**: Preemptively terminates active CLI agent process trees on `/stop` without waiting for queues or locks.
-* **Default-Deny Security**: Safe lockdown mode by default, preventing unauthorized users from accessing your local machine.
-* **Autonomous Multi-Bot Perception (Zero-@ Routing)**: Single Arbiter + Peer IPC Relay architecture. Automatically senses when an assistant should reply without explicit `@` mentions. Runs a 3-tier pipeline (L0 noise drop ➔ L1 alias bypass ➔ L2 semantic classification), supporting **TypeSafe Jev** (ultrafast System-One decision model with free output tokens) and **Google Gemini Flash-Lite**, with dual countdown windows (1s immediate / 4s silence) and human preemption.
+### 2. 🤖 Multi-Bot Collaboration & Smart Dispatch (No Clashing)
+- **Role-based specialization**: Host multiple specialized bots in one chat (e.g. an Ops bot for server infra, a Dev bot for code inspection, a Docs bot for task tracking), each responding only to their domain;
+- **Understands dispatch hierarchy**: Phrases like "*Assistant A, ask Assistant B to run the test suite*" awaken ONLY Assistant A to orchestrate; Assistant B won't jump the gun;
+- **Coordinated teamwork**: Phrases like "*Both of you take a look at this plan*" seamlessly awaken multiple bots to contribute from their respective areas of expertise.
 
-### 2. Templates (Workspace Reference Setups)
-*Note: Templates are purely optional reference implementations. GroupConnect imposes zero restrictions on your workspace structure.*
+### 3. 🧠 True Group Memory & Multimodal Ingestion
+- **Instant recovery on restart**: Maintains an in-memory sliding window and rehydrates seamlessly across daemon restarts from local JSONL logs;
+- **Automatic attachment ingestion**: Photos, invoices, and documents shared in chat are saved directly to `workspace/inbox/attachments/`, allowing CLI agents to inspect files with absolute local paths;
+- **Zero cold-start delay**: Keeps worker processes warm for instant command execution.
 
-Reference presets in [`templates/`](templates/) demonstrate how to organize local directories when turning a group chat into an ongoing workspace:
-* 🏡 **[Family Assistant](templates/family_assistant/)**: Turning a family chat into a persistent ledger for health records, assets, and memory guidelines.
-* 💼 **[Team Ops Assistant](templates/team_ops_assistant/)**: Turning a dev team chat into an active workspace for sprint tracking, incident SOPs, and searchable monthly JSONL archives.
+### 4. 🛡️ Default-Deny Security & Instant Kill (`/stop`)
+- **Safe lockdown by default**: Strict sender whitelisting ensures unauthorized users cannot run local commands;
+- **Instant task cancellation**: Send `/stop` anytime to immediately terminate running agent process trees.
+
+### 5. ⚡ Sub-Second Decision Speed with Zero Extra Token Costs
+- **Single arbiter + Local IPC relay**: A single primary bot evaluates incoming messages and broadcasts decisions over high-speed Unix sockets—zero redundant model calls;
+- **Out-of-the-box ultrafast decision models**: Native support for TypeSafe Jev (100–200ms latency, free output tokens) with one-line fallback to Google Gemini Flash-Lite;
+- **Plaintext configuration with hot-reloading**: All aliases, roles, and routing criteria live in JSON and Markdown rules, hot-reloading without daemon restarts.
 
 ---
 
-## 🤖 Autonomous Routing (Zero-@ Perception & Multi-Bot Collaboration)
+## 🧱 Architecture Reference: Core vs Templates
 
-In natural group conversations, constantly typing `@bot` creates friction. GroupConnect features an **Autonomous Routing Engine** that allows multiple specialized bots to listen and selectively awaken without being explicitly mentioned:
-
-```text
-Incoming Message
-       │
-       ├─ L0: Physical Noise Filter (0-Token)
-       │      Empty text, pure emojis, or standard acknowledgments ("ok", "got it") -> Drop
-       │
-        ├─ L1: Alias Direct Bypass (0-Token)
-        │      Single alias match ("assistant", "helper") -> Instant wake
-        │      Multiple aliases -> Defer to L2 (dispatcher vs. parallel ambiguity)
-        │      (Protected by regex against self-referencing and echoing)
-       │
-       └─ L2: Classifier Pipeline (Single Arbiter Decision)
-              Evaluates recent sliding context with TypeSafe Jev or Gemini Flash-Lite:
-              • Reply to Bot Question -> Target Bot (Immediate 1.0s window)
-              • Interpersonal Chitchat -> Silence (Drop)
-              • Imperative Instruction -> Target Bot (Immediate 1.0s window)
-              • Open Question/Query   -> Target Bot (Silence 4.0s window)
-```
-
-* **Single Arbiter + Symmetric Observers**: Exactly one primary bot evaluates incoming messages and broadcasts decisions via Unix domain socket IPC (`CrossBotRelay`). Zero redundant model calls.
-* **Dual Windows & Human Preemption**: Urgent commands trigger after a 1.0s window. Open questions wait for 4.0s of chat silence, leaving room for human members to discuss first. If another human speaks during the countdown, the bot's pending response is immediately cancelled.
-* **Pluggable Backends (Self-Describing Registry)**: Out-of-the-box support for **TypeSafe Jev** (specialized System-One decision model with sub-second latency and zero output token cost) and **Google Gemini Flash-Lite** as a fallback backend. The `classifier` block is a provider registry: `active` is the one-line master switch, and each entry under `providers` carries its own `engine` (`jev` structured / `gemini` free-text JSON), model, API key and engine-specific resources (`prompt_template` belongs to the gemini engine only).
-* **Zero Secrets in Code**: All aliases, role boundaries, the classifier registry and access lists live entirely outside the codebase in `autonomous_config.json`; shared decision wording resides in `rules_file` as the single source of truth consumed by every engine (see [`autonomous_config.example.json`](autonomous_config.example.json)), zero code intrusion.
+GroupConnect cleanly separates **Connection Layer Mechanics (Core)** from **Workspace Reference Patterns (Templates)**:
+* **Core (Chat ➔ Context ➔ Agent)**: Handles platform polling, zero-@ routing, sliding memory, file ingestion, and process scheduling;
+* **Templates (Workspace Presets)**: Optional reference setups in [`templates/`](templates/):
+  - 🏡 **[Family Assistant](templates/family_assistant/)**: Organizing personal files, health logs, and financial records;
+  - 💼 **[Team Ops Assistant](templates/team_ops_assistant/)**: Agile sprint boards, incident SOPs, and searchable monthly archives.
 
 ---
 
@@ -143,7 +130,7 @@ Incoming Message
 
 | Platform (`platform`) | Status | Required Setting for Silent Group Context | Silent Context & Zero-@ Support |
 | :--- | :--- | :--- | :--- |
-| **`telegram`** | 🟢 Built-in | Set `/setprivacy -> Disable` in `@BotFather`. | 🌟 Full (Zero-@ Autonomous Wake enabled) |
+| **`telegram`** | 🟢 Built-in | Set `/setprivacy -> Disable` in `@BotFather`. | 🌟 Full (Zero-@ Autonomous Wake enabled; built-in auto-Telegraph Instant View cards for long text/tables) |
 | **`discord`** | 🟢 Built-in | Enable `Message Content Intent` in Discord Developer Portal. | 🌟 Full (Zero-@ Autonomous Wake enabled) |
 | **`slack`** | 🟢 Built-in | Subscribe to `message.channels` and `app_mention` in Slack App. | 🌟 Full (Zero-@ Autonomous Wake enabled) |
 | **`feishu`** (Lark) | 🟢 Built-in | Request `im:message.group_msg` permission in Feishu Developer Console. | 🌟 Full (Zero-@ Autonomous Wake enabled) |
