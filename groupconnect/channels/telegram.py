@@ -365,7 +365,8 @@ class TelegramChannel(BaseChannel):
         caller can fall back to raw coordinates.
         """
         opts = getattr(self.config, "channel_options", {})
-        key = opts.get("amap_key") or os.environ.get("AMAP_WEB_KEY", "")
+        # Secret credentials prioritize AMAP_WEB_KEY environment variable (Single Source of Truth)
+        key = os.environ.get("AMAP_WEB_KEY", "") or opts.get("amap_key", "")
         if not key or lat is None or lon is None:
             return ""
         try:
