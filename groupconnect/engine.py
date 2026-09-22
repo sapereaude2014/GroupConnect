@@ -141,6 +141,7 @@ class GroupConnectEngine:
         self.chat_queues: Dict[Any, asyncio.Queue] = {}
         self.chat_tasks: Dict[Any, asyncio.Task] = {}
         self._triggered_msg_ids: collections.deque = collections.deque(maxlen=200)
+        self._backup_running: bool = False
         self.is_running = False
 
         # 5. Autonomous Routing (免@自主唤醒: single-arbiter + symmetric observers)
@@ -229,7 +230,8 @@ class GroupConnectEngine:
 
         await self.relay.start()
         reaper_task = asyncio.create_task(self._reaper_loop())
-        backup_task = asyncio.create_task(self._backup_scheduler_loop()) if self.config.engine_type == "teleagent" else None
+        is_arbiter = (self.autonomous.is_arbiter if self.autonomous else True)
+        backup_task = asyncio.create_task(self._backup_scheduler_loop()) if is_arbiter else None
         try:
             await self.channel.start()
         finally:
@@ -404,7 +406,9 @@ class GroupConnectEngine:
         clean_query = re.sub(rf"@{self.config.bot_username}\b", "", raw_text, flags=re.IGNORECASE).strip()
 
         # 3. Preemptive /stop Intercept (Bypasses queue & immediately halts in-flight task)
-        cmd, target_bot, _ = parse_bot_command(clean_query if clean_query else raw_text, self.config.bot_username)
+        cmd, target_bot, _ = parse_bot_command(raw_text or "", self.config.bot_username)
+        if not cmd and clean_query:
+            cmd, target_bot, _ = parse_bot_command(clean_query, self.config.bot_username)
         if cmd == "stop" and msg.is_triggered:
             logger.info(f"Received preemptive /stop command for chat {chat_id}")
             self.adapter.terminate(chat_id)
@@ -617,6 +621,14 @@ class GroupConnectEngine:
         session = self.context_mgr.get_session(chat_id)
         cid = session.get("conversation_id")
 
+        # Determine whether command was explicitly targeted at this bot
+        _, target_bot, _ = parse_bot_command(msg.text or "", self.config.bot_username)
+        is_explicitly_targeted = (
+            (target_bot is not None and target_bot.lower() == self.config.bot_username.lower())
+            or (f"@{self.config.bot_username}".lower() in (msg.text or "").lower())
+            or (msg.chat_type == "private")
+        )
+
         # Built-in Slash Commands
         if cmd in ("clear", "new", "reset"):
             self.context_mgr.reset_session(chat_id)
@@ -656,7 +668,13 @@ class GroupConnectEngine:
             await self.channel.send_reply(chat_id, help_text, reply_to_msg_id=msg.msg_id)
             return
         elif cmd in ("login", "vnc"):
-            if self.config.engine_type != "teleagent":
+            if self.config.engine_type not in ("teleagent", "tele-worker", "teleworker"):
+                if is_explicitly_targeted:
+                    await self.channel.send_reply(
+                        chat_id,
+                        "ℹ️ TeleAgent 网页/VNC 登录仅由 @guaguahome_bot 负责，请向 @guaguahome_bot 发送 `/login` 指令。",
+                        reply_to_msg_id=msg.msg_id
+                    )
                 return
             script_path = os.path.expanduser("~/.local/share/TeleAgent/scripts/autologin.py")
             if os.path.isfile(script_path):
@@ -668,8 +686,18 @@ class GroupConnectEngine:
                 await self.channel.send_reply(chat_id, f"❌ 未找到登录脚本: {script_path}", reply_to_msg_id=msg.msg_id)
             return
         elif cmd in ("backup", "sync_backup"):
-            if self.config.engine_type != "teleagent":
+            is_arbiter = (self.autonomous.is_arbiter if getattr(self, "autonomous", None) else True)
+            if not is_explicitly_targeted and not is_arbiter:
                 return
+
+            if getattr(self, "_backup_running", False):
+                await self.channel.send_reply(
+                    chat_id,
+                    "⏳ 当前已有备份任务正在执行中，请勿重复触发，稍后会自动汇报结果。",
+                    reply_to_msg_id=msg.msg_id
+                )
+                return
+
             await self.channel.send_reply(
                 chat_id,
                 "📦 [管家备份] 收到小马哥指令！正在执行全量资产备份至三星 T7 固态盘，请稍候...",
@@ -677,6 +705,7 @@ class GroupConnectEngine:
             )
             backup_script = os.path.expanduser("~/.local/bin/guagua-backup")
             if os.path.isfile(backup_script):
+                self._backup_running = True
                 asyncio.create_task(
                     self._run_backup_command(chat_id, backup_script, reply_to_msg_id=msg.msg_id)
                 )
@@ -973,3 +1002,5 @@ class GroupConnectEngine:
                 )
         except Exception as e:
             logger.error(f"[BACKUP] Failed to execute backup script: {e}", exc_info=True)
+        finally:
+            self._backup_running = False
