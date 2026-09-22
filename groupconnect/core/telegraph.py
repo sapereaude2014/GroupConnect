@@ -210,8 +210,9 @@ _TABLE_BLOCK_RE = re.compile(
 def _find_token_file() -> Tuple[str, bool]:
     """Find existing token file or return preferred creation path."""
     custom_env = os.environ.get("TELEGRAPH_TOKEN_FILE")
-    if custom_env and os.path.exists(custom_env):
-        return custom_env, True
+    if custom_env:
+        p = os.path.expanduser(custom_env)
+        return p, os.path.exists(p)
 
     gc_path = os.path.expanduser("~/.config/groupconnect/telegraph_token.json")
     if os.path.exists(gc_path):
@@ -468,7 +469,8 @@ def extract_summary_and_title(
                 break
 
         if first_non_header:
-            clean = re.sub(r'^(?:好的|收到|主人)[，,：:\s]*', '', first_non_header)
+            clean = re.sub(r'^(?:[\u4e00-\u9fa5]{2,4}|[A-Za-z]{2,15})[，,：:\s]+', '', first_non_header)
+            clean = re.sub(r'^(?:好的|收到|主人|遵命)[，,：:\s]*', '', clean)
             clean = re.sub(r'^(?:已为您|已把|已将|正在为您|现为您|为您)[，,：:\s]*', '', clean)
             clauses = re.split(r'[，。！？；：\n]', clean)
             for clause in clauses:
