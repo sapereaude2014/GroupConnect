@@ -162,35 +162,5 @@ class TestOutboundTableRouting(unittest.IsolatedAsyncioTestCase):
             out = await tg.process_outbound_text(long_text, threshold=60)
         self.assertIn("https://telegra.ph/z", out)
 
-    async def test_explicit_tag_with_long_outside_re_publish(self):
-        # When explicit Telegraph tags are used but the remaining text after
-        # tag replacement still exceeds threshold, the whole thing should be
-        # re-published to Telegraph so chat keeps only a single link.
-        long_preamble = "这是一段很长的正文说明文字" * 10
-        body = f"{long_preamble}【Telegraph: 标题】标签内短内容【/Telegraph】"
-        with patch.object(
-            tg, "publish_to_telegraph", AsyncMock(return_value="https://telegra.ph/repub")
-        ) as mock_pub:
-            out = await tg.process_outbound_text(body, threshold=60)
-        # Should have been called at least twice: once for the tag, once for re-publish
-        self.assertGreaterEqual(mock_pub.await_count, 2)
-        self.assertIn("📄 [", out)
-        self.assertIn("https://telegra.ph/repub", out)
-        # The long preamble should NOT appear raw in chat
-        self.assertNotIn(long_preamble, out)
-
-    async def test_explicit_tag_with_short_outside_stays(self):
-        # When explicit Telegraph tags are used and remaining text is short,
-        # it stays in chat alongside the link.
-        short_preamble = "简短说明："
-        body = f"{short_preamble}【Telegraph: 标题】标签内详细内容说明【/Telegraph】"
-        with patch.object(
-            tg, "publish_to_telegraph", AsyncMock(return_value="https://telegra.ph/short")
-        ):
-            out = await tg.process_outbound_text(body, threshold=60)
-        self.assertIn("简短说明：", out)
-        self.assertIn("https://telegra.ph/short", out)
-
-
 if __name__ == "__main__":
     unittest.main()

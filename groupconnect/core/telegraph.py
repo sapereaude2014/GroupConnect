@@ -542,53 +542,16 @@ async def process_outbound_text(
 ) -> str:
     """
     Process outbound reply text:
-    1. If explicit 【Telegraph: Title】...【/Telegraph】 tags are found, publish each block.
-    2. If markdown tables are detected, publish the text to Telegraph, where
-       tables render as fullwidth-aligned preformatted code cards (Instant
-       View "black code block" style, aligned on every device); the chat
-       keeps only a concise summary + link.
-    3. Else if threshold > 0 and len(reply_text) > threshold, publish to Telegraph.
-    4. Graceful fallback on any failure returns original text (tables fall
+    1. If threshold > 0 and len(reply_text) > threshold, publish to Telegraph.
+       Tables within the body render as fullwidth-aligned preformatted code
+       cards (Instant View "black code block" style, aligned on every device).
+    2. Graceful fallback on any failure returns original text (tables fall
        back to the legacy inline monospace conversion).
     """
     if not reply_text:
         return reply_text
 
-    # 1. Explicit tag matching: 【Telegraph: 标题】内容【/Telegraph】 or [Telegraph: Title]...[/Telegraph]
-    tag_pattern = re.compile(
-        r"[【\[](?:telegraph|长文|文章)(?::\s*([^】\]\n]*))?[】\]]([\s\S]*?)[【\[]\/(?:telegraph|长文|文章)[】\]]",
-        re.IGNORECASE
-    )
-
-    matches = list(tag_pattern.finditer(reply_text))
-    if matches:
-        transformed = reply_text
-        for m in reversed(matches):
-            raw_title = (m.group(1) or "").strip()
-            body_content = m.group(2).strip()
-            _, auto_title = extract_summary_and_title(body_content, default_author=author_name)
-            title = raw_title or auto_title
-            url = await publish_to_telegraph(body_content, title=title, author_name=author_name)
-            if url:
-                replacement = f"📄 [{title}]({url})"
-                transformed = transformed[:m.start()] + replacement + transformed[m.end():]
-            else:
-                # If failed, unwrap tag and keep content
-                transformed = transformed[:m.start()] + body_content + transformed[m.end():]
-
-        # Re-check: if remaining text (after tag replacement) still exceeds
-        # threshold, publish the whole thing to Telegraph so chat only keeps
-        # a single link instead of long text + link side by side.
-        if threshold > 0 and len(transformed.strip()) > threshold:
-            _, title = extract_summary_and_title(transformed, default_author=author_name)
-            url = await publish_to_telegraph(transformed, title=title, author_name=author_name)
-            if url:
-                return f"📄 [{title}]({url})"
-            # If re-publish fails, fall through to blockquote fallback below
-
-        return transformed
-
-    # 2. Unified threshold: if text exceeds threshold, publish to Telegraph.
+    # 1. Unified threshold: if text exceeds threshold, publish to Telegraph.
     #    Tables are just a format within the body, not a separate scenario.
     #    If publishing fails, fall back to expandable blockquote.
     is_over_threshold = threshold > 0 and len(reply_text.strip()) > threshold

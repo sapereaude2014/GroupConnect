@@ -866,7 +866,7 @@ class GroupConnectEngine:
         else:
             session["conversation_id"] = None
 
-        # Outbound Text Processing (Telegraph auto-publisher for long text / tables / explicit tags)
+        # Outbound Text Processing (Telegraph auto-publisher for long text / tables)
         processed_reply_text = reply_text
         try:
             processed_reply_text = await process_outbound_text(
@@ -924,7 +924,7 @@ class GroupConnectEngine:
                     chat_id=chat_id,
                     chat_type=msg.chat_type,
                     msg_id=sent_msg_id or 0,
-                    text=processed_reply_text,
+                    text=reply_text,
                     hop_count=getattr(msg, "hop_count", 0)
                 )
             except Exception as e:
