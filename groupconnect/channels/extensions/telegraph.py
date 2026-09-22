@@ -422,110 +422,41 @@ def has_markdown_table(text: str) -> bool:
     return bool(re.search(r'\|[^\n]+\|\n\s*\|[-:\s|]+\|\n\s*\|[^\n]+\|', text))
 
 
-def extract_summary_and_title(
-    text: str,
-    default_author: str = "GroupConnect",
-    max_summary_len: int = 85
-) -> Tuple[str, str]:
+def extract_title(text: str, default_author: str = "GroupConnect") -> str:
     """
-    Extract a clean, meaningful title and introductory summary from Markdown text
-    suitable for previewing in chat alongside a Telegraph link.
+    Extract a clean, concise title from Markdown text for Telegraph publishing and chat link.
+    1. Check for Markdown headings (# or ##) in the first 3 lines.
+    2. Check for bracketed title tags (e.g. 【...】 or [...]).
+    3. Fallback to the first non-header sentence (truncated up to 30 chars).
+    4. Default fallback: f"{default_author} 详细汇报".
     """
-    lines = [line.strip() for line in text.strip().split("\n") if line.strip()]
+    lines = [line.strip() for line in (text or "").strip().split("\n") if line.strip()]
     if not lines:
-        return "已为您整理好相关详情，请查阅完整内容：", f"{default_author} 详细汇报"
+        return f"{default_author} 详细汇报"
 
-    # --- 1. Smart Title Extraction ---
-    title = None
-
-    # Check Markdown headings (# or ##)
+    # 1. Heading (# or ##) or bracketed header (【...】)
     for line in lines[:3]:
-        m = re.match(r'^#+\s+(.+)$', line)
+        m = re.match(r"^#+\s+(.+)$", line)
         if m:
-            title = m.group(1).strip()[:40]
-            break
-        m2 = re.match(r'^[【\[](.+?)[】\]]$', line)
+            return m.group(1).strip()[:40]
+        m2 = re.match(r"^[【\[](.+?)[】\]]$", line)
         if m2 and len(m2.group(1).strip()) <= 30:
-            title = m2.group(1).strip()
-            break
+            return m2.group(1).strip()
 
-    # Search for quoted work or topic in first few lines (e.g. 《黑神话：悟空》, “...”)
-    if not title:
-        first_few_lines = "\n".join(lines[:3])
-        m_book = re.search(r'《([^》]+)》', first_few_lines)
-        if m_book:
-            core_topic = m_book.group(1).strip()
-            if any(k in first_few_lines for k in ["规划", "方案", "行程", "路线", "推荐", "汇总"]):
-                title = f"《{core_topic}》规划方案与推荐"
-            elif len(core_topic) <= 20:
-                title = f"《{core_topic}》专题汇总"
-
-    # Conversational opening sentence extraction
-    if not title:
-        first_non_header = ""
-        for line in lines:
-            if not line.startswith('#') and not line.startswith('|') and not line.startswith('-') and not line.startswith('`'):
-                first_non_header = line
-                break
-
-        if first_non_header:
-            clean = re.sub(r'^(?:[\u4e00-\u9fa5]{2,4}|[A-Za-z]{2,15})[，,：:\s]+', '', first_non_header)
-            clean = re.sub(r'^(?:好的|收到|主人|遵命)[，,：:\s]*', '', clean)
-            clean = re.sub(r'^(?:已为您|已把|已将|正在为您|现为您|为您)[，,：:\s]*', '', clean)
-            clauses = re.split(r'[，。！？；：\n]', clean)
-            for clause in clauses:
-                clause = clause.strip()
-                if 4 <= len(clause) <= 30 and '|' not in clause:
-                    title = clause
-                    break
-
-    if not title:
-        title = f"{default_author} 详细汇报"
-
-    # --- 2. Smart Sentence-Boundary Summary Extraction ---
-    clean_lines = []
+    # 2. First readable conversational sentence
     for line in lines:
-        if line.startswith('|') or line.startswith('```') or line.startswith('---'):
-            break
-        if line.startswith('#'):
-            clean_lines.append(line.lstrip('#').strip())
-        else:
-            clean_lines.append(line)
-
-    full_candidate = "\n".join(clean_lines).strip()
-    if not full_candidate:
-        return "已为您整理好相关详情，请点击查阅完整内容：", title
-
-    # Split into clean sentences by punctuation
-    sentences = re.split(r'(?<=[。！？\n])', full_candidate)
-    chosen = []
-    curr_len = 0
-    for s in sentences:
-        s = s.strip()
-        if not s:
+        if line.startswith(("#", "|", "-", "*", "`", ">")):
             continue
-        if curr_len + len(s) <= max_summary_len:
-            chosen.append(s)
-            curr_len += len(s)
-        else:
-            # If nothing chosen yet, take the first sentence truncated cleanly at comma
-            if not chosen:
-                clauses = re.split(r'(?<=[，；：])', s)
-                for c in clauses:
-                    if curr_len + len(c) <= max_summary_len:
-                        chosen.append(c)
-                        curr_len += len(c)
-                    else:
-                        break
-                if not chosen:
-                    chosen.append(s[:max_summary_len].rstrip('，、；') + '…')
-            break
+        clauses = re.split(r"[，。！？；：\n]", line)
+        for clause in clauses:
+            c = clause.strip()
+            if 4 <= len(c) <= 30 and "|" not in c:
+                return c
+        if len(line) <= 30:
+            return line
+        return line[:30].rstrip("，、；： ") + "…"
 
-    summary = "".join(chosen).strip()
-    if not summary or summary.startswith('|'):
-        summary = "已为您整理好相关详情，请点击查阅完整内容："
-
-    return summary, title
+    return f"{default_author} 详细汇报"
 
 
 async def process_outbound_text(
@@ -550,7 +481,7 @@ async def process_outbound_text(
     is_over_threshold = threshold > 0 and len(reply_text.strip()) > threshold
 
     if is_over_threshold:
-        _, title = extract_summary_and_title(reply_text, default_author=author_name)
+        title = extract_title(reply_text, default_author=author_name)
         url = await publish_to_telegraph(reply_text, title=title, author_name=author_name)
         if url:
             return f"📄 [{title}]({url})"

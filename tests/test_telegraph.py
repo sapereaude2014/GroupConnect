@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 from groupconnect.channels.extensions import telegraph as tg
 from groupconnect.channels.extensions.telegraph import (
     _to_fullwidth,
+    extract_title,
     has_markdown_table,
     markdown_to_nodes,
     table_rows_to_preformatted_text,
@@ -161,6 +162,28 @@ class TestOutboundTableRouting(unittest.IsolatedAsyncioTestCase):
         ):
             out = await tg.process_outbound_text(long_text, threshold=60)
         self.assertIn("https://telegra.ph/z", out)
+
+
+class TestExtractTitle(unittest.TestCase):
+    def test_extract_markdown_h1(self):
+        text = "# 2026年三亚度假行程规划\n\n详细安排如下：\n- 第一天：抵达海棠湾"
+        self.assertEqual(extract_title(text), "2026年三亚度假行程规划")
+
+    def test_extract_markdown_h2(self):
+        text = "## 家庭资产月度汇总与分析\n\n以下是本月开销表："
+        self.assertEqual(extract_title(text), "家庭资产月度汇总与分析")
+
+    def test_extract_bracketed_title(self):
+        text = "【九月份家庭开支报表】\n\n本月合计支出 12,500 元。"
+        self.assertEqual(extract_title(text), "九月份家庭开支报表")
+
+    def test_extract_conversational_first_sentence(self):
+        text = "已为您整理好相关调研数据，主要包括以下几个核心维度。"
+        self.assertEqual(extract_title(text), "已为您整理好相关调研数据")
+
+    def test_extract_fallback_on_empty(self):
+        self.assertEqual(extract_title("", default_author="管家"), "管家 详细汇报")
+
 
 if __name__ == "__main__":
     unittest.main()

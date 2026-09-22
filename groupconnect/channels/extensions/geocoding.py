@@ -79,3 +79,4 @@ async def resolve_address(
         logger.warning(f"Amap regeo failed for ({lat}, {lon}): {e}")
 
     return ""
+
