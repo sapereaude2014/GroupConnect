@@ -911,7 +911,7 @@ class GroupConnectEngine:
         self.context_mgr.record_message(
             chat_id=chat_id,
             sender_name=f"{self.config.bot_name} (@{self.config.bot_username})",
-            text=processed_reply_text,
+            text=reply_text,
             msg_id=sent_msg_id,
             is_bot_reply=True,
             bot_username=self.config.bot_username
