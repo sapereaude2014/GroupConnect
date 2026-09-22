@@ -33,8 +33,12 @@ class GatewayConfig:
         self.opencode_bin: str = data.get("opencode_bin", "opencode")
         self.teleworker_bin: str = data.get("teleworker_bin", "tele-worker")
 
-        # Location Services (Amap regeo for inbound location messages; AMAP_WEB_KEY env as fallback)
-        self.amap_key: str = str(data.get("amap_key", "")) or os.environ.get("AMAP_WEB_KEY", "")
+        # Channel-Specific Platform Options (e.g. auto_telegraph_threshold, amap_key)
+        self.channel_options: Dict[str, Any] = dict(data.get("channel_options", {}))
+
+        # Soul Persona Settings (Custom soul path or directory)
+        self.soul_path: Optional[str] = data.get("soul_path")
+        self.souls_dir: Optional[str] = data.get("souls_dir")
 
         # Context & Window Settings
         self.max_history_len: int = int(data.get("max_history_len", 30))
@@ -43,10 +47,6 @@ class GatewayConfig:
         self.session_idle_timeout_mins: int = int(data.get("session_idle_timeout_mins", 30))
         self.max_chunk_size: int = int(data.get("max_chunk_size", 3800))
         self.typing_interval_secs: float = float(data.get("typing_interval_secs", 4.0))
-
-        # Auto-Telegraph Settings (0 = disabled, >0 = char threshold for auto-publishing to Telegraph)
-        self.auto_telegraph_threshold: int = int(data.get("auto_telegraph_threshold", 60))
-        self.telegraph_author_name: str = str(data.get("telegraph_author_name", self.bot_name))
 
         # Security Allowlist Gatekeeper (Secure-by-Default)
         self.allow_open_access: bool = bool(data.get("allow_open_access", False))

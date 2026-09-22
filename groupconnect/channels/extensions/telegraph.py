@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import httpx
 
-logger = logging.getLogger("groupconnect.core.telegraph")
+logger = logging.getLogger("groupconnect.channels.extensions.telegraph")
 
 ALLOWED_TAGS = {
     'a', 'aside', 'b', 'blockquote', 'br', 'code', 'em',

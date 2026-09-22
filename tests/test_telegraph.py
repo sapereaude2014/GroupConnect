@@ -5,8 +5,8 @@ import unicodedata
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from groupconnect.core import telegraph as tg
-from groupconnect.core.telegraph import (
+from groupconnect.channels.extensions import telegraph as tg
+from groupconnect.channels.extensions.telegraph import (
     _to_fullwidth,
     has_markdown_table,
     markdown_to_nodes,

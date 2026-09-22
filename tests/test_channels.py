@@ -55,7 +55,9 @@ class TestTelegramChannelOutbound(unittest.IsolatedAsyncioTestCase):
         cfg = GatewayConfig({
             "platform": "telegram",
             "bot_token": "mock_token",
-            "auto_telegraph_threshold": 60
+            "channel_options": {
+                "auto_telegraph_threshold": 60
+            }
         })
         channel = TelegramChannel(cfg, AsyncMock())
         channel._api_call = AsyncMock(return_value={"ok": True, "result": {"message_id": 123}})
@@ -74,7 +76,9 @@ class TestTelegramChannelOutbound(unittest.IsolatedAsyncioTestCase):
         cfg = GatewayConfig({
             "platform": "telegram",
             "bot_token": "mock_token",
-            "auto_telegraph_threshold": 20
+            "channel_options": {
+                "auto_telegraph_threshold": 20
+            }
         })
         channel = TelegramChannel(cfg, AsyncMock())
         channel._api_call = AsyncMock(return_value={"ok": True, "result": {"message_id": 456}})
@@ -96,7 +100,9 @@ class TestTelegramChannelOutbound(unittest.IsolatedAsyncioTestCase):
         cfg = GatewayConfig({
             "platform": "telegram",
             "bot_token": "mock_token",
-            "auto_telegraph_threshold": 20
+            "channel_options": {
+                "auto_telegraph_threshold": 20
+            }
         })
         channel = TelegramChannel(cfg, AsyncMock())
         channel._api_call = AsyncMock(return_value={"ok": True, "result": {"message_id": 789}})

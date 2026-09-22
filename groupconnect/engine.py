@@ -41,9 +41,16 @@ from groupconnect.routing import AutonomousController, AutonomousConfig
 logger = logging.getLogger("groupconnect.engine")
 
 
-def _load_soul(workspace_dir: str, bot_username: str) -> str:
-    """Load specific bot soul from .agents/souls/{bot_username}.md if present."""
-    soul_path = os.path.join(workspace_dir, ".agents", "souls", f"{bot_username}.md")
+def _load_soul(config: GatewayConfig) -> str:
+    """Load specific bot soul from config.soul_path, config.souls_dir, or default workspace .agents/souls/{bot_username}.md."""
+    bot_username = config.bot_username
+    if getattr(config, "soul_path", None):
+        soul_path = os.path.expanduser(config.soul_path)
+    elif getattr(config, "souls_dir", None):
+        soul_path = os.path.join(os.path.expanduser(config.souls_dir), f"{bot_username}.md")
+    else:
+        soul_path = os.path.join(config.workspace_dir, ".agents", "souls", f"{bot_username}.md")
+
     if os.path.isfile(soul_path):
         try:
             with open(soul_path, "r", encoding="utf-8") as f:
@@ -358,7 +365,7 @@ class GroupConnectEngine:
             sender_name=f"{sender_name} (@{sender_bot})",
             from_user={"id": 0, "first_name": sender_name, "username": sender_bot, "is_bot": True},
             text=text,
-            reply_to_msg_id=None,  # bot-relay messages are invisible on Telegram, reply-to would 400
+            reply_to_msg_id=None,  # Standalone relayed broadcast event
             reply_preview="",
             is_triggered=is_triggered,
             attachments=[],
@@ -756,7 +763,7 @@ class GroupConnectEngine:
         # Prepare Soul Prompt Section (Session Initialization only)
         soul_section = ""
         if cid is None:
-            soul_section = _load_soul(self.config.workspace_dir, self.config.bot_username)
+            soul_section = _load_soul(self.config)
 
         # Build Full Prompt with Context
         if not is_group:

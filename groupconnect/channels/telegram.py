@@ -17,7 +17,7 @@ import httpx
 from groupconnect.channels.base import BaseChannel, ChannelField, InboundMessage, register_channel
 from groupconnect.core.command import parse_bot_command
 from groupconnect.core.config import GatewayConfig
-from groupconnect.core.telegraph import process_outbound_text
+from groupconnect.channels.extensions.telegraph import process_outbound_text
 
 logger = logging.getLogger("groupconnect.channel.telegram")
 
@@ -172,8 +172,9 @@ class TelegramChannel(BaseChannel):
         else:
             # Outbound Text Processing (Telegraph auto-publisher for long text / tables)
             try:
-                threshold = getattr(self.config, "auto_telegraph_threshold", 60)
-                author_name = getattr(self.config, "telegraph_author_name", getattr(self.config, "bot_name", "GroupConnect"))
+                opts = getattr(self.config, "channel_options", {})
+                threshold = opts.get("auto_telegraph_threshold", 60)
+                author_name = opts.get("telegraph_author_name", getattr(self.config, "bot_name", "GroupConnect"))
                 text = await process_outbound_text(
                     reply_text=text,
                     threshold=threshold,
@@ -363,7 +364,8 @@ class TelegramChannel(BaseChannel):
         converted to GCJ-02 before querying. Returns "" on any failure so the
         caller can fall back to raw coordinates.
         """
-        key = getattr(self.config, "amap_key", "")
+        opts = getattr(self.config, "channel_options", {})
+        key = opts.get("amap_key") or os.environ.get("AMAP_WEB_KEY", "")
         if not key or lat is None or lon is None:
             return ""
         try:
