@@ -250,7 +250,7 @@ When deploying multiple specialized bots in the same group, coordinate responses
 * `/help` — Display help information and registered custom commands.
 
 ### Declarative Custom Commands (`custom_commands`)
-Easily extend your bot with custom shell scripts, operational tooling, or periodic background tasks declared in `config.json` without modifying GroupConnect core. GroupConnect dynamically synchronizes declared commands with platform menus (e.g. Telegram `setMyCommands`):
+GroupConnect supports declarative custom commands and background tasks configured directly in `config.json`. On startup, the gateway dynamically registers declared commands with platform menus (e.g. Telegram `setMyCommands`):
 
 ```json
 "custom_commands": [

@@ -248,7 +248,7 @@ bash scripts/daemon.sh stop config.telegram.json
 * `/help` — 查看使用指南与已注册的自定义命令。
 
 ### 声明式自定义指令与定时任务 (`custom_commands`)
-无需修改 GroupConnect 核心代码，直接在 `config.json` 中声明自定义运维脚本或后台定时任务。启动时网关会自动向 Telegram API（`setMyCommands`）同步专属指令菜单：
+支持在 `config.json` 中声明自定义运维脚本与后台定时任务。启动时网关会自动向平台菜单（如 Telegram API `setMyCommands`）同步各实例专属指令：
 
 ```json
 "custom_commands": [
