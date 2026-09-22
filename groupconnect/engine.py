@@ -141,7 +141,12 @@ class GroupConnectEngine:
         self.chat_queues: Dict[Any, asyncio.Queue] = {}
         self.chat_tasks: Dict[Any, asyncio.Task] = {}
         self._triggered_msg_ids: collections.deque = collections.deque(maxlen=200)
-        self._backup_running: bool = False
+        self._running_custom_commands: Set[str] = set()
+        self._custom_commands_map: Dict[str, Dict[str, Any]] = {
+            str(c.get("command", "")).strip().lower().lstrip("/"): c
+            for c in getattr(config, "custom_commands", [])
+            if c.get("command")
+        }
         self.is_running = False
 
         # 5. Autonomous Routing (免@自主唤醒: single-arbiter + symmetric observers)
@@ -230,14 +235,15 @@ class GroupConnectEngine:
 
         await self.relay.start()
         reaper_task = asyncio.create_task(self._reaper_loop())
+        has_schedules = any("schedule" in c for c in getattr(self.config, "custom_commands", []))
         is_arbiter = (self.autonomous.is_arbiter if self.autonomous else True)
-        backup_task = asyncio.create_task(self._backup_scheduler_loop()) if is_arbiter else None
+        scheduler_task = asyncio.create_task(self._scheduled_tasks_loop()) if (has_schedules and is_arbiter) else None
         try:
             await self.channel.start()
         finally:
             reaper_task.cancel()
-            if backup_task:
-                backup_task.cancel()
+            if scheduler_task:
+                scheduler_task.cancel()
             for task in self.chat_tasks.values():
                 if not task.done():
                     task.cancel()
@@ -255,53 +261,62 @@ class GroupConnectEngine:
             except Exception as e:
                 logger.warning(f"Error in reaper loop: {e}")
 
-    async def _backup_scheduler_loop(self) -> None:
-        """Weekly scheduled background backup to Samsung T7 (runs Sundays at 04:xx AM)."""
-        last_run_day = ""
+    async def _scheduled_tasks_loop(self) -> None:
+        """Generic scheduled background runner for custom_commands with 'schedule' config."""
+        last_run_keys: Set[str] = set()
         while self.is_running:
             try:
                 await asyncio.sleep(1800)  # check every 30 mins
                 now = datetime.now()
-                # Run weekly on Sunday (weekday 6) at 04:xx AM
-                if now.weekday() == 6 and now.hour == 4:
-                    today_str = now.strftime("%Y%m%d")
-                    if today_str != last_run_day:
-                        last_run_day = today_str
-                        backup_script = os.path.expanduser("~/.local/bin/guagua-backup")
-                        if os.path.isfile(backup_script):
-                            logger.info("[BACKUP] Triggering scheduled Sunday weekly backup...")
+                today_str = now.strftime("%Y%m%d")
+                for cmd_cfg in getattr(self.config, "custom_commands", []):
+                    sched = cmd_cfg.get("schedule")
+                    if not isinstance(sched, dict):
+                        continue
+                    sched_weekday = sched.get("weekday")
+                    sched_hour = sched.get("hour")
+                    if sched_weekday is not None and now.weekday() != sched_weekday:
+                        continue
+                    if sched_hour is not None and now.hour != sched_hour:
+                        continue
+                    cmd_name = str(cmd_cfg.get("command", "")).strip().lower()
+                    run_key = f"{cmd_name}_{today_str}_{sched_hour}"
+                    if run_key not in last_run_keys:
+                        last_run_keys.add(run_key)
+                        logger.info(f"[SCHEDULER] Triggering scheduled task '{cmd_name}'...")
+                        script = os.path.expanduser(cmd_cfg.get("script", ""))
+                        if os.path.isfile(script):
                             proc = await asyncio.create_subprocess_exec(
-                                backup_script,
+                                script,
                                 stdout=asyncio.subprocess.PIPE,
                                 stderr=asyncio.subprocess.PIPE
                             )
                             stdout, stderr = await proc.communicate()
                             if proc.returncode != 0:
                                 err_tail = (stderr or b"").decode("utf-8", "replace").strip()[-300:]
-                                logger.error(f"[BACKUP] Weekly backup FAILED (rc={proc.returncode}): {err_tail}")
-                                await self._notify_backup_failure(proc.returncode, err_tail)
+                                logger.error(f"[SCHEDULER] Scheduled task '{cmd_name}' failed (rc={proc.returncode}): {err_tail}")
+                                await self._notify_task_failure(cmd_name, proc.returncode, err_tail)
                         else:
-                            logger.error(f"[BACKUP] Backup script missing: {backup_script}")
-                            await self._notify_backup_failure(-1, f"备份脚本不存在: {backup_script}")
+                            logger.error(f"[SCHEDULER] Script missing for '{cmd_name}': {script}")
+                            await self._notify_task_failure(cmd_name, -1, f"脚本不存在: {script}")
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.warning(f"Error in backup scheduler loop: {e}")
+                logger.warning(f"Error in scheduler loop: {e}")
 
-    async def _notify_backup_failure(self, returncode: int, err_tail: str) -> None:
-        """Alert the family group when the weekly backup fails (never fail silently)."""
-        try:
-            chat_ids = list(self.config.allowed_chat_ids) if self.config.allowed_chat_ids else []
-            if not chat_ids:
-                return
-            text = (
-                f"⚠️ 周日凌晨自动备份失败 (exit={returncode})，请检查 T7 硬盘是否挂载/磁盘空间。"
-                f"\n错误摘要: {err_tail or '无输出'}"
-            )
-            for cid in chat_ids:
-                await self.channel.send_reply(cid, text)
-        except Exception as e:
-            logger.error(f"[BACKUP] Failed to deliver backup-failure alert to group: {e}")
+    async def _notify_task_failure(self, task_name: str, returncode: int, err_tail: str) -> None:
+        """Alert allowed chats when a scheduled task fails."""
+        alert_msg = (
+            f"⚠️ **[定时任务告警]** 任务 `{task_name}` 执行异常！\n\n"
+            f"- **退出码**: `{returncode}`\n"
+            f"- **错误摘要**: `{err_tail or '无输出'}`\n\n"
+            f"👉 请检查主机环境与脚本状态。"
+        )
+        for chat_id in getattr(self.config, "allowed_chat_ids", []):
+            try:
+                await self.channel.send_reply(chat_id, alert_msg)
+            except Exception as e:
+                logger.error(f"[SCHEDULER] Failed to deliver alert to {chat_id}: {e}")
 
     async def on_relay_event(self, event: Dict[str, Any]) -> None:
         """Handles cross-bot broadcast events received via local IPC."""
@@ -653,6 +668,12 @@ class GroupConnectEngine:
             await self.channel.send_reply(chat_id, status_text, reply_to_msg_id=msg.msg_id)
             return
         elif cmd in ("help", "start"):
+            custom_cmd_lines = ""
+            if self.config.custom_commands:
+                custom_cmd_lines = "\n" + "\n".join(
+                    f"• `/{c.get('command')}` - {c.get('description', '')}"
+                    for c in self.config.custom_commands if c.get("command")
+                )
             help_text = (
                 f"👋 Hello! I am **GroupConnect** (`@{self.config.bot_username}`).\n\n"
                 f"🎯 **Key Features**:\n"
@@ -663,54 +684,36 @@ class GroupConnectEngine:
                 f"• `/status` - View current session, engine, and buffer status\n"
                 f"• `/stop` - Immediately terminate in-flight generation\n"
                 f"• `/new` or `/clear` - Reset context and start fresh\n"
-                f"• `/help` - Show this guide"
+                f"• `/help` - Show this guide{custom_cmd_lines}"
             )
             await self.channel.send_reply(chat_id, help_text, reply_to_msg_id=msg.msg_id)
             return
-        elif cmd in ("login", "vnc"):
-            if self.config.engine_type not in ("teleagent", "tele-worker", "teleworker"):
-                if is_explicitly_targeted:
+        elif cmd in self._custom_commands_map:
+            cmd_cfg = self._custom_commands_map[cmd]
+            cmd_name = str(cmd_cfg.get("command", "")).strip().lower()
+            is_arbiter = (self.autonomous.is_arbiter if getattr(self, "autonomous", None) else True)
+
+            # If configured arbiter_only_on_broadcast, ignore untargeted group messages if not arbiter
+            if cmd_cfg.get("arbiter_only_on_broadcast", False):
+                if not is_explicitly_targeted and not is_arbiter:
+                    return
+
+            # Concurrency lock
+            if cmd_cfg.get("lock", False):
+                if cmd_name in self._running_custom_commands:
                     await self.channel.send_reply(
                         chat_id,
-                        "ℹ️ TeleAgent 网页/VNC 登录仅由 @guaguahome_bot 负责，请向 @guaguahome_bot 发送 `/login` 指令。",
+                        f"⏳ 指令 `/{cmd_name}` 正在执行中，请勿重复触发，稍后会自动汇报结果。",
                         reply_to_msg_id=msg.msg_id
                     )
-                return
-            script_path = os.path.expanduser("~/.local/share/TeleAgent/scripts/autologin.py")
-            if os.path.isfile(script_path):
-                force = "force" in (clean_query or "").lower()
-                asyncio.create_task(
-                    self._run_autologin_command(chat_id, script_path, force=force, reply_to_msg_id=msg.msg_id)
-                )
-            else:
-                await self.channel.send_reply(chat_id, f"❌ 未找到登录脚本: {script_path}", reply_to_msg_id=msg.msg_id)
-            return
-        elif cmd in ("backup", "sync_backup"):
-            is_arbiter = (self.autonomous.is_arbiter if getattr(self, "autonomous", None) else True)
-            if not is_explicitly_targeted and not is_arbiter:
-                return
+                    return
+                self._running_custom_commands.add(cmd_name)
 
-            if getattr(self, "_backup_running", False):
-                await self.channel.send_reply(
-                    chat_id,
-                    "⏳ 当前已有备份任务正在执行中，请勿重复触发，稍后会自动汇报结果。",
-                    reply_to_msg_id=msg.msg_id
-                )
-                return
-
-            await self.channel.send_reply(
-                chat_id,
-                "📦 [管家备份] 收到小马哥指令！正在执行全量资产备份至三星 T7 固态盘，请稍候...",
-                reply_to_msg_id=msg.msg_id
+            cmd_from_raw, _, raw_args = parse_bot_command(msg.text or "", self.config.bot_username)
+            effective_args = raw_args if cmd_from_raw else clean_query
+            asyncio.create_task(
+                self._run_custom_command(chat_id, cmd_cfg, effective_args, reply_to_msg_id=msg.msg_id)
             )
-            backup_script = os.path.expanduser("~/.local/bin/guagua-backup")
-            if os.path.isfile(backup_script):
-                self._backup_running = True
-                asyncio.create_task(
-                    self._run_backup_command(chat_id, backup_script, reply_to_msg_id=msg.msg_id)
-                )
-            else:
-                await self.channel.send_reply(chat_id, f"❌ 未找到备份脚本: {backup_script}", reply_to_msg_id=msg.msg_id)
             return
 
         # Prepare Attachments Prompt Section
@@ -927,80 +930,104 @@ class GroupConnectEngine:
             except Exception as e:
                 logger.warning(f"Failed to broadcast reply via relay: {e}")
 
-    async def _run_autologin_command(
-        self, chat_id: Any, script_path: str, force: bool = False, reply_to_msg_id: Any = None
+    async def _run_custom_command(
+        self,
+        chat_id: Any,
+        cmd_cfg: Dict[str, Any],
+        args: str,
+        reply_to_msg_id: Any = None
     ) -> None:
-        try:
-            logger.info(f"[LOGIN] Checking TeleAgent status for chat {chat_id}...")
-            # 1. Quick status check
-            check_proc = await asyncio.create_subprocess_exec(
-                "python3", script_path, "--check-only",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            await check_proc.communicate()
-            if check_proc.returncode == 0 and not force:
-                status_msg = (
-                    "✅ [管家状态]\n"
-                    "TeleAgent 核心引擎当前处于健康在线状态（ONLINE），会话健康在席，无需重复登录！\n\n"
-                    "💡 如遇界面卡死或需强制重新呼出 VNC 控制台，请输入：`/login force`"
+        cmd_name = str(cmd_cfg.get("command", "")).strip().lower()
+        script = os.path.expanduser(cmd_cfg.get("script", ""))
+        bot_name = self.config.bot_name
+
+        if not os.path.isfile(script):
+            await self.channel.send_reply(chat_id, f"❌ 未找到执行脚本: {script}", reply_to_msg_id=reply_to_msg_id)
+            if cmd_name in self._running_custom_commands:
+                self._running_custom_commands.remove(cmd_name)
+            return
+
+        # 1. Optional check-only pre-flight inspection
+        check_args = cmd_cfg.get("check_args")
+        force_arg = cmd_cfg.get("force_arg")
+        force_requested = bool(force_arg and force_arg in args) or ("force" in (args or "").lower())
+        if check_args and not force_requested:
+            try:
+                check_exec_args = [script] + list(check_args)
+                check_proc = await asyncio.create_subprocess_exec(
+                    *check_exec_args,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
                 )
-                await self.channel.send_reply(chat_id, status_msg, reply_to_msg_id=reply_to_msg_id)
-                return
+                await check_proc.communicate()
+                if check_proc.returncode == 0:
+                    check_msg = cmd_cfg.get("check_success_message")
+                    if check_msg:
+                        msg_text = check_msg.format(bot_name=bot_name, command=cmd_name)
+                        await self.channel.send_reply(chat_id, msg_text, reply_to_msg_id=reply_to_msg_id)
+                        if cmd_name in self._running_custom_commands:
+                            self._running_custom_commands.remove(cmd_name)
+                        return
+            except Exception as e:
+                logger.warning(f"[CUSTOM_CMD] Pre-check failed for '{cmd_name}': {e}")
 
-            # 2. Needs login or force requested
-            await self.channel.send_reply(
-                chat_id,
-                "🚀 [管家指令] 收到指令！正在准备 TeleAgent 登录环境并拉起 VNC 控制台...",
-                reply_to_msg_id=reply_to_msg_id
-            )
-            cmd_args = ["python3", script_path, "--timeout", "600"]
-            if force:
-                cmd_args.append("--force")
+        # 2. Optional immediate acknowledgement message
+        ack_tmpl = cmd_cfg.get("ack_message")
+        if ack_tmpl:
+            ack_text = ack_tmpl.format(bot_name=bot_name, command=cmd_name)
+            await self.channel.send_reply(chat_id, ack_text, reply_to_msg_id=reply_to_msg_id)
 
+        # 3. Build execution arguments
+        cmd_args = [script]
+        if cmd_cfg.get("default_args"):
+            cmd_args.extend(list(cmd_cfg.get("default_args")))
+        if force_requested and force_arg:
+            if force_arg not in cmd_args:
+                cmd_args.append(force_arg)
+        elif cmd_cfg.get("pass_args", True) and args:
+            for part in args.split():
+                if part not in cmd_args:
+                    cmd_args.append(part)
+
+        logger.info(f"[CUSTOM_CMD] Executing '{cmd_name}' ({cmd_args}) for chat {chat_id}...")
+        start_ts = time.time()
+        try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd_args,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
             stdout, stderr = await proc.communicate()
-            if proc.returncode == 0:
-                logger.info("[LOGIN] Autologin script completed successfully.")
-            else:
-                err_msg = stderr.decode(errors="ignore").strip()
-                logger.warning(f"[LOGIN] Autologin exited with code {proc.returncode}: {err_msg}")
-        except Exception as e:
-            logger.error(f"[LOGIN] Failed to execute autologin script: {e}", exc_info=True)
-
-    async def _run_backup_command(
-        self, chat_id: Any, script_path: str, reply_to_msg_id: Any = None
-    ) -> None:
-        try:
-            logger.info(f"[BACKUP] Executing backup script for chat {chat_id}...")
-            start_ts = time.time()
-            proc = await asyncio.create_subprocess_exec(
-                script_path,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            stdout, stderr = await proc.communicate()
             duration = max(1, int(time.time() - start_ts))
+            out_str = (stdout or b"").decode(errors="ignore").strip()
+            err_str = (stderr or b"").decode(errors="ignore").strip()
+
+            format_kwargs = {
+                "bot_name": bot_name,
+                "duration": duration,
+                "stdout": out_str,
+                "stderr": err_str,
+                "returncode": proc.returncode,
+                "command": cmd_name
+            }
+
             if proc.returncode == 0:
-                report = (
-                    f"✅ [管家报告 · 备份完成]\n"
-                    f"全量资产已成功备份至三星 T7 固态盘（耗时 {duration}s）！\n\n"
-                    f"• 📁 **家庭档案**：已完成 1:1 实时增量镜像（`T7/mama_family_files`）\n"
-                    f"• 🗜️ **核心配置**：已生成轻量快照单包（保留最新 3 份历史，自动轮转）\n"
-                    f"• 💾 **存储状态**：三星 T7 局域网物理冷备在席"
-                )
-                await self.channel.send_reply(chat_id, report, reply_to_msg_id=reply_to_msg_id)
+                success_tmpl = cmd_cfg.get("success_message")
+                if success_tmpl:
+                    reply_text = success_tmpl.format(**format_kwargs)
+                else:
+                    reply_text = out_str or f"✅ 指令 `{cmd_name}` 执行完成（耗时 {duration}s）。"
+                await self.channel.send_reply(chat_id, reply_text, reply_to_msg_id=reply_to_msg_id)
             else:
-                err_msg = stderr.decode(errors="ignore").strip()
-                await self.channel.send_reply(
-                    chat_id, f"❌ [管家警报] 备份执行失败 (Exit {proc.returncode}): {err_msg}",
-                    reply_to_msg_id=reply_to_msg_id
-                )
+                error_tmpl = cmd_cfg.get("error_message")
+                if error_tmpl:
+                    reply_text = error_tmpl.format(**format_kwargs)
+                else:
+                    reply_text = f"❌ 指令 `{cmd_name}` 执行失败 (Exit {proc.returncode}): {err_str or out_str}"
+                await self.channel.send_reply(chat_id, reply_text, reply_to_msg_id=reply_to_msg_id)
         except Exception as e:
-            logger.error(f"[BACKUP] Failed to execute backup script: {e}", exc_info=True)
+            logger.error(f"[CUSTOM_CMD] Failed to execute '{cmd_name}': {e}", exc_info=True)
+            await self.channel.send_reply(chat_id, f"❌ 执行指令 `{cmd_name}` 时出错: {e}", reply_to_msg_id=reply_to_msg_id)
         finally:
-            self._backup_running = False
+            if cmd_name in self._running_custom_commands:
+                self._running_custom_commands.remove(cmd_name)

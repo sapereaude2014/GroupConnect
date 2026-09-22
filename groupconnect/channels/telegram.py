@@ -518,19 +518,24 @@ class TelegramChannel(BaseChannel):
             {"command": "status", "description": "View session, engine, and buffer status"},
             {"command": "stop", "description": "Immediately terminate in-flight generation"},
             {"command": "new", "description": "Reset context and start fresh"},
-            {"command": "backup", "description": "Backup all assets and configs to Samsung T7 SSD"},
             {"command": "help", "description": "Show usage guide and available commands"},
         ]
         commands_zh = [
             {"command": "status", "description": "查看当前会话、引擎与滑动窗口状态"},
             {"command": "stop", "description": "立即打断当前正在生成的任务"},
             {"command": "new", "description": "重置上下文并开启全新会话"},
-            {"command": "backup", "description": "执行全量资产备份至三星T7固态盘"},
-            {"command": "help", "description": "查看管家使用指南与指令说明"},
+            {"command": "help", "description": "查看使用指南与指令说明"},
         ]
-        if getattr(self.config, "engine_type", "") in ("teleagent", "tele-worker", "teleworker"):
-            commands_en.insert(3, {"command": "login", "description": "Prepare TeleAgent login form and start VNC console"})
-            commands_zh.insert(3, {"command": "login", "description": "准备TeleAgent登录环境并开启VNC控制台"})
+
+        # Dynamically append custom slash commands defined in bot config
+        for c in getattr(self.config, "custom_commands", []):
+            cmd_name = str(c.get("command", "")).strip().lstrip("/")
+            if not cmd_name:
+                continue
+            desc_zh = str(c.get("description", cmd_name))
+            desc_en = str(c.get("description_en", desc_zh))
+            commands_en.append({"command": cmd_name, "description": desc_en})
+            commands_zh.append({"command": cmd_name, "description": desc_zh})
         try:
             await self._api_call("setMyCommands", commands=commands_en)
             await self._api_call("setMyCommands", commands=commands_zh, language_code="zh")

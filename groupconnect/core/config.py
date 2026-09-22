@@ -69,6 +69,9 @@ class GatewayConfig:
         # Autonomous Routing (免@自主唤醒; shared config across instances)
         self.autonomous_config_path: str = str(data.get("autonomous_config_path", ""))
 
+        # Custom Slash Commands & Scheduled Tasks
+        self.custom_commands: List[Dict[str, Any]] = list(data.get("custom_commands", []))
+
     @classmethod
     def from_file(cls, path: str) -> "GatewayConfig":
         if not os.path.exists(path):
