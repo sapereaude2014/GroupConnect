@@ -33,7 +33,7 @@ class GatewayConfig:
         self.opencode_bin: str = data.get("opencode_bin", "opencode")
         self.teleworker_bin: str = data.get("teleworker_bin", "tele-worker")
 
-        # Channel-Specific Platform Options (e.g. auto_telegraph_threshold, amap_key)
+        # Channel-Specific Platform Options (e.g. auto_telegraph_threshold)
         self.channel_options: Dict[str, Any] = dict(data.get("channel_options", {}))
 
         # Soul Persona Settings (Custom soul path or directory)

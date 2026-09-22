@@ -148,20 +148,24 @@ class TestAutonomousRouting(unittest.TestCase):
             self.cfg.providers["google_ai_studio"]["prompt_template"], "router_prompt.txt"
         )
 
-    def test_classifier_legacy_flat_config(self):
+    def test_classifier_providers_config(self):
         import json
         import tempfile
 
-        # Legacy flat layout must keep working (auto-synthesized registry).
         cfg_json = {"autonomous": {
             "classifier": {
-                "provider": "typesafe",
-                "model": "jev-legacy",
-                "api_key_env": "JEV_API_KEY",
-                "timeout_ms": 5000
-            },
-            "prompt_file": "router_prompt.txt",
-            "rules_file": "routing_rules.md"
+                "active": "typesafe",
+                "providers": {
+                    "typesafe": {
+                        "engine": "jev",
+                        "model": "jev-custom",
+                        "api_key_env": "JEV_API_KEY",
+                        "timeout_ms": 5000,
+                        "prompt_template": "router_prompt.txt"
+                    }
+                },
+                "rules_file": "routing_rules.md"
+            }
         }}
         with tempfile.TemporaryDirectory() as d:
             cfg_path = os.path.join(d, "autonomous_config.json")
@@ -170,7 +174,7 @@ class TestAutonomousRouting(unittest.TestCase):
             cfg = AutonomousConfig(cfg_path)
             self.assertEqual(cfg.active_provider, "typesafe")
             self.assertEqual(cfg.engine, "jev")
-            self.assertEqual(cfg.model, "jev-legacy")
+            self.assertEqual(cfg.model, "jev-custom")
             self.assertEqual(cfg.rules_file, "routing_rules.md")
             self.assertEqual(cfg.prompt_file, "router_prompt.txt")
 
@@ -307,7 +311,16 @@ class TestAutonomousRouting(unittest.TestCase):
 
         cfg_json = {"autonomous": {
             "roles": {"bot_a": "RoleA", "bot_b": "RoleB"},
-            "classifier": {"provider": "typesafe", "model": "jev-latest", "api_key": "test_key"},
+            "classifier": {
+                "active": "typesafe",
+                "providers": {
+                    "typesafe": {
+                        "engine": "jev",
+                        "model": "jev-latest",
+                        "api_key": "test_key"
+                    }
+                }
+            },
             "confidence_threshold": 0.6,
             "parallel_threshold": 0.6,
         }}
@@ -352,7 +365,16 @@ class TestAutonomousRouting(unittest.TestCase):
 
         cfg_json = {"autonomous": {
             "roles": {"bot_a": "RoleA", "bot_b": "RoleB"},
-            "classifier": {"provider": "typesafe", "model": "jev-latest", "api_key": "test_key"},
+            "classifier": {
+                "active": "typesafe",
+                "providers": {
+                    "typesafe": {
+                        "engine": "jev",
+                        "model": "jev-latest",
+                        "api_key": "test_key"
+                    }
+                }
+            },
             "confidence_threshold": 0.6,
             "parallel_threshold": 0.6,
         }}

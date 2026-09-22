@@ -164,28 +164,8 @@ class AutonomousConfig:
         self.daily_budget: int = int(clf.get("daily_budget", 800))
         self.rules_file: str = str(clf.get("rules_file", cfg.get("rules_file", "")))
 
-        providers = clf.get("providers")
-        if not providers:
-            # Legacy flat layout (provider/model/api_key_env directly under
-            # classifier): synthesize a one-entry registry, warn to migrate.
-            legacy = str(clf.get("provider", "google_ai_studio"))
-            entry = {
-                "engine": "jev" if legacy == "typesafe" else "gemini",
-                "model": clf.get("model", "gemini-3.5-flash-lite"),
-                "api_key_env": clf.get("api_key_env", "GEMINI_ROUTER_API_KEY"),
-                "api_key": clf.get("api_key", ""),
-                "timeout_ms": clf.get("timeout_ms", 3000),
-            }
-            if cfg.get("prompt_file"):
-                entry["prompt_template"] = cfg.get("prompt_file")
-            providers = {legacy: entry}
-            default_active = legacy
-            logger.warning(
-                "[ROUTING] Flat 'classifier' block is deprecated; migrate to "
-                "'classifier.providers' registry (synthesized legacy provider '%s').", legacy
-            )
-        else:
-            default_active = "google_ai_studio"
+        providers = clf.get("providers") or {}
+        default_active = "typesafe" if "typesafe" in providers else "google_ai_studio"
         self.providers: Dict[str, dict] = {
             str(name).lower().lstrip("@"): (p if isinstance(p, dict) else {})
             for name, p in providers.items()
@@ -193,11 +173,12 @@ class AutonomousConfig:
         self.active_provider: str = str(clf.get("active", default_active)).lower()
         pcfg = self.providers.get(self.active_provider)
         if pcfg is None:
-            logger.warning(
-                "[ROUTING] classifier.active '%s' not found in providers %s; "
-                "classifier fails closed until fixed.",
-                self.active_provider, sorted(self.providers),
-            )
+            if self.providers:
+                logger.warning(
+                    "[ROUTING] classifier.active '%s' not found in providers %s; "
+                    "classifier fails closed until fixed.",
+                    self.active_provider, sorted(self.providers),
+                )
             pcfg = {}
         self.engine: str = str(pcfg.get("engine", "gemini")).lower()
         self.model: str = str(pcfg.get("model", ""))
@@ -384,9 +365,11 @@ class AutonomousArbiter:
     # ---------- prompt ----------
     def _load_prompt(self) -> str:
         path = self.cfg.prompt_file
-        if path and not os.path.isabs(path):
+        if not path:
+            return ""
+        if not os.path.isabs(path):
             path = os.path.join(os.path.dirname(os.path.abspath(self.cfg.path)), path)
-        if not path or not os.path.exists(path):
+        if not os.path.exists(path):
             logger.warning(f"[ROUTING] Prompt file missing: {path}")
             return ""
         mtime = os.path.getmtime(path)

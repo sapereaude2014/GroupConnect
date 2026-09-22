@@ -82,17 +82,19 @@ class ContextManager:
             pattern = os.path.join(self.chat_logs_dir, f"{self._log_prefix}*_*.jsonl")
             for fpath in glob.glob(pattern):
                 fname = os.path.basename(fpath)
-                # Filename format: {prefix}_{chat_id}_{YYYY-MM}.jsonl
-                fname_core = fname[len(self._log_prefix):] if fname.startswith(self._log_prefix) else fname[5:] if fname.startswith("chat_") else ""
-                parts = fname_core.split("_")
-                if len(parts) >= 3:
-                    cid_str = parts[1]
-                    try:
-                        cid: Union[int, str] = int(cid_str)
-                    except ValueError:
-                        cid = cid_str
-                    if cid not in self.buffers:
-                        self.buffers[cid] = self._rehydrate_buffer_from_disk(cid)
+                # Filename format: {prefix}{chat_id}_{YYYY-MM}.jsonl
+                if not fname.startswith(self._log_prefix) or not fname.endswith(".jsonl"):
+                    continue
+                stem = fname[len(self._log_prefix):-6]
+                if "_" not in stem:
+                    continue
+                cid_str = stem.rsplit("_", 1)[0]
+                try:
+                    cid: Union[int, str] = int(cid_str)
+                except ValueError:
+                    cid = cid_str
+                if cid not in self.buffers:
+                    self.buffers[cid] = self._rehydrate_buffer_from_disk(cid)
         except Exception as e:
             logger.warning(f"Error rehydrating all chat buffers: {e}")
 

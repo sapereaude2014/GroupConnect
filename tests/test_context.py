@@ -134,6 +134,8 @@ class TestContextManager(unittest.TestCase):
 
         # 2. Simulate gateway restart: create a new ContextManager instance
         mgr2 = ContextManager(max_history_len=5, chat_logs_dir=self.test_dir)
+        # Verify pre-warming: buffer is populated upon __init__ via rehydrate_all()
+        self.assertIn(chat_id, mgr2.buffers)
         buf = mgr2.get_buffer(chat_id)
         self.assertEqual(len(buf), 5)
         self.assertEqual(buf[0]["text"], "Message 1")
@@ -142,6 +144,17 @@ class TestContextManager(unittest.TestCase):
         ctx = mgr2.build_group_context(chat_id)
         self.assertIn("Message 1", ctx)
         self.assertIn("Message 5", ctx)
+
+    def test_rehydration_with_bot_username(self):
+        chat_id = -1004324820543
+        mgr1 = ContextManager(max_history_len=5, chat_logs_dir=self.test_dir, bot_username="guaguahome_bot")
+        mgr1.record_message(chat_id, "User", "Hello bot", msg_id=1)
+
+        # On restart, mgr2 with bot_username should discover and pre-warm the buffer
+        mgr2 = ContextManager(max_history_len=5, chat_logs_dir=self.test_dir, bot_username="guaguahome_bot")
+        self.assertIn(chat_id, mgr2.buffers)
+        self.assertEqual(len(mgr2.buffers[chat_id]), 1)
+        self.assertEqual(mgr2.buffers[chat_id][0]["text"], "Hello bot")
 
     def test_format_sender(self):
         self.assertEqual(format_sender({"first_name": "John", "last_name": "Doe"}), "John Doe")

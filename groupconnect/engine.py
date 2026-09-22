@@ -467,14 +467,14 @@ class GroupConnectEngine:
 
         # 5. Untriggered messages complete here (already captured in context buffer)
         if not msg.is_triggered:
-            # Source-level filter: if message is directed to another bot (via @bot, reply, or slash command),
+            # Source-level filter: if message is directed to another bot or user (via @mention, reply, or slash command),
             # never allow it into autonomous routing pipeline!
             if getattr(msg, "reply_to_bot_username", ""):
                 return
             raw_text = (msg.text or "").strip()
             if raw_text.startswith("/"):
                 return
-            if re.search(r"@\w+bot\b", raw_text, re.IGNORECASE):
+            if re.search(r"(?:^|\s)@\w+|<@[!&]?\w+>", raw_text):
                 return
 
             # Autonomous routing: local preemption check + single-arbiter evaluation
