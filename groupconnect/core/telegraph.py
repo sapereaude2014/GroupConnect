@@ -213,17 +213,10 @@ def _find_token_file() -> Tuple[str, bool]:
     if custom_env and os.path.exists(custom_env):
         return custom_env, True
 
-    guagua_path = os.path.expanduser("~/.config/guaguahome/telegraph_token.json")
-    if os.path.exists(guagua_path):
-        return guagua_path, True
-
     gc_path = os.path.expanduser("~/.config/groupconnect/telegraph_token.json")
     if os.path.exists(gc_path):
         return gc_path, True
 
-    # If neither exists, prefer guaguahome if ~/.config/guaguahome directory exists, else groupconnect
-    if os.path.isdir(os.path.expanduser("~/.config/guaguahome")):
-        return guagua_path, False
     return gc_path, False
 
 
@@ -461,10 +454,8 @@ def extract_summary_and_title(
         m_book = re.search(r'《([^》]+)》', first_few_lines)
         if m_book:
             core_topic = m_book.group(1).strip()
-            if any(k in first_few_lines for k in ["取景", "古建", "景点"]):
-                title = f"《{core_topic}》古建取景地推荐"
-            elif any(k in first_few_lines for k in ["规划", "方案", "行程", "路线"]):
-                title = f"《{core_topic}》规划方案"
+            if any(k in first_few_lines for k in ["规划", "方案", "行程", "路线", "推荐", "汇总"]):
+                title = f"《{core_topic}》规划方案与推荐"
             elif len(core_topic) <= 20:
                 title = f"《{core_topic}》专题汇总"
 
@@ -477,7 +468,7 @@ def extract_summary_and_title(
                 break
 
         if first_non_header:
-            clean = re.sub(r'^(?:蓉总|小马(?:哥)?|好的|收到|主人|管家|总管)[，,：:\s]*', '', first_non_header)
+            clean = re.sub(r'^(?:好的|收到|主人)[，,：:\s]*', '', first_non_header)
             clean = re.sub(r'^(?:已为您|已把|已将|正在为您|现为您|为您)[，,：:\s]*', '', clean)
             clauses = re.split(r'[，。！？；：\n]', clean)
             for clause in clauses:

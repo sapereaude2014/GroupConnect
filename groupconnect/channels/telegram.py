@@ -167,7 +167,7 @@ class TelegramChannel(BaseChannel):
     ) -> Optional[Union[int, str]]:
         # Guard against empty text (TeleAgent can return empty on failures)
         if not text or not text.strip():
-            text = "⚠️ 管家暂时没能生成回复，请稍后再试。"
+            text = "⚠️ 暂时未能生成有效回复，请稍后再试。"
 
         chunks = self._split_message(text, max_len=self.config.max_chunk_size)
         last_sent_id = None

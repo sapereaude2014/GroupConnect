@@ -30,7 +30,7 @@ def find_default_config_path() -> str:
 
     Standard discovery precedence:
     1. GROUPCONNECT_ROUTING_CONFIG environment variable
-    2. ~/.config/guaguahome/autonomous_config.json or ~/.config/groupconnect/autonomous_config.json
+    2. ~/.config/groupconnect/autonomous_config.json
     3. autonomous_config.json (repository root)
     4. autonomous_config.example.json (repository root, fallback example)
     """
@@ -38,10 +38,9 @@ def find_default_config_path() -> str:
     if env_path and os.path.isfile(env_path):
         return env_path
 
-    for xdg_dir in ("guaguahome", "groupconnect"):
-        candidate = os.path.expanduser(f"~/.config/{xdg_dir}/autonomous_config.json")
-        if os.path.isfile(candidate):
-            return candidate
+    candidate = os.path.expanduser("~/.config/groupconnect/autonomous_config.json")
+    if os.path.isfile(candidate):
+        return candidate
 
     repo_root = os.path.dirname(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

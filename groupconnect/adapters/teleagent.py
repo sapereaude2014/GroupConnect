@@ -283,7 +283,7 @@ class TeleAgentAdapter(BaseAgentAdapter):
 
             if not text:
                 logger.warning(f"[TeleAgent] Empty response received for chat {chat_id}. Stderr: {stderr_str}")
-                return "⚠️ 管家暂时没能生成回复，请稍后再试。", None
+                return "⚠️ 暂时未能生成有效回复，请稍后再试。", None
 
             return text, (new_cid or conversation_id)
 
