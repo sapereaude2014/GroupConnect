@@ -575,6 +575,17 @@ async def process_outbound_text(
             else:
                 # If failed, unwrap tag and keep content
                 transformed = transformed[:m.start()] + body_content + transformed[m.end():]
+
+        # Re-check: if remaining text (after tag replacement) still exceeds
+        # threshold, publish the whole thing to Telegraph so chat only keeps
+        # a single link instead of long text + link side by side.
+        if threshold > 0 and len(transformed.strip()) > threshold:
+            _, title = extract_summary_and_title(transformed, default_author=author_name)
+            url = await publish_to_telegraph(transformed, title=title, author_name=author_name)
+            if url:
+                return f"📄 [{title}]({url})"
+            # If re-publish fails, fall through to blockquote fallback below
+
         return transformed
 
     # 2. Unified threshold: if text exceeds threshold, publish to Telegraph.
