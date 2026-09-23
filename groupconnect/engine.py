@@ -481,6 +481,7 @@ class GroupConnectEngine:
                     continue
 
                 last = buf[last_human_idx]
+                raw = str(last.get("text", ""))
                 try:
                     msg_time = datetime.strptime(str(last.get("time", "")), "%Y-%m-%d %H:%M:%S")
                 except ValueError:
@@ -489,16 +490,29 @@ class GroupConnectEngine:
                     continue
                 logger.info(
                     f"[RESUME] Re-dispatching unanswered message in chat {chat_id}: "
-                    f"'{str(last.get('text', ''))[:30]}'"
+                    f"'{raw[:30]}'"
                 )
+                # Chat logs persist neither is_triggered nor chat_type, so re-evaluate
+                # them from the raw text exactly like a fresh inbound message (see the
+                # trigger check in channels/telegram.py). Otherwise a restart-killed
+                # @bot message gets demoted to untriggered and dies in the source-level
+                # mention filter before Jev ever sees it.
+                try:
+                    chat_type = "private" if int(chat_id) > 0 else "group"
+                except (TypeError, ValueError):
+                    chat_type = "group"
+                is_trig = chat_type == "private" or f"@{self.config.bot_username}".lower() in raw.lower()
+                if not is_trig and raw.startswith("/"):
+                    cmd, target_bot, _ = parse_bot_command(raw, self.config.bot_username)
+                    is_trig = bool(cmd and (target_bot is None or target_bot.lower() == self.config.bot_username.lower()))
                 await self.on_inbound_message(InboundMessage(
                     chat_id=chat_id,
-                    chat_type="group",
+                    chat_type=chat_type,
                     msg_id=last.get("msg_id", 0),
                     sender_name=str(last.get("sender", "")),
                     from_user={},
-                    text=str(last.get("text", "")),
-                    is_triggered=False
+                    text=raw,
+                    is_triggered=is_trig
                 ), record=False)
             except Exception as e:
                 logger.warning(f"[RESUME] Failed to resume chat {chat_id}: {e}")

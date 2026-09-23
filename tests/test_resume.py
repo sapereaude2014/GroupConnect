@@ -208,5 +208,59 @@ class TestResumeUnanswered(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(engine.context_mgr.get_buffer(-100123)), 1)
 
 
+    async def test_mention_message_resumed_as_triggered(self):
+        """A restart-killed @bot message keeps its triggered status on resume,
+        instead of being demoted to untriggered and silently dropped by the
+        source-level mention filter before Jev ever sees it.
+
+        Real scenario: 23:21 @bot question, reply killed by a 23:24 restart,
+        resume then re-injected it as untriggered and it vanished."""
+        engine = self._make_engine()
+        engine.context_mgr.buffers[-100123] = [
+            make_item("@test_bot 怎么这么久", when=datetime.now() - timedelta(seconds=30), msg_id=101),
+        ]
+        await engine._resume_unanswered_messages()
+        engine.on_inbound_message.assert_awaited_once()
+        msg = engine.on_inbound_message.await_args[0][0]
+        self.assertEqual(msg.chat_type, "group")
+        self.assertTrue(msg.is_triggered)
+
+    async def test_private_chat_resumed_as_triggered(self):
+        """Private-chat messages resume as triggered (all private messages are)."""
+        engine = self._make_engine()
+        engine.context_mgr.buffers[8148123619] = [
+            make_item("关电脑", when=datetime.now() - timedelta(seconds=30), msg_id=101),
+        ]
+        await engine._resume_unanswered_messages()
+        engine.on_inbound_message.assert_awaited_once()
+        msg = engine.on_inbound_message.await_args[0][0]
+        self.assertEqual(msg.chat_type, "private")
+        self.assertTrue(msg.is_triggered)
+
+    async def test_slash_command_resumed_as_triggered(self):
+        """A restart-killed slash command resumes as triggered so it reaches
+        command dispatch instead of dying at the untriggered '/' guard."""
+        engine = self._make_engine()
+        engine.context_mgr.buffers[-100123] = [
+            make_item("/backup", when=datetime.now() - timedelta(seconds=30), msg_id=101),
+        ]
+        await engine._resume_unanswered_messages()
+        engine.on_inbound_message.assert_awaited_once()
+        msg = engine.on_inbound_message.await_args[0][0]
+        self.assertTrue(msg.is_triggered)
+
+    async def test_mention_of_other_bot_resumed_untriggered(self):
+        """A message @-mentioning someone else must NOT become triggered on resume:
+        it belongs to the mention filter (directed at another bot/user)."""
+        engine = self._make_engine()
+        engine.context_mgr.buffers[-100123] = [
+            make_item("@other_bot 去看看", when=datetime.now() - timedelta(seconds=30), msg_id=101),
+        ]
+        await engine._resume_unanswered_messages()
+        engine.on_inbound_message.assert_awaited_once()
+        msg = engine.on_inbound_message.await_args[0][0]
+        self.assertFalse(msg.is_triggered)
+
+
 if __name__ == "__main__":
     unittest.main()
