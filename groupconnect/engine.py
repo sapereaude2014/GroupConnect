@@ -1051,9 +1051,11 @@ class GroupConnectEngine:
             except Exception as e:
                 logger.warning(f"Failed to broadcast reply via relay: {e}")
 
-    async def _reply_and_record(self, chat_id: Any, text: str, reply_to_msg_id: Any = None) -> None:
+    async def _reply_and_record(self, chat_id: Any, text: str, reply_to_msg_id: Any = None,
+                                chat_type: str = "group") -> None:
         """Send a terminal command reply and record it in chat history, so the startup
         resume of unanswered messages sees the conversation as already answered.
+        Also broadcasts via CrossBotRelay so peer bots' context stays in sync.
         Non-terminal notices (ack, lock-busy) stay unrecorded on purpose: an
         unfinished command should still be re-dispatched after a restart."""
         sent_id = await self.channel.send_reply(chat_id, text, reply_to_msg_id=reply_to_msg_id)
@@ -1068,6 +1070,19 @@ class GroupConnectEngine:
             )
         except Exception as e:
             logger.warning(f"[CUSTOM_CMD] Failed to record command reply in history: {e}")
+
+        # Broadcast reply to local peer bots via CrossBotRelay
+        if getattr(self, "relay", None):
+            try:
+                await self.relay.broadcast_reply(
+                    chat_id=chat_id,
+                    chat_type=chat_type,
+                    msg_id=sent_id or 0,
+                    text=text,
+                    hop_count=0
+                )
+            except Exception as e:
+                logger.warning(f"Failed to broadcast command reply via relay: {e}")
 
     async def _run_custom_command(
         self,
