@@ -35,7 +35,10 @@ DEFAULT_WAIT_CRITERIA = (
     "A question needing data, information, or recommendations matching: {role}"
 )
 DEFAULT_DROP_CRITERIA = (
-    "Interpersonal conversation between group members, not directed at any bot"
+    "Interpersonal conversation between group members not directed at any bot "
+    "(direct 2nd-person address to another human, reactions to another human's preceding message, "
+    "pure emotional venting without action requests, or 3rd-person banter about bots). "
+    "NOT drop-worthy: referring to another member in 3rd-person to record/query tasks, or administrative requests toward the shared assistant."
 )
 DEFAULT_PARALLEL_CRITERIA = (
     "The sender explicitly wants {bot} ({role}) to participate, respond, or collaborate "
@@ -52,35 +55,22 @@ DEFAULT_RULE_TEMPLATES: Dict[str, str] = {
 }
 
 DEFAULT_ROUTING_RULES_MD = """# Autonomous Routing Decision Rules
+Group Context: {group}
 
 Decision Rules (Evaluate in order, first match wins):
-1. BOT DIALOGUE CONTINUATION (Highest Priority):
-   If recent context shows a Bot asked a question, offered options, or proposed a plan, and the current message is an acknowledgment, confirmation, decision (e.g. "option A", "okay", "yes", "confirmed"), or a follow-up question/feedback directed to that bot:
-   -> Assign to THAT bot immediately.
+1. BOT DIALOGUE CONTINUATION & DIRECT COMMAND (urgency = "immediate"):
+   - If recent context shows a Bot asked a question, offered options, or proposed a plan, and the current message is an acknowledgment, confirmation, decision (e.g. "option A", "okay", "yes", "confirmed"), or a follow-up question/feedback directed to that bot -> Assign to THAT bot immediately.
+   - Direct instruction criteria: {immediate}
 
-2. FUNCTIONAL COMMAND:
-   A direct functional instruction for a bot (its core job: device control, data lookup, scheduling, alarms/reminders):
-   -> Assign to the matching bot immediately.
+2. INTERPERSONAL CHITCHAT / SILENCE (urgency = "drop", target_bot = "none"):
+   - {drop}
 
-3. INTERPERSONAL CHITCHAT:
-   Judge whether the humans are talking TO each other:
-   - TRUE CHITCHAT (Silence -> drop):
-     * Direct address to another human member using 2nd-person pronouns or intimate/personal nicknames.
-     * Direct answers or reactions to another human's preceding message.
-     * Pure emotional venting or daily trivialities without action requests.
-     * Banter mentioning bots in third-person narrative.
-   - NOT CHITCHAT (Must NOT drop; route to the matching bot):
-     * 3rd-person reference: if sender refers to another human member in 3rd person, addressee is the assistant.
-     * Administrative actions toward the shared assistant: bookkeeping, queries, verification.
-   -> Silence only for TRUE CHITCHAT.
+3. OBJECTIVE INQUIRY & RECOMMENDATION (urgency = "wait_silence"):
+   - {wait} (leaves social space for humans to reply first).
 
-4. OBJECTIVE INQUIRY & RECOMMENDATION:
-   An explicit question asking for objective knowledge, schedules, data, or recommendations:
-   -> Assign to the matching bot with wait_silence (leaves social space for humans to reply first).
-
-5. MULTI-BOT DISPATCH (When multiple bot aliases appear in one message):
+4. MULTI-BOT DISPATCH vs PARALLEL:
    - DISPATCH: One bot is asked to handle a task involving another bot -> Assign to the DISPATCHER only.
-   - PARALLEL: The sender wants multiple specific bots to respond together -> Assign all addressed bots in target_bots with immediate urgency.
+   - PARALLEL: {parallel} -> Assign all addressed bots in target_bots with immediate urgency.
 """
 
 DEFAULT_LLM_PROMPT_TEMPLATE = """You are the single arbiter of a private group chat.
@@ -97,8 +87,8 @@ Current message from {SENDER}: "{TEXT}"
 
 {RULES_SECTION}
 
-Output STRICT JSON only, no other text:
-{"target_bots": ["<bot_name>"], "target_bot": "<primary_bot_name>"|"none", "urgency": "immediate"|"wait_silence"|"drop", "confidence": 0.0}
+Output STRICT JSON only (use empty list [] when urgency is "drop"):
+{"target_bots": ["<bot_name>"]|[], "urgency": "immediate"|"wait_silence"|"drop", "confidence": 0.0}
 """
 
 

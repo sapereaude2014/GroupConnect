@@ -491,14 +491,16 @@ class AutonomousArbiter:
         )
 
     def _load_rules_instructions(self) -> str:
-        """Builds decision instructions from built-in defaults plus optional zero_at.rules overrides."""
-        base = DEFAULT_ROUTING_RULES_MD.strip()
-        if not self.cfg.custom_rules:
-            return base
-        overrides = ["\nGroup-Specific Overrides:"]
-        for k, v in self.cfg.custom_rules.items():
-            overrides.append(f"- {k}: {v}")
-        return base + "\n" + "\n".join(overrides)
+        """Renders decision instructions by substituting active rule_templates (with zero_at.rules already replaced in-place)."""
+        t = self.cfg.rule_templates
+        return (
+            DEFAULT_ROUTING_RULES_MD.strip()
+            .replace("{group}", t.get("group", DEFAULT_GROUP_DESCRIPTION))
+            .replace("{immediate}", t.get("immediate", DEFAULT_IMMEDIATE_CRITERIA))
+            .replace("{wait}", t.get("wait", DEFAULT_WAIT_CRITERIA))
+            .replace("{drop}", t.get("drop", DEFAULT_DROP_CRITERIA))
+            .replace("{parallel}", t.get("parallel", DEFAULT_PARALLEL_CRITERIA))
+        )
 
 
     # ---------- pipeline ----------
@@ -818,11 +820,13 @@ class AutonomousArbiter:
                 "confidence": float(data.get("confidence", 0.0) or 0.0),
                 "source": "classifier",
             }
-            if decision["urgency"] not in ("immediate", "wait_silence", "drop"):
+            if decision["urgency"] not in ("immediate", "wait_silence", "drop") or not target_bots:
                 decision["urgency"] = "drop"
             if decision["urgency"] != "drop" and decision["confidence"] < self.cfg.confidence_threshold:
                 logger.info(f"[ROUTING] Confidence {decision['confidence']} below threshold; drop.")
-                decision.update(urgency="drop", target_bot="none", target_bots=[])
+                decision["urgency"] = "drop"
+            if decision["urgency"] == "drop":
+                decision.update(target_bot="none", target_bots=[])
             self._budget_used += 1
             return decision
 

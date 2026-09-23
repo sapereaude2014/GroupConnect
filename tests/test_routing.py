@@ -206,7 +206,9 @@ class TestAutonomousRouting(unittest.TestCase):
             self.assertEqual(cfg.api_key, "")
 
     def test_jev_and_llm_use_inline_rules_overrides(self):
-        from groupconnect.routing.router import AutonomousArbiter
+        from groupconnect.routing.router import (
+            AutonomousArbiter, DEFAULT_DROP_CRITERIA, DEFAULT_GROUP_DESCRIPTION,
+        )
 
         cfg = AutonomousConfig({
             "enabled": True,
@@ -225,10 +227,12 @@ class TestAutonomousRouting(unittest.TestCase):
         self.assertEqual(criteria["none_drop"], "DROP_CUSTOM")
         self.assertEqual(group, "GRP_CUSTOM")
         self.assertEqual(jev_map["none_drop"], ("none", "drop"))
-        # LLM instructions must also include the inline overrides
+        # LLM & Jev instructions must perform true in-place replacement (default wording gone)
         instructions = arb._load_rules_instructions()
-        self.assertIn("Group-Specific Overrides:", instructions)
         self.assertIn("DROP_CUSTOM", instructions)
+        self.assertIn("GRP_CUSTOM", instructions)
+        self.assertNotIn(DEFAULT_DROP_CRITERIA, instructions)
+        self.assertNotIn(DEFAULT_GROUP_DESCRIPTION, instructions)
 
     def test_jev_criteria_falls_back_to_defaults(self):
         from groupconnect.routing.router import (
