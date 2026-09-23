@@ -624,33 +624,8 @@ class GroupConnectEngine:
                 if au.is_arbiter:
                     asyncio.create_task(au.evaluate_and_publish(msg))
             return
-            raw_text = (msg.text or "").strip()
-            if raw_text.startswith("/"):
-                return
-            if re.search(r"@\w+(?!\.\w)|<@[!&]?\w+>", raw_text):
-                return
 
-            # Pattern command fast path: regex-matched device control bypasses LLM routing entirely
-            if not is_bot and self._pattern_commands:
-                raw = re.sub(r"[，。！？.!?、…]+$", "", raw_text).strip()
-                if raw:
-                    for pc in self._pattern_commands:
-                        max_len = int(pc.get("max_length", 20))
-                        if len(raw) <= max_len and pc["_compiled"].search(raw):
-                            asyncio.create_task(
-                                self._run_pattern_command(chat_id, pc, raw, reply_to_msg_id=msg.msg_id)
-                            )
-                            return
-
-            # Autonomous routing: local preemption check + single-arbiter evaluation
-            au = getattr(self, "autonomous", None)
-            if au is not None and au.cfg.enabled and not is_bot:
-                au.on_human_message(msg)
-                if au.is_arbiter:
-                    asyncio.create_task(au.evaluate_and_publish(msg))
-            return
-
-        # 6. Enqueue triggered message for latest-driven queue draining execution
+        # 7. Enqueue triggered message for latest-driven queue draining execution
         if msg.msg_id:
             self._triggered_msg_ids.append(str(msg.msg_id))
 
