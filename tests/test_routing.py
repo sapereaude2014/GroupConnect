@@ -326,7 +326,8 @@ class TestAutonomousRouting(unittest.TestCase):
 
             asyncio.run(run())
 
-    def test_jev_classify_fail_closed_ignores_noul(self):
+    def test_jev_classify_noul_rescues_choice_drop(self):
+        """When Choice drops but Noul detects explicit parallel intent, rescue the drop."""
         import asyncio
         from unittest.mock import patch, MagicMock
         import tempfile, json
@@ -374,6 +375,60 @@ class TestAutonomousRouting(unittest.TestCase):
             async def run():
                 with patch("httpx.AsyncClient.post", return_value=mock_resp):
                     res = await arb.classify("Spouse talk", "Alice", "")
+                    # Noul rescues: bot_b should be activated with immediate urgency
+                    self.assertEqual(res["target_bot"], "bot_b")
+                    self.assertEqual(res["target_bots"], ["bot_b"])
+                    self.assertEqual(res["urgency"], "immediate")
+
+            asyncio.run(run())
+
+    def test_jev_classify_drop_when_choice_and_noul_both_fail(self):
+        """True fail-closed: Choice drops AND Noul finds nothing -> drop."""
+        import asyncio
+        from unittest.mock import patch, MagicMock
+        import tempfile, json
+        from groupconnect.routing.router import AutonomousArbiter
+
+        cfg_json = {"autonomous": {
+            "roles": {"bot_a": "RoleA", "bot_b": "RoleB"},
+            "classifier": {
+                "active": "typesafe",
+                "providers": {
+                    "typesafe": {
+                        "engine": "jev",
+                        "model": "jev-latest",
+                        "api_key": "test_key"
+                    }
+                }
+            },
+            "confidence_threshold": 0.6,
+            "parallel_threshold": 0.6,
+        }}
+        with tempfile.TemporaryDirectory() as d:
+            cfg_path = os.path.join(d, "groupconnect.yaml")
+            with open(cfg_path, "w") as f:
+                f.write(json.dumps(cfg_json))
+            cfg = AutonomousConfig(cfg_path)
+            arb = AutonomousArbiter(cfg)
+
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = {
+                "answers": {
+                    "routing": {
+                        "type": "choice",
+                        "choice": "none_drop",
+                        "confidence": 0.9,
+                        "probabilities": {"none_drop": 0.9, "bot_a_immediate": 0.1},
+                    },
+                    "parallel_bot_a": {"type": "noul", "noul": 0.2},
+                    "parallel_bot_b": {"type": "noul", "noul": 0.3},
+                }
+            }
+
+            async def run():
+                with patch("httpx.AsyncClient.post", return_value=mock_resp):
+                    res = await arb.classify("Nice weather today", "Alice", "")
                     self.assertEqual(res["target_bot"], "none")
                     self.assertEqual(res["target_bots"], [])
                     self.assertEqual(res["urgency"], "drop")

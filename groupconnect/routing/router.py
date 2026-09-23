@@ -673,27 +673,42 @@ class AutonomousArbiter:
                     urgency = "drop"
                     confidence = max(none_prob, 1.0 - best_bot_prob)
 
-            # Fail-closed check: if below threshold or drop, reject immediately
-            if urgency == "drop" or confidence < self.cfg.confidence_threshold or target_bot == "none":
-                decision = {
-                    "target_bot": "none",
-                    "target_bots": [],
-                    "urgency": "drop",
-                    "confidence": round(confidence, 2),
-                    "source": "classifier",
-                }
-                self._budget_used += 1
-                return decision
-
-            # Primary bot succeeded! Check per-bot Noul answers for parallel co-respondents
-            target_bots = [target_bot]
+            # Step 1: Extract Noul parallel results for ALL bots BEFORE drop check.
+            # This allows Noul to rescue a Choice drop when the sender explicitly
+            # wants multiple bots to respond together (e.g. "you two both look at this").
+            noul_results: list = []  # (bot, noul_prob) pairs, threshold-filtered
             for b in self.cfg.roles:
-                if b == target_bot:
-                    continue
                 noul_ans = answers.get(f"parallel_{b}", {})
                 noul_prob = float(noul_ans.get("noul", 0.0) or 0.0)
                 if noul_prob >= self.cfg.parallel_threshold:
-                    target_bots.append(b)
+                    noul_results.append((b, noul_prob))
+            noul_bots = [b for b, _ in noul_results]
+
+            # Step 2: Determine primary bot and urgency via combined Choice + Noul
+            choice_ok = (
+                urgency != "drop"
+                and confidence >= self.cfg.confidence_threshold
+                and target_bot != "none"
+            )
+
+            if choice_ok:
+                # Choice succeeded: use Choice's primary, Noul adds parallel co-respondents
+                target_bots = [target_bot]
+                for b in noul_bots:
+                    if b != target_bot:
+                        target_bots.append(b)
+            elif noul_bots:
+                # Choice dropped but Noul detected explicit parallel intent -> rescue
+                target_bots = list(noul_bots)
+                noul_results.sort(key=lambda x: x[1], reverse=True)
+                target_bot = noul_results[0][0]
+                urgency = "immediate"
+                confidence = noul_results[0][1]
+            else:
+                # Neither Choice nor Noul found anything -> fail-closed drop
+                target_bot = "none"
+                target_bots = []
+                urgency = "drop"
 
             decision = {
                 "target_bot": target_bot,

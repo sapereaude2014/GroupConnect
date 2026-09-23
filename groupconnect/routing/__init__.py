@@ -9,6 +9,17 @@ Architecture: Single-Arbiter + Symmetric Observers.
   countdown window; any other human message during the window cancels it;
   otherwise dispatch with reply anchoring.
 
+Jev Classifier: Choice + Noul Two-Stage Pipeline.
+- Choice (single-select): determines the primary responder and urgency
+  (immediate / wait_silence / none_drop) from structured option criteria.
+- Noul (per-bot yes/no): independently evaluates whether each bot should
+  participate in parallel collaboration alongside the primary responder.
+- Rescue: if Choice drops (probabilities split across bots, e.g. "you two
+  both look at this"), but Noul detects explicit parallel intent for any bot
+  above parallel_threshold, the drop is rescued — all qualifying bots are
+  activated with immediate urgency. Only when BOTH Choice and Noul fail to
+  reach threshold does the message fail-closed to drop.
+
 Semantic content (aliases, roles, windows, budget, classifier engine, and
 optional rule overrides) is configured in groupconnect.yaml on top of built-in
 defaults in groupconnect/routing/defaults.py.
