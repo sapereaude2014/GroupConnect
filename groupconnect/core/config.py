@@ -219,6 +219,8 @@ class GatewayConfig:
 
         # Custom Slash Commands
         self.custom_commands: List[Dict[str, Any]] = list(data.get("custom_commands", []))
+        # Pattern Commands (regex-triggered, bypass LLM routing)
+        self.pattern_commands: List[Dict[str, Any]] = list(data.get("pattern_commands", []))
 
         # Ensure required directories exist
         os.makedirs(self.attachments_dir, exist_ok=True)
@@ -340,6 +342,7 @@ class GatewayConfig:
             "security": dict(root_data.get("security", root_data.get("allowlist", {}))),
             "tuning": dict(root_data.get("tuning", {})),
             "custom_commands": list(root_data.get("custom_commands", [])),
+            "pattern_commands": list(root_data.get("pattern_commands", [])),
         }
 
         # Bot identity
@@ -378,6 +381,10 @@ class GatewayConfig:
         # Extra custom commands per bot
         if "custom_commands" in bot_entry:
             merged["custom_commands"].extend(bot_entry["custom_commands"])
+
+        # Extra pattern commands per bot
+        if "pattern_commands" in bot_entry:
+            merged["pattern_commands"].extend(bot_entry["pattern_commands"])
 
         # Build Multi-Bot collective roles and aliases for Zero-@
         zero_at = root_data.get("zero_at", root_data.get("autonomous"))

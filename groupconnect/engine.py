@@ -153,6 +153,18 @@ class GroupConnectEngine:
             for c in getattr(config, "custom_commands", [])
             if c.get("command")
         }
+        self._pattern_commands: List[Dict[str, Any]] = []
+        for pc in getattr(config, "pattern_commands", []):
+            pattern_str = pc.get("pattern", "")
+            cmd_name = str(pc.get("command", "")).strip().lower().lstrip("/")
+            if pattern_str and cmd_name in self._custom_commands_map:
+                try:
+                    pc["_compiled"] = re.compile(pattern_str)
+                    pc["_cmd_cfg"] = self._custom_commands_map[cmd_name]
+                    self._pattern_commands.append(pc)
+                    logger.info(f"Pattern command registered: pattern='{pattern_str[:50]}' -> /{cmd_name}")
+                except re.error as e:
+                    logger.warning(f"Invalid regex in pattern_commands: {e}")
         self.is_running = False
 
         # 5. Autonomous Routing (免@自主唤醒: single-arbiter + symmetric observers)
@@ -495,6 +507,17 @@ class GroupConnectEngine:
                 return
             if re.search(r"@\w+(?!\.\w)|<@[!&]?\w+>", raw_text):
                 return
+
+            # Pattern command fast path: regex-matched device control bypasses LLM routing entirely
+            if not is_bot and self._pattern_commands:
+                raw = re.sub(r"[，。！？.!?、…]+$", "", raw_text).strip()
+                if raw and len(raw) <= 20:
+                    for pc in self._pattern_commands:
+                        if pc["_compiled"].search(raw):
+                            asyncio.create_task(
+                                self._run_pattern_command(chat_id, pc, raw, reply_to_msg_id=msg.msg_id)
+                            )
+                            return
 
             # Autonomous routing: local preemption check + single-arbiter evaluation
             au = getattr(self, "autonomous", None)
@@ -1044,3 +1067,19 @@ class GroupConnectEngine:
         finally:
             if cmd_name in self._running_custom_commands:
                 self._running_custom_commands.remove(cmd_name)
+
+    async def _run_pattern_command(self, chat_id: Any, pc: Dict[str, Any], text: str, reply_to_msg_id: Any = None) -> None:
+        """Execute a pattern-matched command directly, bypassing LLM routing.
+        Reuses _run_custom_command for script execution, ack, and error handling."""
+        cmd_cfg = pc["_cmd_cfg"]
+        cmd_name = str(cmd_cfg.get("command", "")).strip().lower()
+
+        if cmd_cfg.get("lock", False):
+            if cmd_name in self._running_custom_commands:
+                await self.channel.send_reply(
+                    chat_id, "⏳ 设备指令正在执行中…", reply_to_msg_id=reply_to_msg_id
+                )
+                return
+            self._running_custom_commands.add(cmd_name)
+
+        await self._run_custom_command(chat_id, cmd_cfg, text, reply_to_msg_id=reply_to_msg_id)
