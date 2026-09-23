@@ -63,6 +63,37 @@ class TestPatternCommands(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(pc["_cmd_cfg"]["script"], "/tmp/device.py")
         self.assertTrue(pc["_cmd_cfg"]["pass_args"])
 
+    async def test_standalone_pattern_safe_defaults(self):
+        """A standalone pattern defaults to pass_args=True and lock=True without explicit config."""
+        engine = self._make_engine([{
+            "pattern": DEVICE_PATTERN,
+            "script": "/tmp/device.py",
+        }])
+        cfg = engine._pattern_commands[0]["_cmd_cfg"]
+        self.assertTrue(cfg["pass_args"])
+        self.assertTrue(cfg["lock"])
+
+    async def test_standalone_pattern_explicit_override(self):
+        """Explicit pass_args/lock values are respected, not clobbered by the safe defaults."""
+        engine = self._make_engine([{
+            "pattern": DEVICE_PATTERN,
+            "script": "/tmp/device.py",
+            "pass_args": False,
+            "lock": False,
+        }])
+        cfg = engine._pattern_commands[0]["_cmd_cfg"]
+        self.assertFalse(cfg["pass_args"])
+        self.assertFalse(cfg["lock"])
+
+    async def test_legacy_binding_not_touched_by_pattern_defaults(self):
+        """A pattern bound via 'command' defers to the backing custom command's explicit cfg;
+        pattern safe defaults never leak into the custom_commands entry."""
+        self.custom_cmds = [{"command": "device", "script": "/tmp/device.py"}]
+        engine = self._make_engine([{"pattern": DEVICE_PATTERN, "command": "device"}])
+        cfg = engine._pattern_commands[0]["_cmd_cfg"]
+        self.assertNotIn("pass_args", cfg)
+        self.assertNotIn("lock", cfg)
+
     async def test_legacy_binding_to_custom_command(self):
         """A pattern bound via 'command' still resolves to the custom command cfg."""
         self.custom_cmds = [{"command": "device", "script": "/tmp/device.py", "pass_args": True}]

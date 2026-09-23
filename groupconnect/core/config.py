@@ -221,6 +221,10 @@ class GatewayConfig:
         self.custom_commands: List[Dict[str, Any]] = list(data.get("custom_commands", []))
         # Pattern Commands (regex-triggered, bypass LLM routing)
         self.pattern_commands: List[Dict[str, Any]] = list(data.get("pattern_commands", []))
+        # Restart resume: re-dispatch recent unanswered human messages on startup (0 disables)
+        self.resume_unanswered_secs: int = int(
+            tuning.get("resume_unanswered_secs", data.get("resume_unanswered_secs", 300))
+        )
 
         # Ensure required directories exist
         os.makedirs(self.attachments_dir, exist_ok=True)

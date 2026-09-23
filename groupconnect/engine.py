@@ -165,6 +165,11 @@ class GroupConnectEngine:
                 if not cmd_name:
                     cmd_name = f"pattern_{len(self._pattern_commands) + 1}"
                     pc["command"] = cmd_name
+                # Safe defaults for standalone patterns: pass the matched text through
+                # (a pattern script without its trigger text is useless) and serialize
+                # concurrent triggers (interleaved multi-step ops corrupt device state).
+                pc.setdefault("pass_args", True)
+                pc.setdefault("lock", True)
                 pc["_cmd_cfg"] = pc
             else:
                 logger.warning(
@@ -275,6 +280,7 @@ class GroupConnectEngine:
         has_schedules = any("schedule" in c for c in getattr(self.config, "custom_commands", []))
         is_arbiter = (self.autonomous.is_arbiter if self.autonomous else True)
         scheduler_task = asyncio.create_task(self._scheduled_tasks_loop()) if (has_schedules and is_arbiter) else None
+        await self._resume_unanswered_messages()
         try:
             await self.channel.start()
         finally:
@@ -422,6 +428,48 @@ class GroupConnectEngine:
             f"(triggered: {is_triggered}, hop: {hop_count})"
         )
         await self.on_inbound_message(inbound)
+
+    async def _resume_unanswered_messages(self) -> None:
+        """After a restart, re-dispatch recent human messages that never received any bot reply.
+
+        The rehydrated sliding window (restored from disk chat logs) already contains the full
+        conversation, including other bots' replies, so 'unanswered' is simply 'the last buffer
+        entry is human'. Guarded by a freshness window (resume_unanswered_secs, 0 disables) so a
+        restart hours later never replies to stale messages. Runs once at startup only; the
+        re-injected message flows through the normal pipeline (fast lane + Zero-@ routing)."""
+        window = int(getattr(self.config, "resume_unanswered_secs", 300))
+        if window <= 0:
+            return
+        for chat_id, buf in list(self.context_mgr.buffers.items()):
+            try:
+                if not buf:
+                    continue
+                if self.config.allowed_chat_ids and chat_id not in self.config.allowed_chat_ids:
+                    continue
+                last = buf[-1]
+                if last.get("is_bot") or not str(last.get("text", "")).strip():
+                    continue
+                try:
+                    msg_time = datetime.strptime(str(last.get("time", "")), "%Y-%m-%d %H:%M:%S")
+                except ValueError:
+                    continue
+                if not (0 <= time.time() - msg_time.timestamp() <= window):
+                    continue
+                logger.info(
+                    f"[RESUME] Re-dispatching unanswered message in chat {chat_id}: "
+                    f"'{str(last.get('text', ''))[:30]}'"
+                )
+                await self.on_inbound_message(InboundMessage(
+                    chat_id=chat_id,
+                    chat_type="group",
+                    msg_id=last.get("msg_id", 0),
+                    sender_name=str(last.get("sender", "")),
+                    from_user={},
+                    text=str(last.get("text", "")),
+                    is_triggered=False
+                ))
+            except Exception as e:
+                logger.warning(f"[RESUME] Failed to resume chat {chat_id}: {e}")
 
     async def on_inbound_message(self, msg: InboundMessage) -> None:
         chat_id = msg.chat_id

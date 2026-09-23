@@ -63,18 +63,17 @@ security:
 # pattern_commands:
 #   - pattern: "^(开|关)(灯|空调)(开|关|\\d{1,2})?$"   # Python 正则；建议 ^...$ 全句锚定，防止误触
 #     script: "~/.local/bin/my-device-control"         # 命中后执行的脚本（独立注册，无需 custom_commands 条目）
-#     max_length: 15                                   # 剥标点后超过此长度不进快车道 (默认 20)
-#     pass_args: true                                 # 将命中的原文作为参数透传给脚本
-#     lock: true                                      # 执行期间加锁，拒绝并发触发 (可选)
-#     error_message: "{stdout}"                        # 失败时以脚本 stdout 回复 (可选)
+#     max_length: 20                                   # 剥标点后超过此长度不进快车道 (默认 20)
 # 说明：消息需同时满足以下条件才进入快车道——纯文本 (非斜杠/非@提及/非回复 bot)、
 #       剥离句尾标点后长度不超过 max_length、正则全句匹配。
+# 独立 pattern 的安全默认值（无需配置）：pass_args: true (命中文本透传给脚本)、lock: true (并发触发串行化)。
 
 # 6. 系统底层微调 (Tuning)
 # tuning:
 #   silence_window_secs: 4.0    # 智能抢答防插话静默窗口 (默认 4.0 秒，等同于 zero_at.silence_secs)
 #   ipc_dir: /tmp/groupconnect_ipc # 多 Bot 跨进程中继管道目录
 #   max_history_len: 30         # 上下文滑动窗口保留轮数
+#   resume_unanswered_secs: 300  # 重启后回灌：最近 N 秒内未获回复的人类消息自动重新处理 (默认 300，0 关闭)
 
 # ==============================================================================
 # [多 Bot 协同集群配置 - 同一配置文件管理多个 Bot]
