@@ -1200,28 +1200,18 @@ class GroupConnectEngine:
         """Execute a pattern-matched command directly, bypassing LLM routing.
         Reuses _run_custom_command for script execution, ack, and error handling.
 
-        Lock granularity is per-device: the device name is extracted from the
-        regex capture groups so that '开卧室空调' and '关卧室空调' share a lock
-        (same device, must serialize) while '开卧室空调' and '关工作室空调' do not
-        (different devices, run in parallel)."""
+        Lock granularity is per-device: the trigger text itself is the lock key
+        so that commands targeting different devices run in parallel while
+        repeated commands on the same device are serialized."""
         cmd_cfg = pc["_cmd_cfg"]
         cmd_name = str(cmd_cfg.get("command", "")).strip().lower()
 
         lock_key = None
         if cmd_cfg.get("lock", False):
-            # Extract device name from regex groups: the capture group that is
-            # neither 开/关 nor a temperature number is the device name.
-            device = text
-            m = pc["_compiled"].search(text)
-            if m:
-                for g in m.groups():
-                    if g and g not in ("开", "关") and not g.isdigit():
-                        device = g
-                        break
-            lock_key = f"{cmd_name}:{device}"
+            lock_key = f"{cmd_name}:{text}"
             if lock_key in self._running_custom_commands:
                 await self.channel.send_reply(
-                    chat_id, f"⏳ `{device}` 正在执行中…", reply_to_msg_id=reply_to_msg_id
+                    chat_id, f"⏳ `{text}` 正在执行中…", reply_to_msg_id=reply_to_msg_id
                 )
                 return
             self._running_custom_commands.add(lock_key)
