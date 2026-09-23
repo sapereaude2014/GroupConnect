@@ -1198,16 +1198,26 @@ class GroupConnectEngine:
 
     async def _run_pattern_command(self, chat_id: Any, pc: Dict[str, Any], text: str, reply_to_msg_id: Any = None) -> None:
         """Execute a pattern-matched command directly, bypassing LLM routing.
-        Reuses _run_custom_command for script execution, ack, and error handling."""
+        Reuses _run_custom_command for script execution, ack, and error handling.
+
+        Lock granularity is per-device: the trigger text itself is the lock key
+        so that commands targeting different devices run in parallel while
+        repeated commands on the same device are serialized."""
         cmd_cfg = pc["_cmd_cfg"]
         cmd_name = str(cmd_cfg.get("command", "")).strip().lower()
 
+        lock_key = None
         if cmd_cfg.get("lock", False):
-            if cmd_name in self._running_custom_commands:
+            lock_key = f"{cmd_name}:{text}"
+            if lock_key in self._running_custom_commands:
                 await self.channel.send_reply(
-                    chat_id, "⏳ 设备指令正在执行中…", reply_to_msg_id=reply_to_msg_id
+                    chat_id, f"⏳ `{text}` 正在执行中…", reply_to_msg_id=reply_to_msg_id
                 )
                 return
-            self._running_custom_commands.add(cmd_name)
+            self._running_custom_commands.add(lock_key)
 
-        await self._run_custom_command(chat_id, cmd_cfg, text, reply_to_msg_id=reply_to_msg_id)
+        try:
+            await self._run_custom_command(chat_id, cmd_cfg, text, reply_to_msg_id=reply_to_msg_id)
+        finally:
+            if lock_key is not None:
+                self._running_custom_commands.discard(lock_key)
