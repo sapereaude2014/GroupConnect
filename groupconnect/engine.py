@@ -590,12 +590,40 @@ class GroupConnectEngine:
                 bot_username=relay_bot_username
             )
 
-        # 5. Untriggered messages complete here (already captured in context buffer)
+        # 5. Pattern command fast path: regex-matched device control bypasses LLM routing entirely.
+        #    Runs in both group and private chats — triggered or untriggered.
+        if not is_bot and self._pattern_commands and not getattr(msg, "reply_to_bot_username", ""):
+            _fast = clean_query or (msg.text or "").strip()
+            if _fast and not _fast.startswith("/"):
+                raw = re.sub(r"[，。！？.!?、…]+$", "", _fast).strip()
+                if raw:
+                    for pc in self._pattern_commands:
+                        max_len = int(pc.get("max_length", 20))
+                        if len(raw) <= max_len and pc["_compiled"].search(raw):
+                            asyncio.create_task(
+                                self._run_pattern_command(chat_id, pc, raw, reply_to_msg_id=msg.msg_id)
+                            )
+                            return
+
+        # 6. Untriggered messages complete here (already captured in context buffer)
         if not msg.is_triggered:
-            # Source-level filter: if message is directed to another bot or user (via @mention, reply, or slash command),
+            # Source-level filter: if message is directed at another bot or user (via @mention, reply, or slash command),
             # never allow it into autonomous routing pipeline!
             if getattr(msg, "reply_to_bot_username", ""):
                 return
+            raw_text = (msg.text or "").strip()
+            if raw_text.startswith("/"):
+                return
+            if re.search(r"@\w+(?!\.\w)|<@[!&]?\w+>", raw_text):
+                return
+
+            # Autonomous routing: local preemption check + single-arbiter evaluation
+            au = getattr(self, "autonomous", None)
+            if au is not None and au.cfg.enabled and not is_bot:
+                au.on_human_message(msg)
+                if au.is_arbiter:
+                    asyncio.create_task(au.evaluate_and_publish(msg))
+            return
             raw_text = (msg.text or "").strip()
             if raw_text.startswith("/"):
                 return

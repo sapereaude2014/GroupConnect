@@ -226,6 +226,70 @@ class TestPatternCommands(unittest.IsolatedAsyncioTestCase):
         self.assertIn("卧室灯已打开", buf[1]["text"])
         self.assertIn("test_bot", buf[1]["sender"])
 
+    async def test_pattern_fast_lane_in_private_chat(self):
+        """Pattern fast lane fires in private chats (is_triggered=True)."""
+        engine = self._make_engine([{
+            "pattern": DEVICE_PATTERN,
+            "script": "/tmp/device.py",
+        }])
+        au = MagicMock()
+        au.cfg.enabled = True
+        au.is_arbiter = False
+        engine.autonomous = au
+
+        msg = InboundMessage(
+            chat_id=8888, chat_type="private", msg_id=201,
+            sender_name="Zheng Ma", from_user={"id": 1, "first_name": "Zheng"},
+            text="关电脑", is_triggered=True
+        )
+        await engine.on_inbound_message(msg)
+        await asyncio.sleep(0)
+
+        engine._run_pattern_command.assert_awaited_once()
+
+    async def test_pattern_fast_lane_triggered_group_with_bot_tag(self):
+        """Pattern fast lane fires for triggered group messages (@bot + device command)."""
+        engine = self._make_engine([{
+            "pattern": DEVICE_PATTERN,
+            "script": "/tmp/device.py",
+        }])
+        au = MagicMock()
+        au.cfg.enabled = True
+        au.is_arbiter = False
+        engine.autonomous = au
+
+        msg = InboundMessage(
+            chat_id=9999, chat_type="group", msg_id=202,
+            sender_name="Zheng Ma", from_user={"id": 1, "first_name": "Zheng"},
+            text="@test_bot 关电脑", is_triggered=True
+        )
+        await engine.on_inbound_message(msg)
+        await asyncio.sleep(0)
+
+        engine._run_pattern_command.assert_awaited_once()
+
+    async def test_pattern_fast_lane_skipped_for_reply_to_other_bot(self):
+        """Pattern fast lane does not fire when replying to another bot."""
+        engine = self._make_engine([{
+            "pattern": DEVICE_PATTERN,
+            "script": "/tmp/device.py",
+        }])
+        au = MagicMock()
+        au.cfg.enabled = True
+        au.is_arbiter = False
+        engine.autonomous = au
+
+        msg = InboundMessage(
+            chat_id=9999, chat_type="group", msg_id=203,
+            sender_name="Zheng Ma", from_user={"id": 1, "first_name": "Zheng"},
+            text="关电脑", is_triggered=False,
+            reply_to_bot_username="other_bot"
+        )
+        await engine.on_inbound_message(msg)
+        await asyncio.sleep(0)
+
+        engine._run_pattern_command.assert_not_awaited()
+
     async def test_per_device_lock_allows_parallel_different_devices(self):
         """Lock is per-device (per trigger text): different device commands run
         in parallel, same device command is blocked while executing."""
