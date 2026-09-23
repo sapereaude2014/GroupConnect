@@ -117,6 +117,71 @@ class TestResumeUnanswered(unittest.IsolatedAsyncioTestCase):
         await engine._resume_unanswered_messages()
         engine.on_inbound_message.assert_not_awaited()
 
+    async def test_fast_lane_reply_does_not_mask_unanswered_human(self):
+        """When a fast-lane ✅ sits after an unanswered human message, the scanner
+        skips the bot reply and rescues the earlier unanswered human message.
+
+        Real scenario: slow inference task killed by restart, fast-lane command
+        completed and wrote ✅ to buffer. Both human messages are in the buffer
+        (recorded before any processing)."""
+        engine = self._make_engine()
+        now = datetime.now()
+        engine.context_mgr.buffers[-100123] = [
+            make_item("帮我查明天天气", when=now - timedelta(seconds=60), msg_id=201),
+            make_item("开卧室灯", when=now - timedelta(seconds=30), msg_id=202),
+            make_item("✅ 卧室灯已打开", sender="bot", is_bot=True, when=now - timedelta(seconds=29), msg_id=203),
+        ]
+        await engine._resume_unanswered_messages()
+        engine.on_inbound_message.assert_awaited_once()
+        msg = engine.on_inbound_message.await_args[0][0]
+        self.assertEqual(msg.text, "帮我查明天天气")
+
+    async def test_all_answered_chain_skipped(self):
+        """Multiple human→bot pairs: every human message has a bot reply after it,
+        nothing is resumed."""
+        engine = self._make_engine()
+        now = datetime.now()
+        engine.context_mgr.buffers[-100123] = [
+            make_item("开卧室灯", when=now - timedelta(seconds=60), msg_id=301),
+            make_item("✅ 卧室灯已打开", sender="bot", is_bot=True, when=now - timedelta(seconds=59), msg_id=302),
+            make_item("开电脑", when=now - timedelta(seconds=30), msg_id=303),
+            make_item("✅ 电脑已开机", sender="bot", is_bot=True, when=now - timedelta(seconds=29), msg_id=304),
+        ]
+        await engine._resume_unanswered_messages()
+        engine.on_inbound_message.assert_not_awaited()
+
+    async def test_unanswered_human_between_bot_replies(self):
+        """An unanswered human message sandwiched between bot replies is rescued.
+        Real scenario: old bot reply, then human asks something (slow), then
+        fast-lane command completes with ✅ — restart kills the slow task."""
+        engine = self._make_engine()
+        now = datetime.now()
+        engine.context_mgr.buffers[-100123] = [
+            make_item("✅ 旧任务完成", sender="bot", is_bot=True, when=now - timedelta(seconds=90), msg_id=401),
+            make_item("查一下美股行情", when=now - timedelta(seconds=40), msg_id=402),
+            make_item("开卧室灯", when=now - timedelta(seconds=20), msg_id=403),
+            make_item("✅ 卧室灯已打开", sender="bot", is_bot=True, when=now - timedelta(seconds=19), msg_id=404),
+        ]
+        await engine._resume_unanswered_messages()
+        engine.on_inbound_message.assert_awaited_once()
+        msg = engine.on_inbound_message.await_args[0][0]
+        self.assertEqual(msg.text, "查一下美股行情")
+
+    async def test_trailing_bot_replies_skipped_then_human_rescued(self):
+        """Trailing bot messages (e.g. fast-lane ✅) don't prevent rescuing an
+        earlier unanswered human message within the freshness window."""
+        engine = self._make_engine()
+        now = datetime.now()
+        engine.context_mgr.buffers[-100123] = [
+            make_item("帮我做个计划", when=now - timedelta(seconds=40), msg_id=501),
+            make_item("关卧室灯", when=now - timedelta(seconds=20), msg_id=502),
+            make_item("✅ 卧室灯已关闭", sender="bot", is_bot=True, when=now - timedelta(seconds=19), msg_id=503),
+        ]
+        await engine._resume_unanswered_messages()
+        engine.on_inbound_message.assert_awaited_once()
+        msg = engine.on_inbound_message.await_args[0][0]
+        self.assertEqual(msg.text, "帮我做个计划")
+
     async def test_re_dispatch_skips_history_re_recording(self):
         """The resumed message is already the buffer's last entry, so the re-dispatch
         must flow through the pipeline without writing a duplicate history entry."""

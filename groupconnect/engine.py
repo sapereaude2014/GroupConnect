@@ -433,10 +433,12 @@ class GroupConnectEngine:
         """After a restart, re-dispatch recent human messages that never received any bot reply.
 
         The rehydrated sliding window (restored from disk chat logs) already contains the full
-        conversation, including other bots' replies, so 'unanswered' is simply 'the last buffer
-        entry is human'. Guarded by a freshness window (resume_unanswered_secs, 0 disables) so a
-        restart hours later never replies to stale messages. Runs once at startup only; the
-        re-injected message flows through the normal pipeline (fast lane + Zero-@ routing)."""
+        conversation, including other bots' replies, so 'unanswered' is determined by scanning
+        backward from the buffer tail: skip trailing bot messages, then find the most recent
+        human message that has NO bot reply anywhere after it in the buffer. Guarded by a
+        freshness window (resume_unanswered_secs, 0 disables) so a restart hours later never
+        replies to stale messages. Runs once at startup only; the re-injected message flows
+        through the normal pipeline (fast lane + Zero-@ routing)."""
         window = int(getattr(self.config, "resume_unanswered_secs", 300))
         if window <= 0:
             return
@@ -446,9 +448,29 @@ class GroupConnectEngine:
                     continue
                 if self.config.allowed_chat_ids and chat_id not in self.config.allowed_chat_ids:
                     continue
-                last = buf[-1]
-                if last.get("is_bot") or not str(last.get("text", "")).strip():
+
+                # Scan backward to find the most recent human message that has no
+                # bot reply after it. We track "seen_bot" going backward: when we
+                # encounter a human message with seen_bot=True, it's answered (some
+                # bot replied between it and the next human message going forward);
+                # we reset seen_bot and continue looking for an older unanswered one.
+                last_human_idx = None
+                seen_bot = False
+                for i in range(len(buf) - 1, -1, -1):
+                    if buf[i].get("is_bot"):
+                        seen_bot = True
+                        continue
+                    if not str(buf[i].get("text", "")).strip():
+                        continue
+                    if not seen_bot:
+                        last_human_idx = i
+                        break
+                    seen_bot = False
+
+                if last_human_idx is None:
                     continue
+
+                last = buf[last_human_idx]
                 try:
                     msg_time = datetime.strptime(str(last.get("time", "")), "%Y-%m-%d %H:%M:%S")
                 except ValueError:
