@@ -183,17 +183,44 @@ groupconnect run
 groupconnect test
 ```
 
-**后台守护运行 (自动崩溃重启与状态管理)**：
+**后台运行与系统守护**：
+
+*快速后台运行*：
 ```bash
-# 启动守护进程 (自动读取 groupconnect.yaml 与关联环境变量)
-bash scripts/daemon.sh start
-
-# 查看服务状态与日志
-bash scripts/daemon.sh status
-
-# 停止守护进程
-bash scripts/daemon.sh stop
+nohup groupconnect run > groupconnect.log 2>&1 &
 ```
+
+*生产级系统守护 (Systemd / Supervisor)*：
+GroupConnect 遵循 Unix 哲学设计为标准前台执行器。生产环境推荐交由系统级守护服务进行生命周期保活与开机自启：
+
+- **Systemd** (`/etc/systemd/system/groupconnect.service`)：
+  ```ini
+  [Unit]
+  Description=GroupConnect Gateway
+  After=network.target
+
+  [Service]
+  Type=simple
+  User=your_user
+  WorkingDirectory=/path/to/workspace
+  ExecStart=/usr/local/bin/groupconnect run
+  Restart=always
+  RestartSec=5s
+
+  [Install]
+  WantedBy=multi-user.target
+  ```
+
+- **Supervisor** (`/etc/supervisor/conf.d/groupconnect.conf`)：
+  ```ini
+  [program:groupconnect]
+  command=groupconnect run
+  directory=/path/to/workspace
+  user=your_user
+  autostart=true
+  autorestart=true
+  startsecs=5
+  ```
 
 ---
 

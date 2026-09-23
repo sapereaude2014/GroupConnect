@@ -183,17 +183,44 @@ groupconnect run
 groupconnect test
 ```
 
-**Background Daemon (Crash Auto-Restart & Status Management)**:
+**Background Running & Production Daemon**:
+
+*Quick Background Run*:
 ```bash
-# Start background daemon (auto-detects groupconnect.yaml and .env)
-bash scripts/daemon.sh start
-
-# Check status of running bots
-bash scripts/daemon.sh status
-
-# Stop background daemon
-bash scripts/daemon.sh stop
+nohup groupconnect run > groupconnect.log 2>&1 &
 ```
+
+*Production Supervision (Systemd / Supervisor)*:
+GroupConnect is designed as a standard foreground runner. For production deployments, manage it using your system process supervisor:
+
+- **Systemd** (`/etc/systemd/system/groupconnect.service`):
+  ```ini
+  [Unit]
+  Description=GroupConnect Gateway
+  After=network.target
+
+  [Service]
+  Type=simple
+  User=your_user
+  WorkingDirectory=/path/to/workspace
+  ExecStart=/usr/local/bin/groupconnect run
+  Restart=always
+  RestartSec=5s
+
+  [Install]
+  WantedBy=multi-user.target
+  ```
+
+- **Supervisor** (`/etc/supervisor/conf.d/groupconnect.conf`):
+  ```ini
+  [program:groupconnect]
+  command=groupconnect run
+  directory=/path/to/workspace
+  user=your_user
+  autostart=true
+  autorestart=true
+  startsecs=5
+  ```
 
 ---
 
