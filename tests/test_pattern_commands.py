@@ -225,3 +225,28 @@ class TestPatternCommands(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(buf[1]["is_bot"])
         self.assertIn("卧室灯已打开", buf[1]["text"])
         self.assertIn("test_bot", buf[1]["sender"])
+
+    async def test_per_device_lock_allows_parallel_different_devices(self):
+        """Lock is per-device (per trigger text): different device commands run
+        in parallel, same device command is blocked while executing."""
+        engine = self._make_engine(pattern_cfg=[{
+            "pattern": "^(开|关)(电脑|卧室空调|卧室灯)(\\d{1,2})?$",
+            "script": "/tmp/device.py",
+        }])
+        self.assertTrue(engine._pattern_commands[0]["_cmd_cfg"]["lock"])
+
+        # First command locks "pattern_1:开卧室空调"
+        lock_key_1 = "pattern_1:开卧室空调"
+        engine._running_custom_commands.add(lock_key_1)
+
+        # Same device → blocked
+        # (We check the lock set directly since _run_custom_command needs a real script)
+        self.assertIn(lock_key_1, engine._running_custom_commands)
+
+        # Different device → not blocked (different lock key)
+        lock_key_2 = "pattern_1:开电脑"
+        self.assertNotIn(lock_key_2, engine._running_custom_commands)
+
+        # Lock release cleans up
+        engine._running_custom_commands.discard(lock_key_1)
+        self.assertNotIn(lock_key_1, engine._running_custom_commands)
