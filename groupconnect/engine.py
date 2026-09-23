@@ -156,15 +156,27 @@ class GroupConnectEngine:
         self._pattern_commands: List[Dict[str, Any]] = []
         for pc in getattr(config, "pattern_commands", []):
             pattern_str = pc.get("pattern", "")
+            if not pattern_str:
+                continue
             cmd_name = str(pc.get("command", "")).strip().lower().lstrip("/")
-            if pattern_str and cmd_name in self._custom_commands_map:
-                try:
-                    pc["_compiled"] = re.compile(pattern_str)
-                    pc["_cmd_cfg"] = self._custom_commands_map[cmd_name]
-                    self._pattern_commands.append(pc)
-                    logger.info(f"Pattern command registered: pattern='{pattern_str[:50]}' -> /{cmd_name}")
-                except re.error as e:
-                    logger.warning(f"Invalid regex in pattern_commands: {e}")
+            if cmd_name in self._custom_commands_map:
+                pc["_cmd_cfg"] = self._custom_commands_map[cmd_name]
+            elif pc.get("script"):
+                if not cmd_name:
+                    cmd_name = f"pattern_{len(self._pattern_commands) + 1}"
+                    pc["command"] = cmd_name
+                pc["_cmd_cfg"] = pc
+            else:
+                logger.warning(
+                    f"Pattern command skipped (needs 'command' or 'script'): {pattern_str[:50]}"
+                )
+                continue
+            try:
+                pc["_compiled"] = re.compile(pattern_str)
+                self._pattern_commands.append(pc)
+                logger.info(f"Pattern command registered: pattern='{pattern_str[:50]}' -> {cmd_name}")
+            except re.error as e:
+                logger.warning(f"Invalid regex in pattern_commands: {e}")
         self.is_running = False
 
         # 5. Autonomous Routing (免@自主唤醒: single-arbiter + symmetric observers)
