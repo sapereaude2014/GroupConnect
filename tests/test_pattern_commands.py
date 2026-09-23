@@ -145,6 +145,41 @@ class TestPatternCommands(unittest.IsolatedAsyncioTestCase):
         engine._run_pattern_command.assert_not_awaited()
         au.on_human_message.assert_called_once()
 
+    async def test_cjk_particle_after_at_reaches_autonomous(self):
+        """'@' followed by a CJK particle (e.g. '不用@呀') is not a real mention:
+        the message must still reach autonomous routing."""
+        engine = self._make_engine([{
+            "pattern": DEVICE_PATTERN,
+            "script": "/tmp/device.py",
+        }])
+        au = MagicMock()
+        au.cfg.enabled = True
+        au.is_arbiter = False
+        engine.autonomous = au
+
+        await engine.on_inbound_message(self._msg("快车道本来就不用@呀，给我说懵了"))
+        await asyncio.sleep(0)
+
+        engine._run_pattern_command.assert_not_awaited()
+        au.on_human_message.assert_called_once()
+
+    async def test_real_username_mention_still_filtered(self):
+        """A real ASCII @username (5+ chars, letter start) still blocks autonomous routing."""
+        engine = self._make_engine([{
+            "pattern": DEVICE_PATTERN,
+            "script": "/tmp/device.py",
+        }])
+        au = MagicMock()
+        au.cfg.enabled = True
+        au.is_arbiter = False
+        engine.autonomous = au
+
+        await engine.on_inbound_message(self._msg("@guaguahome_fun_bot 去看一眼"))
+        await asyncio.sleep(0)
+
+        engine._run_pattern_command.assert_not_awaited()
+        au.on_human_message.assert_not_called()
+
     async def test_chatter_bypasses_fast_lane(self):
         """Long conversational text never triggers the fast lane."""
         engine = self._make_engine([{

@@ -614,7 +614,10 @@ class GroupConnectEngine:
             raw_text = (msg.text or "").strip()
             if raw_text.startswith("/"):
                 return
-            if re.search(r"@\w+(?!\.\w)|<@[!&]?\w+>", raw_text):
+            # Telegram usernames are ASCII-only, 5-32 chars, starting with a letter.
+            # A bare \w+ would also match CJK particles after '@' (e.g. '不用@呀'),
+            # silently dropping legit messages from autonomous routing.
+            if re.search(r"@[a-zA-Z][a-zA-Z0-9_]{4,}(?!\.\w)|<@[!&]?\w+>", raw_text):
                 return
 
             # Autonomous routing: local preemption check + single-arbiter evaluation
