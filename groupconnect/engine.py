@@ -523,9 +523,10 @@ class GroupConnectEngine:
             # Pattern command fast path: regex-matched device control bypasses LLM routing entirely
             if not is_bot and self._pattern_commands:
                 raw = re.sub(r"[，。！？.!?、…]+$", "", raw_text).strip()
-                if raw and len(raw) <= 20:
+                if raw:
                     for pc in self._pattern_commands:
-                        if pc["_compiled"].search(raw):
+                        max_len = int(pc.get("max_length", 20))
+                        if len(raw) <= max_len and pc["_compiled"].search(raw):
                             asyncio.create_task(
                                 self._run_pattern_command(chat_id, pc, raw, reply_to_msg_id=msg.msg_id)
                             )

@@ -57,6 +57,19 @@ security:
 #     script: "~/.local/bin/my-status-checker"
 #     ack_message: "正在检查系统状态..."
 
+# 5.1 正则直通指令 (Pattern Commands)
+# 自然语言快车道：短句命中正则后直接执行脚本，完全绕过 LLM 路由，响应 3-5 秒。
+# 适用于高频、格式固定的指令（如智能家居控制）。未命中的消息照常走智能路由，快慢两轨互不干扰。
+# pattern_commands:
+#   - pattern: "^(开|关)(灯|空调)(开|关|\\d{1,2})?$"   # Python 正则；建议 ^...$ 全句锚定，防止误触
+#     script: "~/.local/bin/my-device-control"         # 命中后执行的脚本（独立注册，无需 custom_commands 条目）
+#     max_length: 15                                   # 剥标点后超过此长度不进快车道 (默认 20)
+#     pass_args: true                                 # 将命中的原文作为参数透传给脚本
+#     lock: true                                      # 执行期间加锁，拒绝并发触发 (可选)
+#     error_message: "{stdout}"                        # 失败时以脚本 stdout 回复 (可选)
+# 说明：消息需同时满足以下条件才进入快车道——纯文本 (非斜杠/非@提及/非回复 bot)、
+#       剥离句尾标点后长度不超过 max_length、正则全句匹配。
+
 # 6. 系统底层微调 (Tuning)
 # tuning:
 #   silence_window_secs: 4.0    # 智能抢答防插话静默窗口 (默认 4.0 秒，等同于 zero_at.silence_secs)

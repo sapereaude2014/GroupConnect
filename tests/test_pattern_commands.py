@@ -143,3 +143,25 @@ class TestPatternCommands(unittest.IsolatedAsyncioTestCase):
         engine._run_pattern_command.assert_awaited_once()
         args = engine._run_pattern_command.await_args
         self.assertEqual(args[0][2], "开电脑")
+
+    async def test_max_length_config_respected(self):
+        """A per-pattern max_length tighter than the default gates the fast lane."""
+        engine = self._make_engine([{
+            "pattern": DEVICE_PATTERN,
+            "script": "/tmp/device.py",
+            "max_length": 4,
+        }])
+        au = MagicMock()
+        au.cfg.enabled = True
+        au.is_arbiter = False
+        engine.autonomous = au
+
+        # 5 chars > max_length 4 -> falls through to autonomous routing
+        await engine.on_inbound_message(self._msg("开卧室空调"))
+        await asyncio.sleep(0)
+        engine._run_pattern_command.assert_not_awaited()
+
+        # 3 chars <= max_length 4 -> fast lane fires
+        await engine.on_inbound_message(self._msg("开电脑"))
+        await asyncio.sleep(0)
+        engine._run_pattern_command.assert_awaited_once()
