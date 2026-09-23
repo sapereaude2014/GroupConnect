@@ -66,7 +66,7 @@ Alice:  "谁来把行程记到日程里"
                │               ▼               │
                │  ┌─────────────────────────┐  │
                │  │ 免@自主感知裁决官 (IPC) │  │
-               │  │ (TypeSafe Jev / Gemini) │  │
+               │  │ (TypeSafe Jev / 通用LLM)│  │
                │  └────────────┬────────────┘  │
                └───────────────┼───────────────┘
                                │ (免@感知唤醒 或 直接呼叫)
@@ -98,7 +98,7 @@ Alice:  "谁来把行程记到日程里"
 ### 2. 🤖 多助手默契配合（分工明确，告别抢话，支持团队协同）
 - **各自专业各自答**：群里可以同时部署多个专职助手（例如“运维助手”监控告警，“开发助手”检索代码，“文档助手”整理日程），各司其职互不干扰；
 - **听得懂主从调度**：说“`助手 A 让助手 B 去跑测试`”，只有助手 A 接单并调度，助手 B 绝不会因为听到自己名字就提前抢跑；
-- **听得懂全员召集**：说“`你们两个都来看看这个方案`”，多台机器人自动一起接单，各自发挥专长共同解答。
+- **听得懂组合协同**：说“`助手 A 和助手 B 都来看看这个方案`”，被点名的多台机器人自动一起接单，各自发挥专长共同解答。
 
 ### 3. 🧠 真正的群聊记忆中枢（断点秒级续聊 + 多模态落盘）
 - **断点秒级恢复**：后台常驻维护群聊滑动窗口，即使服务重启也能毫秒级恢复记忆，无缝连续追问；
@@ -111,8 +111,8 @@ Alice:  "谁来把行程记到日程里"
 
 ### 5. ⚡ 毫秒级极速响应与 0 额外 Token 成本
 - **单点裁决 + 本地广播**：单个主 Bot 进程裁决后通过本地极速 IPC 广播，多个 Bot 协同也仅调用一次判决模型，不花冤枉钱；
-- **原生支持超快免费决策模型**：开箱即用支持 TypeSafe Jev 决策模型（100~200ms 极低延迟，输出 Token 永久免费），亦支持一键配置 Google Gemini Flash-Lite 作为备援；
-- **规则纯文本热加载**：所有别名、角色定义、判定规则全部写在 Markdown 和 JSON 文件中，随改随生效，零代码侵入。
+- **双模决策引擎架构**：默认支持 **TypeSafe Jev** 专用判别式小模型（100~200ms 极低延迟，输出 Token 永久免费），同时原生兼容任意 **通用大模型 (`OpenAI` / `DeepSeek` / `Qwen` / `Gemini` / `Claude`)**；
+- **开箱即用与配置热加载**：噪音拦截、接话延续、主从/并行拆解等通用法则已全部内置；只需在 `groupconnect.yaml` 中声明机器人的 `role` 与 `aliases` 即可工作，支持按需通过 `zero_at.rules` 微调特定群规并秒级热生效。
 
 ---
 
@@ -142,7 +142,7 @@ GroupConnect 严格区分 **连接层机制（Core）** 与 **工作区组织参
 
 ### 1. 安装
 
-本项目无需数据库，仅需 Python 3.9+ 及 `httpx`：
+本项目无需数据库，仅需 Python 3.10+ 及核心轻量依赖：
 
 ```bash
 git clone https://github.com/sapereaude2014/GroupConnect.git
@@ -152,90 +152,134 @@ pip install -e .
 
 确保你的 CLI Agent（如 `claude`、`agy`、`codex` 或 `opencode`）已在本地安装并完成鉴权。
 
-### 2. 初始化配置
+### 2. 交互式初始化向导
 
-运行交互式配置向导：
+运行全新 5 步精炼向导：
 
 ```bash
-groupconnect --init
+groupconnect init
 ```
 
-向导会引导你选择接入平台和凭证，自动保存为 `config.<platform>.json`（例如 `config.telegram.json`）。
+向导会自动探测本地已安装的 Agent 引擎、即时向 Telegram API 校验 Token 连通性、检测 Group Privacy Mode 状态，并自动生成开箱即用、仅 10 余行的 `groupconnect.yaml`。
 
-### 3. 运行服务
+### 3. 环境一键体检 (Doctor)
 
-**前台调试运行**：
+在启动前，运行内置诊断工具排查任何权限或网络隐患：
+
 ```bash
-groupconnect -c config.telegram.json
+groupconnect doctor
+```
+系统将自动检测 Python 环境、Bot API 连通性、Telegram Privacy Mode 设置、Agent 登录鉴权状态、工作区读写权限以及 Zero-@ 决策引擎延迟，并为异常项提供精准的一键修复命令。
+
+### 4. 运行服务
+
+**前台运行**：
+```bash
+groupconnect run
+```
+
+**本地终端模拟沙盒 (无需发群消息即可测试 Zero-@ 决策)**：
+```bash
+groupconnect test
 ```
 
 **后台守护运行 (自动崩溃重启与状态管理)**：
 ```bash
-# 启动指定服务
-bash scripts/daemon.sh start config.telegram.json
+# 启动守护进程 (自动读取 groupconnect.yaml 与关联环境变量)
+bash scripts/daemon.sh start
 
-# 查看所有运行中的机器人服务
+# 查看服务状态与日志
 bash scripts/daemon.sh status
 
-# 停止指定服务
-bash scripts/daemon.sh stop config.telegram.json
+# 停止守护进程
+bash scripts/daemon.sh stop
 ```
 
-### 4. 开启免 `@` 自主感知唤醒 (可选)
+---
 
-无需在群内手动 `@Bot`，让机器人结合上下文自动感知意图并智能回复：
+## ⚙️ 统一配置文件：`groupconnect.yaml`
 
-1. **配置感知规则模板**：
-   ```bash
-   cp autonomous_config.example.json autonomous_config.json
-   cp router_prompt.example.txt router_prompt.txt
-   cp routing_rules.example.md routing_rules.md
-   ```
-   在 `autonomous_config.json` 中配置别名（`aliases`）与职责描述（`roles`），将 `classifier.rules_file`（默认 `routing_rules.md`）指向共享判决文案并按本群实际改写。`classifier` 块为自描述注册表：`active` 一行即总开关，`providers` 下各后端自带 `engine`、模型、密钥与所属文件（`prompt_template` 仅归属 gemini 引擎），切换后端改一行 `active` 即可，热加载零重启。
+初次运行 `groupconnect init` 生成的极简配置（覆盖 90% 以上的使用场景）：
 
-2. **重启服务生效**：
-   ```bash
-   bash scripts/daemon.sh restart config.telegram.json
-   ```
-   重启后，机器人将自动运行三级感知管线（L0 降噪 ➔ L1 别名直通 ➔ L2 语义判决），结合滑动窗口智能判断是否接单回复。
+```yaml
+# 1. 聊天平台 (支持 telegram, discord, slack, feishu, wecom)
+channel:
+  platform: telegram
+  token: ${TELEGRAM_BOT_TOKEN}  # 支持从环境变量注入或直接明文
 
-### 5. 多 Bot 协同运行 (可选)
+# 2. 本地执行 Agent
+agent:
+  engine: codex                 # 支持: codex, claude, antigravity, opencode, teleagent
+  workspace: ~/workspace        # 本地挂载的工作目录
 
-在同一群聊中部署多个专职 Bot 时，可通过本地 IPC 机制实现协同调度与防抢答：
+# 3. 智能免 @ (Zero-@ 自动插话)
+zero_at:
+  enabled: true                 # 默认开箱即用，内置 4 秒静默防抢答与通用意图路由
+  api_key: ${JEV_API_KEY}       # 留空则自动读取环境变量 JEV_API_KEY
+```
 
-1. **配置共享 IPC 与规则**：
-   为每个 Bot 创建独立配置文件，指向相同的 `ipc_dir` 与 `autonomous_config_path`，并指定其中一个实例作为裁决官（`arbiter_bot`）：
-   ```json
-   // config.ops.json (裁决官实例，兼任运维/家务)
-   {
-     "platform": "telegram",
-     "bot_token": "YOUR_OPS_BOT_TOKEN",
-     "bot_username": "ops_bot",
-     "ipc_dir": "/tmp/groupconnect_ipc",
-      "autonomous_config_path": "autonomous_config.json",
-     "workspace_dir": "./workspace_ops",
-     "engine_type": "antigravity"
-   }
-   ```
-   ```json
-   // config.chat.json (从属工作实例，兼任助理/规划)
-   {
-     "platform": "telegram",
-     "bot_token": "YOUR_CHAT_BOT_TOKEN",
-     "bot_username": "chat_bot",
-     "ipc_dir": "/tmp/groupconnect_ipc",
-      "autonomous_config_path": "autonomous_config.json",
-     "workspace_dir": "./workspace_chat",
-     "engine_type": "claude"
-   }
-   ```
+---
 
-2. **分别启动各 Bot 服务**：
-   ```bash
-   bash scripts/daemon.sh start config.ops.json
-   bash scripts/daemon.sh start config.chat.json
-   ```
-   裁决官实例单点调用判决模型，通过 Unix Socket（IPC）广播分派任务，各 Bot 依各自职责精准响应、互不抢答。
+## 🧩 进阶功能 (Advanced Topics)
+
+### 1. 多 Bot 协同运行 (Multi-Bot Collaboration)
+
+在同一个群聊中协同部署多个专职 Bot 时，无需手工配置复杂的 IPC 管道或分别启动多个进程，直接在 `groupconnect.yaml` 中通过 `bots` 列表声明即可：
+
+```yaml
+channel:
+  platform: telegram
+
+bots:
+  - name: coder_bot
+    token: ${CODER_BOT_TOKEN}
+    agent: codex
+    role: "负责代码编写、重构与 Bug 修复"
+    aliases: ["码农", "coder"]
+
+  - name: reviewer_bot
+    token: ${REVIEWER_BOT_TOKEN}
+    agent: claude
+    role: "负责架构设计、代码审查与安全合规"
+    aliases: ["评审", "reviewer"]
+
+zero_at:
+  enabled: true
+```
+
+运行 `groupconnect run` 时，系统将自动在同一进程事件循环中并发运行所有 Bot，并自动选举首个 Bot 为决策裁决官（Arbiter），通过内部事件总线协作分发、绝不抢话。如需在独立进程中运行指定 Bot，只需添加 `--bot <name>` 参数（如 `groupconnect run --bot coder_bot`）。
+
+### 2. 分类器引擎切换与路由规则热加载 (`zero_at`)
+
+#### A. 切换分类器引擎 (`zero_at.classifier`)
+默认使用 **TypeSafe Jev** 极速判别式模型（`engine: jev`）。你也可以切换为任意通用大模型（支持 OpenAI 兼容接口如 DeepSeek / Qwen / 本地 Ollama、Google Gemini 或 Anthropic Claude）：
+
+```yaml
+zero_at:
+  enabled: true
+  classifier:
+    engine: llm                           # 可选: jev (默认) | llm | openai | gemini | anthropic
+    model: deepseek-chat                  # 如 jev-latest, gpt-4o-mini, deepseek-chat, gemini-2.5-flash-lite
+    base_url: https://api.deepseek.com/v1 # 通用 OpenAI 兼容接口地址 (使用官方 OpenAI/Gemini/Claude 时可省略)
+    api_key: ${DEEPSEEK_API_KEY}
+```
+
+#### B. 按需微调群聊路由边界 (`zero_at.rules`)
+
+通用对话法则（噪音过滤、昵称调侃防误触、对话延续、根据 `role` 职责自动匹配、主从调度与并行协同）**已在代码底座中全部内置生效，95% 场景无需额外配置**。
+
+如果群聊有特殊约定（例如特定群背景说明或特殊的闲聊过滤边界），可直接在 `groupconnect.yaml` 中按需覆写对应维度（未声明的维度自动继承内置默认规则，保存文件即自动热加载）：
+
+```yaml
+zero_at:
+  enabled: true
+  rules:
+    group: "研发团队内部协作群，配置了多名专职助手"
+    drop: "群成员之间的日常寒暄、玩笑打趣或与助手职责无关的话题"
+    # immediate: "回复 {bot} 刚才的提问，或匹配其职责的直接指令：{role}"
+    # wait: "需要查询数据、知识或客观建议，且匹配职责：{role}"
+    # parallel: "发送者明确要求 {bot} ({role}) 与其他助手同时回答"
+```
 
 ---
 
@@ -248,26 +292,22 @@ bash scripts/daemon.sh stop config.telegram.json
 * `/help` — 查看使用指南与已注册的自定义命令。
 
 ### 声明式自定义指令与定时任务 (`custom_commands`)
-支持在 `config.json` 中声明自定义运维脚本与后台定时任务。启动时网关会自动向平台菜单（如 Telegram API `setMyCommands`）同步各实例专属指令：
+支持在 `groupconnect.yaml` 中声明自定义运维脚本与后台定时任务。启动时网关会自动向平台菜单（如 Telegram API `setMyCommands`）同步各实例专属指令：
 
-```json
-"custom_commands": [
-  {
-    "command": "backup",
-    "description": "执行工作区资产备份脚本",
-    "description_en": "Trigger workspace backup script",
-    "script": "scripts/backup.sh",
-    "ack_message": "📦 [{bot_name}] 正在执行备份任务，请稍候...",
-    "success_message": "✅ [{bot_name}] 备份已完成（耗时 {duration}s）。",
-    "error_message": "❌ [{bot_name}] 备份失败 (Exit {returncode}): {stderr}",
-    "lock": true,
-    "arbiter_only_on_broadcast": true,
-    "schedule": {
-      "weekday": 6,
-      "hour": 4
-    }
-  }
-]
+```yaml
+custom_commands:
+  - command: backup
+    description: "执行工作区资产备份脚本"
+    description_en: "Trigger workspace backup script"
+    script: "scripts/backup.sh"
+    ack_message: "📦 [{bot_name}] 正在执行备份任务，请稍候..."
+    success_message: "✅ [{bot_name}] 备份已完成（耗时 {duration}s）。"
+    error_message: "❌ [{bot_name}] 备份失败 (Exit {returncode}): {stderr}"
+    lock: true
+    arbiter_only_on_broadcast: true
+    schedule:
+      weekday: 6
+      hour: 4
 ```
 
 * **`script`**：脚本或执行程序路径（支持 `~` 路径自动展开）；

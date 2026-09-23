@@ -9,13 +9,9 @@ Architecture: Single-Arbiter + Symmetric Observers.
   countdown window; any other human message during the window cancels it;
   otherwise dispatch with reply anchoring.
 
-Semantic content (aliases, roles, windows, budget, classifier provider
-registry) is 100% externalized in autonomous_config.json. The classifier
-block is a self-describing registry: 'active' selects the live backend,
-each 'providers.<name>' entry declares its own engine (jev | gemini),
-model, API key and engine-specific resources (e.g. prompt_template for
-the gemini engine). Shared decision wording lives in routing_rules.md -
-the single source of truth consumed by every engine.
+Semantic content (aliases, roles, windows, budget, classifier engine, and
+optional rule overrides) is configured in groupconnect.yaml on top of built-in
+defaults in groupconnect/routing/defaults.py.
 """
 
 from .router import AutonomousController, AutonomousConfig

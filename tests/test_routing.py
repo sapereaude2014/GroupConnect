@@ -7,9 +7,47 @@ from groupconnect.routing import AutonomousConfig, AutonomousController
 
 class TestAutonomousRouting(unittest.TestCase):
     def setUp(self):
-        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        self.example_cfg_path = os.path.join(repo_root, "autonomous_config.example.json")
-        self.cfg = AutonomousConfig(self.example_cfg_path)
+        self.cfg = AutonomousConfig({
+            "enabled": True,
+            "arbiter_bot": "primary_bot",
+            "ipc_dir": "/tmp/test_ipc",
+            "windows": {
+                "immediate_secs": 1.0,
+                "silence_secs": 4.0
+            },
+            "context": {
+                "window_size": 5
+            },
+            "aliases": {
+                "primary_bot": ["assistant", "bot"],
+                "ops_bot": ["ops", "helper"]
+            },
+            "classifier": {
+                "active": "typesafe",
+                "confidence_threshold": 0.8,
+                "parallel_threshold": 0.6,
+                "daily_budget": 800,
+                "providers": {
+                    "typesafe": {
+                        "engine": "jev",
+                        "model": "jev-latest",
+                        "api_key_env": "JEV_API_KEY",
+                        "timeout_ms": 5000
+                    },
+                    "google_ai_studio": {
+                        "engine": "gemini",
+                        "model": "gemini-2.5-flash-lite",
+                        "api_key_env": "GEMINI_ROUTER_API_KEY",
+                        "timeout_ms": 3000
+                    }
+                }
+            },
+            "roles": {
+                "primary_bot": "Home automation, device control, finance, objective data lookup, alarms and scheduling.",
+                "ops_bot": "Travel, leisure, dining recommendations, entertainment, and general life assistance."
+            },
+            "allowed_chat_ids": [-1001234567890]
+        })
         self.relay = CrossBotRelay("primary_bot", "Primary", ipc_dir="/tmp/test_ipc")
         self.ctrl = AutonomousController(
             bot_username="primary_bot",
@@ -102,51 +140,26 @@ class TestAutonomousRouting(unittest.TestCase):
         hits = self.cfg.alias_hits(text)
         self.assertEqual(hits, ["bot_a", "bot_b"])
 
-    def test_observer_accepts_target_all(self):
+    def test_observer_accepts_explicit_target_bots(self):
         import asyncio
         from groupconnect.routing.router import AutonomousObserver
 
         async def run():
             obs = AutonomousObserver("primary_bot", self.cfg, lambda d: None)
-            obs.on_decision({"target_bot": "all", "urgency": "immediate", "chat_id": 123})
+            obs.on_decision({"target_bot": "primary_bot", "target_bots": ["primary_bot", "ops_bot"], "urgency": "immediate", "chat_id": 123})
             self.assertIn(123, obs.pending)
             obs._cancel(123)
 
         asyncio.run(run())
 
-    def test_parse_rule_templates(self):
-        from groupconnect.routing.router import parse_rule_templates
-
-        content = (
-            "# Routing Rules\n\n"
-            "Decision Rules prose that must NOT become a template.\n\n"
-            "# Classifier Templates\n\n"
-            "## immediate\nReply {bot} {role}\n\n"
-            "## wait\nAsk {role}\n\n"
-            "## drop\nSpouse talk only\n\n"
-            "## group\nFamily chat\n"
-        )
-        t = parse_rule_templates(content)
-        self.assertEqual(t["immediate"], "Reply {bot} {role}")
-        self.assertEqual(t["wait"], "Ask {role}")
-        self.assertEqual(t["drop"], "Spouse talk only")
-        self.assertEqual(t["group"], "Family chat")
-        # Multi-word headings never parse as template keys
-        self.assertEqual(len(t), 4)
-
     def test_classifier_registry(self):
-        # New self-describing registry: active switch + per-provider params.
+        # Self-describing registry: active switch + per-provider params.
         self.assertEqual(self.cfg.active_provider, "typesafe")
         self.assertIn("typesafe", self.cfg.providers)
         self.assertIn("google_ai_studio", self.cfg.providers)
         self.assertEqual(self.cfg.engine, "jev")
         self.assertEqual(self.cfg.model, "jev-latest")
         self.assertEqual(self.cfg.api_key, os.environ.get("JEV_API_KEY", ""))
-        # jev engine carries no prompt skeleton; gemini's stays declared but inert
-        self.assertEqual(self.cfg.prompt_file, "")
-        self.assertEqual(
-            self.cfg.providers["google_ai_studio"]["prompt_template"], "router_prompt.txt"
-        )
 
     def test_classifier_providers_config(self):
         import json
@@ -161,22 +174,18 @@ class TestAutonomousRouting(unittest.TestCase):
                         "model": "jev-custom",
                         "api_key_env": "JEV_API_KEY",
                         "timeout_ms": 5000,
-                        "prompt_template": "router_prompt.txt"
                     }
                 },
-                "rules_file": "routing_rules.md"
             }
         }}
         with tempfile.TemporaryDirectory() as d:
-            cfg_path = os.path.join(d, "autonomous_config.json")
+            cfg_path = os.path.join(d, "groupconnect.yaml")
             with open(cfg_path, "w") as f:
                 f.write(json.dumps(cfg_json))
             cfg = AutonomousConfig(cfg_path)
             self.assertEqual(cfg.active_provider, "typesafe")
             self.assertEqual(cfg.engine, "jev")
             self.assertEqual(cfg.model, "jev-custom")
-            self.assertEqual(cfg.rules_file, "routing_rules.md")
-            self.assertEqual(cfg.prompt_file, "router_prompt.txt")
 
     def test_classifier_active_missing_fails_closed(self):
         import json
@@ -188,7 +197,7 @@ class TestAutonomousRouting(unittest.TestCase):
             "providers": {"typesafe": {"engine": "jev", "model": "m"}}
         }}}
         with tempfile.TemporaryDirectory() as d:
-            cfg_path = os.path.join(d, "autonomous_config.json")
+            cfg_path = os.path.join(d, "groupconnect.yaml")
             with open(cfg_path, "w") as f:
                 f.write(json.dumps(cfg_json))
             cfg = AutonomousConfig(cfg_path)
@@ -196,76 +205,37 @@ class TestAutonomousRouting(unittest.TestCase):
             self.assertEqual(cfg.model, "")
             self.assertEqual(cfg.api_key, "")
 
-    def test_jev_criteria_uses_rules_file_templates(self):
-        import json
-        import tempfile
+    def test_jev_and_llm_use_inline_rules_overrides(self):
         from groupconnect.routing.router import AutonomousArbiter
 
-        rules_md = (
-            "# Rules\n\nDecision Rules prose.\n\n# Classifier Templates\n\n"
-            "## immediate\nIMM {bot}|{role}\n\n## wait\nWAIT {bot}\n\n"
-            "## drop\nDROP\n\n## group\nGRP\n"
-        )
-        cfg_json = {"autonomous": {
+        cfg = AutonomousConfig({
+            "enabled": True,
             "roles": {"bot_a": "RoleA"},
-            "classifier": {"rules_file": "routing_rules.md"},
-        }}
-        with tempfile.TemporaryDirectory() as d:
-            with open(os.path.join(d, "routing_rules.md"), "w") as f:
-                f.write(rules_md)
-            cfg_path = os.path.join(d, "autonomous_config.json")
-            with open(cfg_path, "w") as f:
-                f.write(json.dumps(cfg_json))
-            cfg = AutonomousConfig(cfg_path)
-            arb = AutonomousArbiter(cfg)
-            criteria, jev_map, group = arb._jev_criteria()
-            self.assertEqual(criteria["bot_a_immediate"], "IMM bot_a|RoleA")
-            self.assertEqual(criteria["bot_a_wait"], "WAIT bot_a")
-            self.assertEqual(criteria["none_drop"], "DROP")
-            self.assertEqual(group, "GRP")
-            self.assertEqual(jev_map["none_drop"], ("none", "drop"))
-            # all_immediate absent when not in rules file
-            self.assertNotIn("all_immediate", criteria)
-            self.assertNotIn("all_immediate", jev_map)
-            # Instructions must carry the rules prose but never the templates
-            instructions = arb._load_rules_instructions()
-            self.assertIn("Decision Rules prose.", instructions)
-            self.assertNotIn("Classifier Templates", instructions)
-            self.assertNotIn("IMM", instructions)
-
-    def test_jev_criteria_includes_all_immediate(self):
-        import json
-        import tempfile
-        from groupconnect.routing.router import AutonomousArbiter
-
-        rules_md = (
-            "# Rules\n\nDecision Rules prose.\n\n# Classifier Templates\n\n"
-            "## immediate\nIMM {bot}|{role}\n\n## wait\nWAIT {bot}\n\n"
-            "## drop\nDROP\n\n## all_immediate\nALL BOTS respond\n\n## group\nGRP\n"
-        )
-        cfg_json = {"autonomous": {
-            "roles": {"bot_a": "RoleA", "bot_b": "RoleB"},
-            "classifier": {"rules_file": "routing_rules.md"},
-        }}
-        with tempfile.TemporaryDirectory() as d:
-            with open(os.path.join(d, "routing_rules.md"), "w") as f:
-                f.write(rules_md)
-            cfg_path = os.path.join(d, "autonomous_config.json")
-            with open(cfg_path, "w") as f:
-                f.write(json.dumps(cfg_json))
-            cfg = AutonomousConfig(cfg_path)
-            arb = AutonomousArbiter(cfg)
-            criteria, jev_map, group = arb._jev_criteria()
-            self.assertIn("all_immediate", criteria)
-            self.assertEqual(criteria["all_immediate"], "ALL BOTS respond")
-            self.assertEqual(jev_map["all_immediate"], ("all", "immediate"))
+            "rules": {
+                "immediate": "IMM {bot}|{role}",
+                "wait": "WAIT {bot}",
+                "drop": "DROP_CUSTOM",
+                "group": "GRP_CUSTOM",
+            },
+        })
+        arb = AutonomousArbiter(cfg)
+        criteria, jev_map, group = arb._jev_criteria()
+        self.assertEqual(criteria["bot_a_immediate"], "IMM bot_a|RoleA")
+        self.assertEqual(criteria["bot_a_wait"], "WAIT bot_a")
+        self.assertEqual(criteria["none_drop"], "DROP_CUSTOM")
+        self.assertEqual(group, "GRP_CUSTOM")
+        self.assertEqual(jev_map["none_drop"], ("none", "drop"))
+        # LLM instructions must also include the inline overrides
+        instructions = arb._load_rules_instructions()
+        self.assertIn("Group-Specific Overrides:", instructions)
+        self.assertIn("DROP_CUSTOM", instructions)
 
     def test_jev_criteria_falls_back_to_defaults(self):
         from groupconnect.routing.router import (
             AutonomousArbiter, DEFAULT_IMMEDIATE_CRITERIA, DEFAULT_DROP_CRITERIA,
         )
 
-        # Example config has no rules_file -> templates empty -> defaults kick in
+        # Config with no custom rules -> built-in defaults kick in
         arb = AutonomousArbiter(self.cfg)
         criteria, _, _ = arb._jev_criteria()
         self.assertEqual(criteria["none_drop"], DEFAULT_DROP_CRITERIA)
@@ -276,8 +246,7 @@ class TestAutonomousRouting(unittest.TestCase):
         )
 
     def test_jev_parallel_templates(self):
-        from groupconnect.routing.router import AutonomousArbiter, DEFAULT_PARALLEL_CRITERIA
-        import tempfile, json
+        from groupconnect.routing.router import AutonomousArbiter
 
         # Fallback to default
         arb = AutonomousArbiter(self.cfg)
@@ -285,23 +254,15 @@ class TestAutonomousRouting(unittest.TestCase):
         self.assertIn("primary_bot", pt)
         self.assertIn("Home automation", pt["primary_bot"])
 
-        # Custom from rules file
-        rules_md = "# Rules\n\n# Classifier Templates\n\n## parallel\nPARALLEL {bot} as {role}\n"
-        cfg_json = {"autonomous": {
+        # Custom from inline zero_at.rules
+        cfg = AutonomousConfig({
             "roles": {"bot_a": "RoleA", "bot_b": "RoleB"},
-            "classifier": {"rules_file": "routing_rules.md"},
-        }}
-        with tempfile.TemporaryDirectory() as d:
-            with open(os.path.join(d, "routing_rules.md"), "w") as f:
-                f.write(rules_md)
-            cfg_path = os.path.join(d, "autonomous_config.json")
-            with open(cfg_path, "w") as f:
-                f.write(json.dumps(cfg_json))
-            cfg = AutonomousConfig(cfg_path)
-            arb2 = AutonomousArbiter(cfg)
-            pt2 = arb2._jev_parallel_templates()
-            self.assertEqual(pt2["bot_a"], "PARALLEL bot_a as RoleA")
-            self.assertEqual(pt2["bot_b"], "PARALLEL bot_b as RoleB")
+            "rules": {"parallel": "PARALLEL {bot} as {role}"},
+        })
+        arb2 = AutonomousArbiter(cfg)
+        pt2 = arb2._jev_parallel_templates()
+        self.assertEqual(pt2["bot_a"], "PARALLEL bot_a as RoleA")
+        self.assertEqual(pt2["bot_b"], "PARALLEL bot_b as RoleB")
 
     def test_jev_classify_choice_and_noul_parallel(self):
         import asyncio
@@ -310,7 +271,7 @@ class TestAutonomousRouting(unittest.TestCase):
         from groupconnect.routing.router import AutonomousArbiter
 
         cfg_json = {"autonomous": {
-            "roles": {"bot_a": "RoleA", "bot_b": "RoleB"},
+            "roles": {"bot_a": "RoleA", "bot_b": "RoleB", "bot_c": "RoleC"},
             "classifier": {
                 "active": "typesafe",
                 "providers": {
@@ -325,7 +286,7 @@ class TestAutonomousRouting(unittest.TestCase):
             "parallel_threshold": 0.6,
         }}
         with tempfile.TemporaryDirectory() as d:
-            cfg_path = os.path.join(d, "autonomous_config.json")
+            cfg_path = os.path.join(d, "groupconnect.yaml")
             with open(cfg_path, "w") as f:
                 f.write(json.dumps(cfg_json))
             cfg = AutonomousConfig(cfg_path)
@@ -345,14 +306,18 @@ class TestAutonomousRouting(unittest.TestCase):
                         "type": "noul",
                         "noul": 0.88,
                     },
+                    "parallel_bot_c": {
+                        "type": "noul",
+                        "noul": 0.12,
+                    },
                 }
             }
 
             async def run():
                 with patch("httpx.AsyncClient.post", return_value=mock_resp):
-                    res = await arb.classify("Both bots look at this", "Alice", "")
-                    self.assertEqual(res["target_bot"], "all")
-                    self.assertEqual(set(res["target_bots"]), {"bot_a", "bot_b"})
+                    res = await arb.classify("Bot A and Bot B look at this", "Alice", "")
+                    self.assertEqual(res["target_bot"], "bot_a")
+                    self.assertEqual(res["target_bots"], ["bot_a", "bot_b"])
                     self.assertEqual(res["urgency"], "immediate")
 
             asyncio.run(run())
@@ -379,7 +344,7 @@ class TestAutonomousRouting(unittest.TestCase):
             "parallel_threshold": 0.6,
         }}
         with tempfile.TemporaryDirectory() as d:
-            cfg_path = os.path.join(d, "autonomous_config.json")
+            cfg_path = os.path.join(d, "groupconnect.yaml")
             with open(cfg_path, "w") as f:
                 f.write(json.dumps(cfg_json))
             cfg = AutonomousConfig(cfg_path)
@@ -446,7 +411,53 @@ class TestAutonomousRouting(unittest.TestCase):
         self.assertEqual(d_alias["target_bots"], ["primary_bot"])
         self.assertEqual(d_alias["target_bot"], "primary_bot")
 
+    def test_llm_classify_openai_compatible(self):
+        import asyncio
+        from unittest.mock import patch, MagicMock
+        import tempfile, json
+        from groupconnect.routing.router import AutonomousArbiter
+
+        cfg_json = {"autonomous": {
+            "roles": {"bot_a": "RoleA", "bot_b": "RoleB", "bot_c": "RoleC"},
+            "classifier": {
+                "engine": "openai",
+                "model": "deepseek-chat",
+                "base_url": "https://api.deepseek.com/v1",
+                "api_key": "test_key",
+            },
+            "confidence_threshold": 0.7,
+        }}
+        with tempfile.TemporaryDirectory() as d:
+            cfg_path = os.path.join(d, "groupconnect.yaml")
+            with open(cfg_path, "w") as f:
+                f.write(json.dumps(cfg_json))
+            cfg = AutonomousConfig(cfg_path)
+            self.assertEqual(cfg.engine, "openai")
+            self.assertEqual(cfg.base_url, "https://api.deepseek.com/v1")
+            arb = AutonomousArbiter(cfg)
+
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = {
+                "choices": [{
+                    "message": {
+                        "content": '```json\n{"target_bots": ["bot_a", "bot_b"], "target_bot": "bot_a", "urgency": "immediate", "confidence": 0.92}\n```'
+                    }
+                }]
+            }
+
+            async def run():
+                with patch("httpx.AsyncClient.post", return_value=mock_resp) as mock_post:
+                    res = await arb.classify("Bot A and Bot B check this", "Alice", "")
+                    self.assertEqual(res["target_bot"], "bot_a")
+                    self.assertEqual(res["target_bots"], ["bot_a", "bot_b"])
+                    self.assertEqual(res["urgency"], "immediate")
+                    self.assertEqual(mock_post.call_args[0][0], "https://api.deepseek.com/v1/chat/completions")
+
+            asyncio.run(run())
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

@@ -66,7 +66,7 @@ Local CLI agents like **Anthropic Claude Code (`claude`)**, **Google Antigravity
                │               ▼               │
                │  ┌─────────────────────────┐  │
                │  │ Autonomous Arbiter (IPC)│  │
-               │  │ (TypeSafe Jev / Gemini) │  │
+               │  │ (TypeSafe Jev / Gen-LLM)│  │
                │  └────────────┬────────────┘  │
                └───────────────┼───────────────┘
                                │ (Zero-@ Perception or Direct Call)
@@ -98,7 +98,7 @@ Local CLI agents like **Anthropic Claude Code (`claude`)**, **Google Antigravity
 ### 2. 🤖 Multi-Bot Collaboration & Smart Dispatch (No Clashing)
 - **Role-based specialization**: Host multiple specialized bots in one chat (e.g. an Ops bot for server infra, a Dev bot for code inspection, a Docs bot for task tracking), each responding only to their domain;
 - **Understands dispatch hierarchy**: Phrases like "*Assistant A, ask Assistant B to run the test suite*" awaken ONLY Assistant A to orchestrate; Assistant B won't jump the gun;
-- **Coordinated teamwork**: Phrases like "*Both of you take a look at this plan*" seamlessly awaken multiple bots to contribute from their respective areas of expertise.
+- **Coordinated teamwork**: Phrases like "*Assistant A and Assistant B both take a look at this plan*" seamlessly awaken the addressed bots together to contribute from their respective areas of expertise.
 
 ### 3. 🧠 True Group Memory & Multimodal Ingestion
 - **Instant recovery on restart**: Maintains an in-memory sliding window and rehydrates seamlessly across daemon restarts from local JSONL logs;
@@ -111,8 +111,8 @@ Local CLI agents like **Anthropic Claude Code (`claude`)**, **Google Antigravity
 
 ### 5. ⚡ Sub-Second Decision Speed with Zero Extra Token Costs
 - **Single arbiter + Local IPC relay**: A single primary bot evaluates incoming messages and broadcasts decisions over high-speed Unix sockets—zero redundant model calls;
-- **Out-of-the-box ultrafast decision models**: Native support for TypeSafe Jev (100–200ms latency, free output tokens) with one-line fallback to Google Gemini Flash-Lite;
-- **Plaintext configuration with hot-reloading**: All aliases, roles, and routing criteria live in JSON and Markdown rules, hot-reloading without daemon restarts.
+- **Dual-paradigm decision engines**: Native support for **TypeSafe Jev** discriminative routing (100–200ms latency, free output tokens) as well as any **General LLM (`OpenAI`, `DeepSeek`, `Qwen`, `Gemini`, `Claude`)**;
+- **Batteries-included with YAML hot-reloading**: Noise filtering, dialogue continuation, and multi-bot dispatch rules are built in; just declare each bot's `role` and `aliases` in `groupconnect.yaml`, with optional `zero_at.rules` overrides that hot-reload automatically.
 
 ---
 
@@ -142,7 +142,7 @@ GroupConnect cleanly separates **Connection Layer Mechanics (Core)** from **Work
 
 ### 1. Install
 
-Requires Python 3.9+ and `httpx` (no database required):
+Requires Python 3.10+ and lightweight dependencies (no database required):
 
 ```bash
 git clone https://github.com/sapereaude2014/GroupConnect.git
@@ -152,92 +152,134 @@ pip install -e .
 
 Ensure your chosen CLI agent (e.g., `claude`, `agy`, `codex`, or `opencode`) is installed and authenticated locally.
 
-### 2. Configure
+### 2. Interactive Setup Wizard
 
-Run the interactive setup wizard:
+Run the streamlined 5-step setup wizard:
 
 ```bash
-groupconnect --init
+groupconnect init
 ```
 
-The wizard prompts for your platform and credentials, saving to `config.<platform>.json` (e.g., `config.telegram.json`).
+The wizard automatically detects installed local agents, performs real-time Telegram Token connectivity checks, inspects Group Privacy Mode, and generates a minimal `groupconnect.yaml` (< 15 lines) with Zero-@ pre-configured.
 
-### 3. Run
+### 3. System Health Check (Doctor)
+
+Run the built-in diagnostic tool before starting up:
+
+```bash
+groupconnect doctor
+```
+Verifies Python version, Telegram Bot API connectivity, Group Privacy Mode permissions, Agent authentication, workspace filesystem read/write, and Zero-@ LLM classifier reachability — providing exact fix commands for any failure.
+
+### 4. Run
 
 **Foreground Mode**:
 ```bash
-groupconnect -c config.telegram.json
+groupconnect run
+```
+
+**Terminal Sandbox Simulator (Test Zero-@ routing without sending real chat messages)**:
+```bash
+groupconnect test
 ```
 
 **Background Daemon (Crash Auto-Restart & Status Management)**:
 ```bash
-# Start bot in background
-bash scripts/daemon.sh start config.telegram.json
+# Start background daemon (auto-detects groupconnect.yaml and .env)
+bash scripts/daemon.sh start
 
 # Check status of running bots
 bash scripts/daemon.sh status
 
-# Stop bot
-bash scripts/daemon.sh stop config.telegram.json
+# Stop background daemon
+bash scripts/daemon.sh stop
 ```
 
-### 4. Enable Autonomous Zero-@ Perception (Optional)
+---
 
-Allow the bot to infer intent from recent group context and reply intelligently without requiring explicit `@` mentions:
+## ⚙️ Unified Configuration: `groupconnect.yaml`
 
-1. **Configure routing rules**:
-   ```bash
-   cp autonomous_config.example.json autonomous_config.json
-   cp router_prompt.example.txt router_prompt.txt
-   cp routing_rules.example.md routing_rules.md
-   ```
-   Configure zero-token aliases (`aliases`) and job boundaries (`roles`) in `autonomous_config.json`, then export your classifier API key (`JEV_API_KEY` for TypeSafe Jev or `GEMINI_ROUTER_API_KEY` for Google Gemini Flash-Lite). Point `classifier.rules_file` (default `routing_rules.md`) at your shared decision wording and adapt it to your group.
+The single configuration file generated by `groupconnect init` covering 90%+ of use cases:
 
-   The `classifier` block is a **self-describing provider registry**: `active` is the one-line switch for the live backend, and each entry under `providers` declares its own `engine` (`jev` for TypeSafe structured classification, `gemini` for Google AI Studio free-text JSON), `model`, `api_key_env`, `timeout_ms` and engine-specific resources — e.g. `prompt_template` supplies the gemini engine's prompt skeleton. Shared decision wording lives in `rules_file` (single source of truth) and is consumed by every engine, so switching backends never drifts judgment semantics. A one-line `active` change is hot-reloaded with zero restart.
+```yaml
+# 1. Messaging Channel (telegram, discord, slack, feishu, wecom)
+channel:
+  platform: telegram
+  token: ${TELEGRAM_BOT_TOKEN}  # Supports env var expansion or plaintext
 
-2. **Restart the service**:
-   ```bash
-   bash scripts/daemon.sh restart config.telegram.json
-   ```
-   The bot will automatically enter perception mode, using the 3-tier pipeline (L0 noise filter ➔ L1 alias bypass ➔ L2 semantic classification) to decide when to answer.
+# 2. Local CLI Agent Harness
+agent:
+  engine: codex                 # codex, claude, antigravity, opencode, teleagent
+  workspace: ~/workspace        # Mounted workspace directory
 
-### 5. Multi-Bot Collaboration (Optional)
+# 3. Autonomous Zero-@ Perception
+zero_at:
+  enabled: true                 # Batteries-included with 4s silence window & built-in router
+  api_key: ${JEV_API_KEY}       # Optional if already present in environment
+```
 
-When deploying multiple specialized bots in the same group, coordinate responses and prevent overlapping answers via local IPC:
+---
 
-1. **Share IPC and rules across bot configs**:
-   Create dedicated config files pointing to the same `ipc_dir` and `autonomous_config_path`, designating one instance as the arbiter (`arbiter_bot`):
-   ```json
-   // config.ops.json (Arbiter instance: Ops & Decision)
-   {
-     "platform": "telegram",
-     "bot_token": "YOUR_OPS_BOT_TOKEN",
-     "bot_username": "ops_bot",
-     "ipc_dir": "/tmp/groupconnect_ipc",
-      "autonomous_config_path": "autonomous_config.json",
-     "workspace_dir": "./workspace_ops",
-     "engine_type": "antigravity"
-   }
-   ```
-   ```json
-   // config.chat.json (Worker instance: Planning & Assistant)
-   {
-     "platform": "telegram",
-     "bot_token": "YOUR_CHAT_BOT_TOKEN",
-     "bot_username": "chat_bot",
-     "ipc_dir": "/tmp/groupconnect_ipc",
-      "autonomous_config_path": "autonomous_config.json",
-     "workspace_dir": "./workspace_chat",
-     "engine_type": "claude"
-   }
-   ```
+## 🧩 Advanced Topics
 
-2. **Launch each bot daemon**:
-   ```bash
-   bash scripts/daemon.sh start config.ops.json
-   bash scripts/daemon.sh start config.chat.json
-   ```
-   The arbiter evaluates intents once and coordinates task dispatch over Unix Socket (IPC) broadcasts, so multiple bots collaborate cleanly by role without talking over each other.
+### 1. Multi-Bot Collaboration
+
+To deploy multiple specialized bots in the same group, declare them directly in `groupconnect.yaml` under `bots`:
+
+```yaml
+channel:
+  platform: telegram
+
+bots:
+  - name: coder_bot
+    token: ${CODER_BOT_TOKEN}
+    agent: codex
+    role: "Code authoring, refactoring, and bug fixes"
+    aliases: ["coder", "dev"]
+
+  - name: reviewer_bot
+    token: ${REVIEWER_BOT_TOKEN}
+    agent: claude
+    role: "Architecture review, code auditing, and compliance"
+    aliases: ["reviewer", "lead"]
+
+zero_at:
+  enabled: true
+```
+
+Running `groupconnect run` automatically launches all defined bots concurrently within the same event loop. The first bot acts as Arbiter, coordinating dispatch without cross-talk. To run a specific bot in an isolated process, use `--bot <name>` (e.g. `groupconnect run --bot coder_bot`).
+
+### 2. Classifier Engine & Routing Rule Hot-Reloading (`zero_at`)
+
+#### A. Switching Classifier Engines (`zero_at.classifier`)
+By default, GroupConnect uses **TypeSafe Jev** (`engine: jev`). You can seamlessly switch to any general LLM (OpenAI-compatible providers like DeepSeek / Qwen / Local Ollama, Google Gemini, or Anthropic Claude):
+
+```yaml
+zero_at:
+  enabled: true
+  classifier:
+    engine: llm                           # jev (default) | llm | openai | gemini | anthropic
+    model: deepseek-chat                  # e.g. jev-latest, gpt-4o-mini, deepseek-chat, gemini-2.5-flash-lite
+    base_url: https://api.deepseek.com/v1 # Custom OpenAI-compatible endpoint (optional for native OpenAI/Gemini/Claude)
+    api_key: ${DEEPSEEK_API_KEY}
+```
+
+#### B. Optional Group-Specific Boundary Tweaks (`zero_at.rules`)
+
+Universal conversational rules (noise filtering, banter protection, dialogue continuation, automatic matching via each bot's `role`, and multi-bot dispatch vs parallel collaboration) **are built-in and active by default—95% of setups require zero rule configuration**.
+
+If your group has custom conventions, override only the specific dimensions you need under `zero_at.rules` in `groupconnect.yaml` (unspecified dimensions automatically inherit built-in defaults, and changes hot-reload on save):
+
+```yaml
+zero_at:
+  enabled: true
+  rules:
+    group: "Engineering team collaboration chat with specialized assistant bots"
+    drop: "Casual human-to-human chitchat, memes, or topics unrelated to any assistant"
+    # immediate: "Reply to {bot}'s earlier question, or direct operational commands matching: {role}"
+    # wait: "Questions needing data, analysis, or recommendations matching: {role}"
+    # parallel: "Sender explicitly asks {bot} ({role}) and another assistant to respond together"
+```
 
 ---
 
@@ -250,26 +292,22 @@ When deploying multiple specialized bots in the same group, coordinate responses
 * `/help` — Display help information and registered custom commands.
 
 ### Declarative Custom Commands (`custom_commands`)
-GroupConnect supports declarative custom commands and background tasks configured directly in `config.json`. On startup, the gateway dynamically registers declared commands with platform menus (e.g. Telegram `setMyCommands`):
+GroupConnect supports declarative custom commands and background tasks configured directly in `groupconnect.yaml`. On startup, the gateway dynamically registers declared commands with platform menus (e.g. Telegram `setMyCommands`):
 
-```json
-"custom_commands": [
-  {
-    "command": "backup",
-    "description": "Trigger workspace backup script",
-    "description_en": "Trigger workspace backup script",
-    "script": "scripts/backup.sh",
-    "ack_message": "📦 [{bot_name}] Backup job started...",
-    "success_message": "✅ [{bot_name}] Backup completed in {duration}s.",
-    "error_message": "❌ [{bot_name}] Backup failed (Exit {returncode}): {stderr}",
-    "lock": true,
-    "arbiter_only_on_broadcast": true,
-    "schedule": {
-      "weekday": 6,
-      "hour": 4
-    }
-  }
-]
+```yaml
+custom_commands:
+  - command: backup
+    description: "Trigger workspace backup script"
+    description_en: "Trigger workspace backup script"
+    script: "scripts/backup.sh"
+    ack_message: "📦 [{bot_name}] Backup job started..."
+    success_message: "✅ [{bot_name}] Backup completed in {duration}s."
+    error_message: "❌ [{bot_name}] Backup failed (Exit {returncode}): {stderr}"
+    lock: true
+    arbiter_only_on_broadcast: true
+    schedule:
+      weekday: 6
+      hour: 4
 ```
 
 * **`script`**: Path to executable script (supports `~` expansion);

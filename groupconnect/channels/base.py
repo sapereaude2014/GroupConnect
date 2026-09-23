@@ -87,6 +87,10 @@ class BaseChannel(ABC):
         """Starts the platform listener (polling, websocket, or webhook)."""
         pass
 
+    async def stop(self) -> None:
+        """Stops the platform listener and releases underlying connections."""
+        pass
+
     @abstractmethod
     async def send_reply(self, chat_id: Union[int, str], text: str, reply_to_msg_id: Optional[Union[int, str]] = None) -> Optional[Union[int, str]]:
         """Sends a text reply to the specified chat and returns the sent message ID."""

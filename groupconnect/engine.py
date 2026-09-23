@@ -157,23 +157,28 @@ class GroupConnectEngine:
 
         # 5. Autonomous Routing (免@自主唤醒: single-arbiter + symmetric observers)
         self.autonomous: Optional[AutonomousController] = None
-        acfg_path = getattr(config, "autonomous_config_path", "")
-        if not acfg_path:
-            from groupconnect.routing.router import find_default_config_path
-            candidate = find_default_config_path()
-            if os.path.exists(candidate):
-                acfg_path = candidate
-        if acfg_path and os.path.exists(acfg_path):
+        acfg = getattr(config, "autonomous_config", None)
+        if acfg is None:
+            acfg_path = getattr(config, "autonomous_config_path", "")
+            if not acfg_path:
+                from groupconnect.routing.router import find_default_config_path
+                candidate = find_default_config_path()
+                if os.path.exists(candidate):
+                    acfg_path = candidate
+            if acfg_path and os.path.exists(acfg_path):
+                try:
+                    acfg = AutonomousConfig(acfg_path)
+                except Exception as e:
+                    logger.warning(f"Failed to load autonomous config from path: {e}")
+        if acfg and getattr(acfg, "enabled", False):
             try:
-                acfg = AutonomousConfig(acfg_path)
-                if acfg.enabled:
-                    self.autonomous = AutonomousController(
-                        bot_username=config.bot_username,
-                        cfg=acfg,
-                        relay=self.relay,
-                        dispatch=self._dispatch_autonomous,
-                        context_summary_fn=self._build_routing_context,
-                    )
+                self.autonomous = AutonomousController(
+                    bot_username=config.bot_username,
+                    cfg=acfg,
+                    relay=self.relay,
+                    dispatch=self._dispatch_autonomous,
+                    context_summary_fn=self._build_routing_context,
+                )
             except Exception as e:
                 logger.warning(f"Autonomous routing disabled: {e}")
 
@@ -230,6 +235,8 @@ class GroupConnectEngine:
         return self.chat_locks[chat_id]
 
     async def start(self) -> None:
+        if hasattr(self.config, "validate_credentials"):
+            self.config.validate_credentials()
         self.is_running = True
         if not self.gatekeeper.is_whitelist_active() and not self.config.allow_open_access:
             logger.warning(
@@ -247,14 +254,26 @@ class GroupConnectEngine:
         try:
             await self.channel.start()
         finally:
+            self.is_running = False
             reaper_task.cancel()
             if scheduler_task:
                 scheduler_task.cancel()
             for task in self.chat_tasks.values():
                 if not task.done():
                     task.cancel()
-            await self.relay.stop()
-            self.adapter.close()
+            if hasattr(self.channel, "stop"):
+                try:
+                    await self.channel.stop()
+                except Exception as e:
+                    logger.warning(f"Error stopping channel during shutdown: {e}")
+            try:
+                await self.relay.stop()
+            except Exception as e:
+                logger.warning(f"Error stopping relay during shutdown: {e}")
+            try:
+                self.adapter.close()
+            except Exception as e:
+                logger.warning(f"Error closing adapter during shutdown: {e}")
 
     async def _reaper_loop(self) -> None:
         while self.is_running:
@@ -474,7 +493,7 @@ class GroupConnectEngine:
             raw_text = (msg.text or "").strip()
             if raw_text.startswith("/"):
                 return
-            if re.search(r"(?:^|\s)@\w+|<@[!&]?\w+>", raw_text):
+            if re.search(r"@\w+(?!\.\w)|<@[!&]?\w+>", raw_text):
                 return
 
             # Autonomous routing: local preemption check + single-arbiter evaluation
@@ -874,7 +893,7 @@ class GroupConnectEngine:
 
         # Outbound Multimedia / File Delivery
         outbound_files = _extract_outbound_files(reply_text, self.config.workspace_dir)
-        clean_reply_text = _strip_sendfile_tags(reply_text) if outbound_files else reply_text
+        clean_reply_text = _strip_sendfile_tags(reply_text)
 
         sent_msg_id = None
         try:
@@ -905,7 +924,7 @@ class GroupConnectEngine:
         self.context_mgr.record_message(
             chat_id=chat_id,
             sender_name=f"{self.config.bot_name} (@{self.config.bot_username})",
-            text=reply_text,
+            text=clean_reply_text,
             msg_id=sent_msg_id,
             is_bot_reply=True,
             bot_username=self.config.bot_username
@@ -918,7 +937,7 @@ class GroupConnectEngine:
                     chat_id=chat_id,
                     chat_type=msg.chat_type,
                     msg_id=sent_msg_id or 0,
-                    text=reply_text,
+                    text=clean_reply_text,
                     hop_count=getattr(msg, "hop_count", 0)
                 )
             except Exception as e:
@@ -978,7 +997,7 @@ class GroupConnectEngine:
         if force_requested and force_arg:
             if force_arg not in cmd_args:
                 cmd_args.append(force_arg)
-        elif cmd_cfg.get("pass_args", True) and args:
+        elif cmd_cfg.get("pass_args", False) and args:
             for part in args.split():
                 if part not in cmd_args:
                     cmd_args.append(part)

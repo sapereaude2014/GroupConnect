@@ -1,0 +1,85 @@
+# ==============================================================================
+# GroupConnect Configuration Template
+# ==============================================================================
+# Modern, Declarative, Unified Configuration for Local Agent Group Gateways.
+# Environment variables like ${TELEGRAM_BOT_TOKEN} or ${VAR:-default} are expanded.
+# ==============================================================================
+
+# 1. 聊天平台 (支持: telegram, discord, slack, feishu, wecom)
+channel:
+  platform: telegram
+  token: ${TELEGRAM_BOT_TOKEN:-"your-telegram-bot-token-here"}
+
+# 2. 本地执行 Agent (支持: codex, claude, antigravity, opencode, teleagent)
+agent:
+  engine: codex                 # 本地 Agent CLI 引擎名称
+  workspace: ~/workspace        # 本地挂载的工作目录 (支持 ~ 路径展开)
+  # model: gemini-3.8-flash     # 可选：指定模型覆盖默认值
+
+# 3. 智能免 @ 自主插话 (Zero-@ 决策引擎)
+zero_at:
+  enabled: true                 # 开箱即用，默认集成 L0(噪音过滤) / L1(别名旁路与闲聊自指过滤) / L3(语义分类) 管线
+  # classifier:
+  #   engine: jev               # 支持: jev (TypeSafe 专用判别式分类) 或通用语言模型 llm / openai / gemini / anthropic
+  #   model: jev-latest         # 模型名称 (如 jev-latest, gpt-4o-mini, deepseek-chat, gemini-2.5-flash-lite)
+  #   base_url: ""              # 通用 LLM 可选自定义 OpenAI 兼容接口地址 (如 https://api.deepseek.com/v1)
+  #   api_key: ${JEV_API_KEY}   # 若已配置系统环境变量 JEV_API_KEY / OPENAI_API_KEY，此处可省略
+  # confidence_threshold: 0.60  # 分类器触发置信度阈值 (默认 0.60)
+  # parallel_threshold: 0.60    # 多 Bot 并行协同触发阈值 (默认同 confidence_threshold)
+  # silence_secs: 4.0           # 智能抢答防插话静默等待窗口 (默认 4.0 秒)
+  # immediate_secs: 1.0         # 明确指令/追问的即刻抢答延迟 (默认 1.0 秒)
+  # context_window_size: 3      # 传入分类器的最近上下文轮数 (默认 3)
+  # rules:                      # 可选：按需微调群聊背景与响应边界 (只写需要修改的项，其余自动使用内置默认值)
+  #   group: "这是一个私密群聊，配置了不同职责的专职助手 Bot"
+  #   immediate: "回复 {bot} 刚才的提问，或匹配其职责的直接指令：{role}"
+  #   wait: "需要查询数据、知识或客观建议，且匹配职责：{role}"
+  #   drop: "群成员之间的日常寒暄、玩笑打趣或与助手职责无关的话题"
+  #   parallel: "发送者明确要求 {bot} ({role}) 与其他助手同时回答"
+  # alias_drop_regex: []        # 可选：追加自定义的第三人称/闲聊过滤正则 (支持 {alias} 与 {any_alias} 占位符)
+  # noise_regex: []             # 可选：追加自定义的纯噪音过滤正则
+
+# ==============================================================================
+# [进阶配置 - 按需开启，所有字段均有健全默认值]
+# ==============================================================================
+
+# 4. 安全访问控制 (默认安全拦截未知群组)
+security:
+  allow_open_access: false      # 是否开放给所有人 (默认 false)
+  allow_group_members_dm: true  # 是否允许群内成员直接私聊
+  # allowed_chat_ids: [-100123456789] # 允许响应的群聊 ID
+  # allowed_user_ids: [123456789]     # 允许响应的管理员 Telegram User ID
+  # allowed_usernames: ["admin_user"] # 允许响应的用户名 (不带 @)
+
+# 5. 自定义斜杠指令 (Slash Commands)
+# custom_commands:
+#   - command: status
+#     description: "检查系统运行状态"
+#     script: "~/.local/bin/my-status-checker"
+#     ack_message: "正在检查系统状态..."
+
+# 6. 系统底层微调 (Tuning)
+# tuning:
+#   silence_window_secs: 4.0    # 智能抢答防插话静默窗口 (默认 4.0 秒，等同于 zero_at.silence_secs)
+#   ipc_dir: /tmp/groupconnect_ipc # 多 Bot 跨进程中继管道目录
+#   max_history_len: 30         # 上下文滑动窗口保留轮数
+
+# ==============================================================================
+# [多 Bot 协同集群配置 - 同一配置文件管理多个 Bot]
+# ==============================================================================
+# 如果需要在同一个群聊中运行多个 Bot 协同，取消下方 bots 列表注释即可：
+# (顶层 agent / security / tuning / custom_commands 配置会自动被所有 Bot 继承)
+#
+# bots:
+#   - name: "代码助手"
+#     username: "coder_bot"
+#     token: ${CODER_BOT_TOKEN}
+#     agent: codex
+#     role: "负责代码编写、重构与 Bug 修复"
+#     aliases: ["码农", "老铁"]
+#
+#   - name: "架构评审"
+#     username: "reviewer_bot"
+#     token: ${REVIEWER_BOT_TOKEN}
+#     agent: claude
+#     role: "负责代码审查、安全检查与架构设计"
+#     aliases: ["评审", "总管"]

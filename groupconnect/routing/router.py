@@ -18,7 +18,7 @@ import json
 import logging
 import os
 import re
-from typing import Any, Awaitable, Callable, Dict, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, Optional, Tuple, Union
 
 import httpx
  
@@ -30,142 +30,251 @@ def find_default_config_path() -> str:
 
     Standard discovery precedence:
     1. GROUPCONNECT_ROUTING_CONFIG environment variable
-    2. ~/.config/groupconnect/autonomous_config.json
-    3. autonomous_config.json (repository root)
-    4. autonomous_config.example.json (repository root, fallback example)
+    2. ~/.config/groupconnect/groupconnect.yaml
+    3. groupconnect.yaml (repository root)
+    4. groupconnect.example.yaml (repository root, fallback example)
     """
     env_path = os.environ.get("GROUPCONNECT_ROUTING_CONFIG")
     if env_path and os.path.isfile(env_path):
         return env_path
 
-    candidate = os.path.expanduser("~/.config/groupconnect/autonomous_config.json")
-    if os.path.isfile(candidate):
-        return candidate
+    candidate_yaml = os.path.expanduser("~/.config/groupconnect/groupconnect.yaml")
+    if os.path.isfile(candidate_yaml):
+        return candidate_yaml
 
     repo_root = os.path.dirname(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     )
-    for name in ("autonomous_config.json", "autonomous_config.example.json"):
+    for name in (
+        "groupconnect.yaml",
+        "groupconnect.yml",
+        "groupconnect.example.yaml",
+    ):
         p = os.path.join(repo_root, name)
         if os.path.isfile(p):
             return p
 
-    return os.path.join(repo_root, "autonomous_config.example.json")
+    return os.path.join(repo_root, "groupconnect.example.yaml")
 
 
 DEFAULT_CONFIG_PATH = find_default_config_path()
 
-# Fail-safe classifier wording, used ONLY when the rules file (single source
-# of truth) is missing or malformed. Live wording lives in the family-space
-# routing_rules.md, hot-reloaded on every classification call.
-DEFAULT_IMMEDIATE_CRITERIA = (
-    "Reply to {bot}'s earlier question/offer, or an imperative instruction matching: {role}"
-)
-DEFAULT_WAIT_CRITERIA = (
-    "A question needing data, information, or recommendations matching: {role}"
-)
-DEFAULT_DROP_CRITERIA = (
-    "Interpersonal conversation between group members, not directed at any bot"
-)
-DEFAULT_GROUP_DESCRIPTION = (
-    "Private group chat. Configured assistant bots handle different specialized tasks."
-)
-DEFAULT_PARALLEL_CRITERIA = (
-    "The sender explicitly wants {bot} ({role}) to participate, respond, or collaborate simultaneously alongside other assistants (e.g. coordinative phrases: 'A and B both', 'together'). Not causative dispatch ('A ask B to do X')."
+from groupconnect.routing.defaults import (
+    DEFAULT_NOISE_PATTERNS,
+    DEFAULT_ALIAS_DROP_PATTERNS,
+    DEFAULT_RULE_TEMPLATES,
+    DEFAULT_LLM_PROMPT_TEMPLATE,
+    DEFAULT_ROUTING_RULES_MD,
+    DEFAULT_IMMEDIATE_CRITERIA,
+    DEFAULT_WAIT_CRITERIA,
+    DEFAULT_DROP_CRITERIA,
+    DEFAULT_GROUP_DESCRIPTION,
+    DEFAULT_PARALLEL_CRITERIA,
 )
 
+_ENV_VAR_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
 
-def parse_rule_templates(content: str) -> Dict[str, str]:
-    """Parses '## <key>' sections of routing_rules.md into a {key: text} dict.
 
-    Keys are single lowercase words (immediate / wait / drop / group).
-    Multi-word headings like '## Decision Rules' never match, so the rules
-    prose stays out of the template map.
-    """
-    templates: Dict[str, str] = {}
-    current: Optional[str] = None
-    buf: list = []
-    for line in content.splitlines():
-        m = re.match(r"^##\s+([a-z_]+)\s*$", line)
-        if m:
-            if current:
-                templates[current] = "\n".join(buf).strip()
-            current, buf = m.group(1), []
-        elif current:
-            buf.append(line)
-    if current:
-        templates[current] = "\n".join(buf).strip()
-    return templates
+def _expand_env(obj: Any) -> Any:
+    if isinstance(obj, str):
+        def _repl(m: re.Match) -> str:
+            return os.environ.get(m.group(1), m.group(2) if m.group(2) is not None else "")
+        return _ENV_VAR_RE.sub(_repl, obj)
+    if isinstance(obj, dict):
+        return {k: _expand_env(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_expand_env(v) for v in obj]
+    return obj
 
 
 class AutonomousConfig:
     """Loads and validates the shared autonomous routing configuration."""
 
-    def __init__(self, path: Optional[str] = None):
-        self.path = path or find_default_config_path()
-        self._last_mtime: float = 0.0
+    def __init__(
+        self,
+        path_or_data: Optional[Union[str, Dict[str, Any]]] = None,
+        path: Optional[str] = None,
+    ):
+        if isinstance(path_or_data, dict):
+            self.raw_data: Optional[Dict[str, Any]] = path_or_data
+            self.path: Optional[str] = path
+            self._last_mtime: float = (
+                os.path.getmtime(path) if (path and os.path.isfile(path)) else 0.0
+            )
+        else:
+            self.raw_data = None
+            self.path = path_or_data or path or find_default_config_path()
+            self._last_mtime = 0.0
         self._load()
 
     def reload_if_modified(self) -> None:
         try:
-            if not self.path or not os.path.isfile(self.path):
-                return
-            mtime = os.path.getmtime(self.path)
-            if mtime != self._last_mtime:
-                self._load()
+            if self.path and os.path.isfile(self.path):
+                mtime = os.path.getmtime(self.path)
+                if mtime != self._last_mtime:
+                    self.raw_data = None
+                    self._load()
         except Exception:
             pass
 
     def _load(self) -> None:
-        raw = {}
         if self.path and os.path.isfile(self.path):
+            cfg_dir = os.path.dirname(os.path.abspath(self.path))
+            if os.path.isdir(cfg_dir):
+                import glob as _glob
+                for env_file in [os.path.join(cfg_dir, ".env")] + sorted(_glob.glob(os.path.join(cfg_dir, "*.env"))):
+                    if os.path.isfile(env_file):
+                        try:
+                            with open(env_file, "r", encoding="utf-8") as ef:
+                                for line in ef:
+                                    line = line.strip()
+                                    if not line or line.startswith("#"):
+                                        continue
+                                    if line.startswith("export "):
+                                        line = line[7:].strip()
+                                    if "=" in line:
+                                        k, v = line.split("=", 1)
+                                        k, v = k.strip(), v.strip().strip("'\"")
+                                        if k and k not in os.environ:
+                                            os.environ[k] = v
+                        except Exception:
+                            pass
+
+        raw: Dict[str, Any] = {}
+        if self.raw_data is not None:
+            raw = _expand_env(self.raw_data)
+        elif self.path and os.path.isfile(self.path):
             try:
                 self._last_mtime = os.path.getmtime(self.path)
                 with open(self.path, "r", encoding="utf-8") as f:
-                    raw = json.load(f)
+                    if self.path.endswith((".yaml", ".yml")):
+                        import yaml
+                        raw = yaml.safe_load(f) or {}
+                    else:
+                        raw = json.load(f)
+                raw = _expand_env(raw)
             except Exception as e:
                 logger.warning("Failed to load autonomous config from %s: %s", self.path, e)
                 raw = {}
         else:
             self._last_mtime = 0.0
 
-        cfg = raw.get("autonomous", {})
+        cfg = raw.get("autonomous", raw.get("zero_at", raw))
+        if not isinstance(cfg, dict):
+            cfg = {"enabled": bool(cfg)}
+        else:
+            cfg = dict(cfg)
+
+        # Merge multi-bot roles/aliases/arbiter/ipc/security when loading unified YAML directly
+        if "bots" in raw and isinstance(raw["bots"], list):
+            all_bots = raw["bots"]
+            roles = dict(cfg.get("roles", {}))
+            aliases = dict(cfg.get("aliases", {}))
+            for b in all_bots:
+                if not isinstance(b, dict):
+                    continue
+                uname = (b.get("username") or b.get("name") or "").lower().lstrip("@")
+                if uname:
+                    if uname not in roles and "role" in b:
+                        roles[uname] = b["role"]
+                    if uname not in aliases and "aliases" in b:
+                        aliases[uname] = list(b["aliases"])
+            cfg["roles"] = roles
+            cfg["aliases"] = aliases
+            if all_bots and not cfg.get("arbiter_bot"):
+                first = all_bots[0] if isinstance(all_bots[0], dict) else {}
+                cfg["arbiter_bot"] = (first.get("username") or first.get("name") or "").lower().lstrip("@")
+
+        if "tuning" in raw and isinstance(raw["tuning"], dict):
+            if not cfg.get("ipc_dir") and "ipc_dir" in raw["tuning"]:
+                cfg["ipc_dir"] = raw["tuning"]["ipc_dir"]
+            if "silence_window_secs" in raw["tuning"] and "silence_secs" not in cfg:
+                cfg["silence_secs"] = raw["tuning"]["silence_window_secs"]
+
+        security = raw.get("security", raw.get("allowlist", {}))
+        if isinstance(security, dict) and not cfg.get("allowed_chat_ids"):
+            chats = security.get("allowed_chat_ids", security.get("groups", []))
+            if chats:
+                cfg["allowed_chat_ids"] = list(chats)
+
         self.enabled: bool = bool(cfg.get("enabled", False))
         self.arbiter_bot: str = str(cfg.get("arbiter_bot", "")).lower().lstrip("@")
         self.ipc_dir: str = cfg.get("ipc_dir", "/tmp/groupconnect_ipc")
 
         windows = cfg.get("windows", {})
-        self.immediate_secs: float = float(windows.get("immediate_secs", 1.0))
-        self.silence_secs: float = float(windows.get("silence_secs", 4.0))
+        self.immediate_secs: float = float(
+            windows.get("immediate_secs", cfg.get("immediate_secs", 1.0))
+        )
+        self.silence_secs: float = float(
+            windows.get("silence_secs", cfg.get("silence_secs", cfg.get("silence_window_secs", 4.0)))
+        )
 
         ctx = cfg.get("context", {})
-        self.context_window_size: int = int(ctx.get("window_size", 3))
+        self.context_window_size: int = int(
+            ctx.get("window_size", cfg.get("context_window_size", 3))
+        )
 
         self.aliases: Dict[str, list] = {
             str(bot).lower().lstrip("@"): list(aliases or [])
             for bot, aliases in cfg.get("aliases", {}).items()
         }
         self.alias_mode: str = str(cfg.get("alias_mode", "bypass"))  # bypass | hint
-        # Pre-bypass filters: self-referential sentences (e.g. "call me assistant")
-        # get dropped BEFORE the alias wake; {alias} is expanded per alias.
-        self.alias_drop_regex: list = list(cfg.get("alias_drop_regex", []))
-        self.noise_regex: list = [re.compile(p) for p in cfg.get("noise_regex", [])]
+
+        # Pre-bypass filters: built-in defaults are ALWAYS active; user config extends them
+        raw_alias_drop = cfg.get("alias_drop_regex") or []
+        self.alias_drop_regex: list = list(DEFAULT_ALIAS_DROP_PATTERNS)
+        for pat in raw_alias_drop:
+            if pat and pat not in self.alias_drop_regex:
+                self.alias_drop_regex.append(pat)
+
+        raw_noise = cfg.get("noise_regex") or []
+        merged_noise = list(DEFAULT_NOISE_PATTERNS)
+        for pat in raw_noise:
+            if pat and pat not in merged_noise:
+                merged_noise.append(pat)
+        self.noise_regex: list = [re.compile(p) for p in merged_noise]
 
         # ---- Classifier provider registry (self-describing) ----
-        # classifier.active            -> the switch: which providers entry is live
-        # classifier.rules_file        -> shared wording (single source of truth) for ALL engines
-        # classifier.providers.<name> -> per-provider params + resources:
-        #   engine           "jev" (TypeSafe structured) | "gemini" (free-text JSON prompt)
-        #   model / api_key_env / api_key / timeout_ms
-        #   prompt_template gemini-engine skeleton file (jev engines need none)
         clf = cfg.get("classifier", {})
-        self.confidence_threshold: float = float(clf.get("confidence_threshold", 0.80))
-        self.parallel_threshold: float = float(clf.get("parallel_threshold", self.confidence_threshold))
-        self.daily_budget: int = int(clf.get("daily_budget", 800))
-        self.rules_file: str = str(clf.get("rules_file", cfg.get("rules_file", "")))
+        self.confidence_threshold: float = float(
+            clf.get("confidence_threshold", cfg.get("confidence_threshold", 0.60))
+        )
+        self.parallel_threshold: float = float(
+            clf.get("parallel_threshold", cfg.get("parallel_threshold", self.confidence_threshold))
+        )
+        self.daily_budget: int = int(
+            clf.get("daily_budget", cfg.get("daily_budget", 800))
+        )
 
-        providers = clf.get("providers") or {}
-        default_active = "typesafe" if "typesafe" in providers else "google_ai_studio"
+        providers = clf.get("providers")
+        if not providers:
+            clf_engine = str(clf.get("engine", cfg.get("engine", "jev"))).lower()
+            if clf_engine == "jev":
+                default_model = "jev-latest"
+                default_env = "JEV_API_KEY"
+            elif clf_engine in ("openai", "llm"):
+                default_model = "gpt-4o-mini"
+                default_env = "OPENAI_API_KEY"
+            elif clf_engine == "anthropic":
+                default_model = "claude-3-5-haiku-latest"
+                default_env = "ANTHROPIC_API_KEY"
+            else:
+                default_model = "gemini-2.5-flash-lite"
+                default_env = "GEMINI_ROUTER_API_KEY" if "GEMINI_ROUTER_API_KEY" in os.environ else "GEMINI_API_KEY"
+            clf_model = clf.get("model", cfg.get("model", default_model)) or default_model
+            api_key = clf.get("api_key", cfg.get("api_key", os.environ.get(default_env, "")))
+            api_key_env = clf.get("api_key_env", default_env if not clf.get("api_key") and not cfg.get("api_key") else "")
+            providers = {
+                "default": {
+                    "engine": clf_engine,
+                    "model": clf_model,
+                    "base_url": clf.get("base_url", cfg.get("base_url", "")),
+                    "api_key": api_key,
+                    "api_key_env": api_key_env,
+                    "timeout_ms": clf.get("timeout_ms", 5000),
+                }
+            }
+        default_active = "typesafe" if "typesafe" in providers else next(iter(providers.keys()), "typesafe")
         self.providers: Dict[str, dict] = {
             str(name).lower().lstrip("@"): (p if isinstance(p, dict) else {})
             for name, p in providers.items()
@@ -180,28 +289,40 @@ class AutonomousConfig:
                     self.active_provider, sorted(self.providers),
                 )
             pcfg = {}
-        self.engine: str = str(pcfg.get("engine", "gemini")).lower()
-        self.model: str = str(pcfg.get("model", ""))
-        self.api_key: str = os.environ.get(str(pcfg.get("api_key_env", "")), "") \
-            or str(pcfg.get("api_key", ""))
+        self.engine: str = str(pcfg.get("engine", "jev" if self.active_provider == "typesafe" else "llm")).lower()
+        if pcfg:
+            if self.engine == "jev":
+                default_engine_model = "jev-latest"
+            elif self.engine in ("openai", "llm"):
+                default_engine_model = "gpt-4o-mini"
+            elif self.engine == "anthropic":
+                default_engine_model = "claude-3-5-haiku-latest"
+            else:
+                default_engine_model = "gemini-2.5-flash-lite"
+        else:
+            default_engine_model = ""
+        self.model: str = str(pcfg.get("model") or default_engine_model)
+        self.base_url: str = _expand_env(str(pcfg.get("base_url", clf.get("base_url", "")))).strip().rstrip("/")
+        raw_api_key = os.environ.get(str(pcfg.get("api_key_env", "")), "") or str(pcfg.get("api_key", ""))
+        self.api_key: str = _expand_env(raw_api_key).strip()
         self.timeout_ms: int = int(pcfg.get("timeout_ms", 3000))
-        self.prompt_file: str = str(pcfg.get("prompt_template", ""))
 
         self.roles: Dict[str, str] = {
             str(bot).lower().lstrip("@"): role
             for bot, role in cfg.get("roles", {}).items()
         }
-        # Classifier wording (immediate/wait/drop/group) lives in the rules
-        # file - the single source of truth - parsed from '## <key>' sections.
-        # Code keeps only fail-safe defaults when the file is missing.
-        self.rule_templates: Dict[str, str] = {}
-        rules_path = self._resolve_rules_path()
-        if rules_path and os.path.isfile(rules_path):
-            try:
-                with open(rules_path, "r", encoding="utf-8") as f:
-                    self.rule_templates = parse_rule_templates(f.read())
-            except Exception as e:
-                logger.warning("[ROUTING] Failed to parse rule templates from %s: %s", rules_path, e)
+
+        # Classifier wording (immediate/wait/drop/group/parallel):
+        # Built-in DEFAULT_RULE_TEMPLATES overlaid by optional zero_at.rules in YAML
+        self.rule_templates: Dict[str, str] = dict(DEFAULT_RULE_TEMPLATES)
+        raw_rules = cfg.get("rules")
+        self.custom_rules: Dict[str, str] = (
+            {str(k): str(v) for k, v in raw_rules.items() if v}
+            if isinstance(raw_rules, dict)
+            else {}
+        )
+        if self.custom_rules:
+            self.rule_templates.update(self.custom_rules)
 
         conc = cfg.get("concurrency", {})
         self.max_queue_backlog: int = int(conc.get("max_queue_backlog", 2))
@@ -211,19 +332,12 @@ class AutonomousConfig:
         self.allowed_chat_ids: set = set(cfg.get("allowed_chat_ids", []))
         self.allowed_senders: set = set(cfg.get("allowed_senders", []))
 
-    def _resolve_rules_path(self) -> str:
-        """Absolute path of the rules file, or '' when not resolvable."""
-        path = self.rules_file or ""
-        if path and not os.path.isabs(path):
-            base = os.path.dirname(os.path.abspath(self.path)) if self.path else os.getcwd()
-            path = os.path.join(base, path)
-        return path
-
     def is_alias_self_referential(self, alias: str, text: str) -> bool:
         """True if this specific alias is used in a self-referential / banter pattern."""
+        esc_alias = re.escape(alias)
         for tpl in self.alias_drop_regex:
             try:
-                if re.search(tpl.replace("{alias}", re.escape(alias)), text):
+                if re.search(tpl.replace("{alias}", esc_alias), text):
                     return True
             except re.error:
                 continue
@@ -303,12 +417,14 @@ class AutonomousObserver:
         targets_raw = decision.get("target_bots")
         if targets_raw and isinstance(targets_raw, (list, set, tuple)):
             target_set = {str(t).lower().lstrip("@") for t in targets_raw}
-        else:
+        elif target and target != "none":
             target_set = {target}
+        else:
+            target_set = set()
 
         urgency = decision.get("urgency", "drop")
         chat_id = decision.get("chat_id")
-        should_act = (self.my_bot in target_set) or ("all" in target_set) or (target == "all")
+        should_act = self.my_bot in target_set
         if not should_act or urgency == "drop" or chat_id is None:
             return
         secs = self.cfg.immediate_secs if urgency == "immediate" else self.cfg.silence_secs
@@ -363,27 +479,10 @@ class AutonomousArbiter:
         return self._budget_used >= self.cfg.daily_budget
 
     # ---------- prompt ----------
-    def _load_prompt(self) -> str:
-        path = self.cfg.prompt_file
-        if not path:
-            return ""
-        if not os.path.isabs(path):
-            path = os.path.join(os.path.dirname(os.path.abspath(self.cfg.path)), path)
-        if not os.path.exists(path):
-            logger.warning(f"[ROUTING] Prompt file missing: {path}")
-            return ""
-        mtime = os.path.getmtime(path)
-        if self._prompt_cache is None or mtime != self._prompt_mtime:
-            with open(path, "r", encoding="utf-8") as f:
-                self._prompt_cache = f.read()
-            self._prompt_mtime = mtime
-        return self._prompt_cache
-
     def _render_prompt(self, text: str, sender: str, context: str, alias_hint: str) -> str:
-        tpl = self._load_prompt()
         roles = "\n".join(f"  {bot}: {role}" for bot, role in self.cfg.roles.items())
         return (
-            tpl.replace("{ROLES}", roles)
+            DEFAULT_LLM_PROMPT_TEMPLATE.replace("{ROLES}", roles)
                .replace("{RULES_SECTION}", self._load_rules_instructions())
                .replace("{CONTEXT}", context or "(no prior messages)")
                .replace("{SENDER}", sender)
@@ -392,45 +491,14 @@ class AutonomousArbiter:
         )
 
     def _load_rules_instructions(self) -> str:
-        """Loads decision instructions for structured classifiers like Jev.
-
-        1. Read from explicit rules_file if configured and exists.
-           (Everything below '# Classifier Templates' is wording, not
-           instructions, so it is stripped before use.)
-        2. Extract the 'Decision Rules' section from prompt_file.
-        3. Fallback to default decision rules.
-        """
-        path = self.cfg._resolve_rules_path()
-        if path and os.path.exists(path):
-                try:
-                    with open(path, "r", encoding="utf-8") as f:
-                        content = f.read().strip()
-                    if "\n# Classifier Templates" in content:
-                        content = content.split("\n# Classifier Templates", 1)[0].strip()
-                    if content:
-                        return content
-                except Exception as e:
-                    logger.warning(f"[ROUTING] Failed to read rules_file {path}: {e}")
-
-        prompt = self._load_prompt()
-        if prompt and "Decision Rules" in prompt:
-            parts = prompt.split("Decision Rules", 1)[1]
-            rules_part = parts.split("Output STRICT JSON", 1)[0].strip()
-            return f"Decide which bot should reply, or if bots stay silent.\nDecision Rules {rules_part}"
-
-        return (
-            "Decide which bot should reply to current_message, or if bots should stay silent. "
-            "Rules (first match wins): "
-            "1. REPLY TO BOT: If recent_conversation shows a Bot asked a question, offered options, or proposed a plan, "
-            "and current_message is an answer, acknowledgment, confirmation (e.g. '可以', '好的', '行', '确定'), "
-            "or a follow-up question/feedback directed to that bot, the bot that spoke/asked replies immediately. "
-            "2. CHITCHAT: If current_message is interpersonal conversation between group members "
-            "(flirting, affection, venting, small talk, private plans between members), or mentions a bot in a third-person narrative/banter, bots stay silent. "
-            "3. IMPERATIVE: If current_message is a functional imperative instruction for a bot "
-            "(controlling appliances, alarms, setting reminders, clear directives), the matching bot replies immediately. "
-            "4. QUESTION: If current_message is an explicit question needing data, lookup, or recommendations "
-            "(contains question words like 几点/多少/怎么/什么/吗 or question mark), the matching bot replies after waiting."
-        )
+        """Builds decision instructions from built-in defaults plus optional zero_at.rules overrides."""
+        base = DEFAULT_ROUTING_RULES_MD.strip()
+        if not self.cfg.custom_rules:
+            return base
+        overrides = ["\nGroup-Specific Overrides:"]
+        for k, v in self.cfg.custom_rules.items():
+            overrides.append(f"- {k}: {v}")
+        return base + "\n" + "\n".join(overrides)
 
 
     # ---------- pipeline ----------
@@ -461,6 +529,7 @@ class AutonomousArbiter:
     async def classify(self, text: str, sender: str, context: str, alias_hint: str = "") -> Dict[str, Any]:
         """L3: single classifier tri-state call. Fail-closed -> drop.
         Dispatches on the ACTIVE provider's engine (jev | gemini)."""
+        self.cfg.reload_if_modified()
         drop = {"target_bot": "none", "target_bots": [], "urgency": "drop", "confidence": 0.0, "source": "classifier"}
         if not self.cfg.api_key:
             logger.warning("[ROUTING] No API key configured; fail-closed drop.")
@@ -469,11 +538,19 @@ class AutonomousArbiter:
             if self.cfg.degrade == "alias_only":
                 logger.warning("[ROUTING] Daily budget exceeded; fail-closed drop (alias bypass still active).")
                 return drop
+        if not alias_hint:
+            hits = self.cfg.alias_hits(text)
+            if hits:
+                alias_map = {
+                    f"@{b}": [a for a in self.cfg.aliases.get(b, []) if a and a in text]
+                    for b in hits
+                }
+                alias_hint = f"(Detected bot aliases in message: {alias_map})"
         engine = self.cfg.engine
         if engine == "jev":
             return await self._classify_jev(text, sender, context, alias_hint, drop)
-        if engine == "gemini":
-            return await self._classify_gemini(text, sender, context, alias_hint, drop)
+        if engine in ("llm", "openai", "gemini", "anthropic"):
+            return await self._classify_llm(text, sender, context, alias_hint, drop)
         logger.warning(f"[ROUTING] Unknown classifier engine '{engine}'; fail-closed drop.")
         return drop
 
@@ -500,11 +577,6 @@ class AutonomousArbiter:
             criteria[f"{bot}_wait"] = wait.replace("{bot}", bot).replace("{role}", role)
             jev_map[f"{bot}_immediate"] = (bot, "immediate")
             jev_map[f"{bot}_wait"] = (bot, "wait_silence")
-        # Legacy fallback if someone still has all_immediate in templates
-        all_imm = t.get("all_immediate", "")
-        if all_imm:
-            criteria["all_immediate"] = all_imm
-            jev_map["all_immediate"] = ("all", "immediate")
         criteria["none_drop"] = drop
         jev_map["none_drop"] = ("none", "drop")
         return criteria, jev_map, group
@@ -582,21 +654,13 @@ class AutonomousArbiter:
             if probs:
                 bot_probs = {b: 0.0 for b in self.cfg.roles.keys()}
                 none_prob = float(probs.get("none_drop", 0.0) or 0.0)
-                all_prob = float(probs.get("all_immediate", 0.0) or 0.0)
                 for k, p in probs.items():
-                    if k == "all_immediate":
-                        continue
                     for b in bot_probs:
                         if k.startswith(b):
                             bot_probs[b] += float(p or 0.0)
 
                 best_bot, best_bot_prob = max(bot_probs.items(), key=lambda x: x[1])
-                # Three-way comparison if all_immediate was in Choice (legacy backward-compat)
-                if all_prob >= self.cfg.confidence_threshold and all_prob > best_bot_prob and all_prob > none_prob:
-                    target_bot = "all"
-                    urgency = "immediate"
-                    confidence = all_prob
-                elif best_bot_prob >= self.cfg.confidence_threshold and best_bot_prob > none_prob:
+                if best_bot_prob >= self.cfg.confidence_threshold and best_bot_prob > none_prob:
                     target_bot = best_bot
                     confidence = best_bot_prob
                     p_imm = float(probs.get(f"{best_bot}_immediate", 0.0) or 0.0)
@@ -620,23 +684,17 @@ class AutonomousArbiter:
                 return decision
 
             # Primary bot succeeded! Check per-bot Noul answers for parallel co-respondents
-            if target_bot == "all":
-                target_bots = list(self.cfg.roles.keys())
-            else:
-                target_bots = [target_bot]
-                for b in self.cfg.roles:
-                    if b == target_bot:
-                        continue
-                    noul_ans = answers.get(f"parallel_{b}", {})
-                    noul_prob = float(noul_ans.get("noul", 0.0) or 0.0)
-                    if noul_prob >= self.cfg.parallel_threshold:
-                        target_bots.append(b)
-
-            is_all = len(target_bots) == len(self.cfg.roles) and len(self.cfg.roles) > 1
-            final_target = "all" if is_all else target_bot
+            target_bots = [target_bot]
+            for b in self.cfg.roles:
+                if b == target_bot:
+                    continue
+                noul_ans = answers.get(f"parallel_{b}", {})
+                noul_prob = float(noul_ans.get("noul", 0.0) or 0.0)
+                if noul_prob >= self.cfg.parallel_threshold:
+                    target_bots.append(b)
 
             decision = {
-                "target_bot": final_target,
+                "target_bot": target_bot,
                 "target_bots": target_bots,
                 "urgency": urgency,
                 "confidence": round(confidence, 2),
@@ -645,13 +703,70 @@ class AutonomousArbiter:
             self._budget_used += 1
             return decision
 
-    async def _classify_gemini(self, text: str, sender: str, context: str, alias_hint: str, drop: dict) -> Dict[str, Any]:
-        """Gemini Flash-Lite classifier: free-text prompt -> JSON."""
+    @staticmethod
+    def _extract_json_dict(raw_text: str) -> Dict[str, Any]:
+        """Extracts JSON object from LLM text, stripping optional markdown fences."""
+        s = (raw_text or "").strip()
+        if s.startswith("```"):
+            s = re.sub(r"^```(?:json)?\s*", "", s)
+            s = re.sub(r"\s*```$", "", s).strip()
+        start = s.find("{")
+        end = s.rfind("}")
+        if start != -1 and end != -1 and end >= start:
+            s = s[start : end + 1]
+        return json.loads(s)
+
+    async def _classify_llm(self, text: str, sender: str, context: str, alias_hint: str, drop: dict) -> Dict[str, Any]:
+        """General LLM JSON classifier: renders prompt -> calls OpenAI-compatible / Gemini / Anthropic API -> parses JSON."""
         prompt = self._render_prompt(text, sender, context, alias_hint)
         if not prompt:
             return drop
-        url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
-               f"{self.cfg.model}:generateContent?key={self.cfg.api_key}")
+
+        engine = self.cfg.engine
+        base_url = getattr(self.cfg, "base_url", "")
+        use_gemini_native = (engine == "gemini") and (not base_url or "googleapis.com" in base_url)
+        use_anthropic = (engine == "anthropic")
+
+        if use_gemini_native:
+            api_root = base_url or "https://generativelanguage.googleapis.com/v1beta"
+            url = f"{api_root}/models/{self.cfg.model}:generateContent?key={self.cfg.api_key}"
+            headers: Dict[str, str] = {}
+            payload = {
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {
+                    "response_mime_type": "application/json",
+                    "temperature": 0.0,
+                },
+            }
+        elif use_anthropic:
+            api_root = base_url or "https://api.anthropic.com/v1"
+            url = api_root if api_root.endswith("/messages") else f"{api_root}/messages"
+            headers = {
+                "x-api-key": self.cfg.api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            }
+            payload = {
+                "model": self.cfg.model,
+                "max_tokens": 256,
+                "temperature": 0.0,
+                "messages": [{"role": "user", "content": prompt}],
+            }
+        else:
+            # Standard OpenAI-compatible Chat Completions endpoint (OpenAI, DeepSeek, Qwen, SiliconFlow, OpenRouter, etc.)
+            api_root = base_url or "https://api.openai.com/v1"
+            url = api_root if api_root.endswith("/chat/completions") else f"{api_root}/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {self.cfg.api_key}",
+                "Content-Type": "application/json",
+            }
+            payload = {
+                "model": self.cfg.model,
+                "messages": [{"role": "user", "content": prompt}],
+                "response_format": {"type": "json_object"},
+                "temperature": 0.0,
+            }
+
         timeout = self.cfg.timeout_ms / 1000.0
         async with self._call_lock:  # throttle: no classifier bursts (anti-429)
             wait = self._min_interval - (asyncio.get_event_loop().time() - self._last_call_ts)
@@ -660,56 +775,41 @@ class AutonomousArbiter:
             self._last_call_ts = asyncio.get_event_loop().time()
             try:
                 async with httpx.AsyncClient(timeout=timeout) as client:
-                    res = await client.post(url, json={
-                        "contents": [{"parts": [{"text": prompt}]}],
-                        "generationConfig": {
-                            "response_mime_type": "application/json",
-                            "temperature": 0.0,
-                        },
-                    })
+                    res = await client.post(url, json=payload, headers=headers)
                 if res.status_code == 429:  # rate limit: exponential backoff retries
                     for attempt, backoff in enumerate((2.0, 4.0), start=1):
                         logger.warning(f"[ROUTING] Classifier 429; backoff {backoff}s (retry {attempt}/2).")
                         await asyncio.sleep(backoff)
                         async with httpx.AsyncClient(timeout=timeout) as client:
-                            res = await client.post(url, json={
-                                "contents": [{"parts": [{"text": prompt}]}],
-                                "generationConfig": {
-                                    "response_mime_type": "application/json",
-                                    "temperature": 0.0,
-                                },
-                            })
+                            res = await client.post(url, json=payload, headers=headers)
                         if res.status_code != 429:
                             break
                 if res.status_code != 200:
                     logger.warning(f"[ROUTING] Classifier HTTP {res.status_code}; fail-closed drop.")
                     return drop
-                data = json.loads(res.json()["candidates"][0]["content"]["parts"][0]["text"])
+                resp_json = res.json()
+                if use_gemini_native:
+                    raw_text = resp_json["candidates"][0]["content"]["parts"][0]["text"]
+                elif use_anthropic:
+                    raw_text = resp_json["content"][0]["text"]
+                else:
+                    raw_text = resp_json["choices"][0]["message"]["content"]
+                data = self._extract_json_dict(raw_text)
             except Exception as e:
                 logger.warning(f"[ROUTING] Classifier failed: {e}; fail-closed drop.")
                 return drop
 
             raw_target = data.get("target_bots") or data.get("target_bot", "none")
             if isinstance(raw_target, list):
-                target_bots = [str(t).lower().lstrip("@") for t in raw_target]
+                cleaned = [str(t).lower().lstrip("@") for t in raw_target]
+                target_bots = [t for t in cleaned if t in self.cfg.roles]
             elif isinstance(raw_target, str):
                 t_str = str(raw_target).lower().lstrip("@")
-                if t_str == "all":
-                    target_bots = list(self.cfg.roles.keys())
-                elif t_str in self.cfg.roles:
-                    target_bots = [t_str]
-                else:
-                    target_bots = []
+                target_bots = [t_str] if t_str in self.cfg.roles else []
             else:
                 target_bots = []
 
-            is_all = len(target_bots) == len(self.cfg.roles) and len(self.cfg.roles) > 1
-            if is_all:
-                primary_target = "all"
-            elif target_bots:
-                primary_target = target_bots[0]
-            else:
-                primary_target = "none"
+            primary_target = target_bots[0] if target_bots else "none"
 
             decision = {
                 "target_bot": primary_target,

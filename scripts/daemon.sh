@@ -6,28 +6,49 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ACTION="${1:-start}"
 CONFIG_ARG="$2"
 
-# If first argument is a json file, treat as start
-if [[ "$ACTION" == *.json ]]; then
+# If first argument is a config file, treat as start
+if [[ "$ACTION" == *.json || "$ACTION" == *.yaml || "$ACTION" == *.yml ]]; then
     CONFIG_ARG="$ACTION"
     ACTION="start"
 fi
 
-CONFIG_FILE="${CONFIG_ARG:-$DIR/config.json}"
+CONFIG_FILE="${CONFIG_ARG:-$DIR/groupconnect.yaml}"
 if [ ! -f "$CONFIG_FILE" ]; then
-    # Try auto-detecting config.*.json
-    MATCHES=($DIR/config.*.json)
-    if [ -f "${MATCHES[0]}" ]; then
-        CONFIG_FILE="${MATCHES[0]}"
+    if [ -f "$DIR/groupconnect.yml" ]; then
+        CONFIG_FILE="$DIR/groupconnect.yml"
+    elif [ -f "$DIR/config.json" ]; then
+        CONFIG_FILE="$DIR/config.json"
+    else
+        # Try auto-detecting config.*.json
+        MATCHES=($DIR/config.*.json)
+        if [ -f "${MATCHES[0]}" ]; then
+            CONFIG_FILE="${MATCHES[0]}"
+        fi
     fi
 fi
 
-BASENAME=$(basename "$CONFIG_FILE" .json)
+BASENAME=$(basename "$CONFIG_FILE" | sed -E 's/\.(json|ya?ml)$//')
 LOG_DIR="$DIR/logs"
 PID_DIR="$DIR/pids"
 mkdir -p "$LOG_DIR" "$PID_DIR"
 
 LOG_FILE="$LOG_DIR/${BASENAME}.log"
 PID_FILE="$PID_DIR/${BASENAME}.pid"
+
+# Look for associated .env file
+CONFIG_DIR_PATH=$(dirname "$CONFIG_FILE")
+if [ -f "$CONFIG_DIR_PATH/${BASENAME}.env" ]; then
+    set -a && source "$CONFIG_DIR_PATH/${BASENAME}.env" && set +a
+elif [ -f "$CONFIG_DIR_PATH/.env" ]; then
+    set -a && source "$CONFIG_DIR_PATH/.env" && set +a
+elif [ -f "$DIR/.env" ]; then
+    set -a && source "$DIR/.env" && set +a
+else
+    ENV_MATCHES=("$CONFIG_DIR_PATH"/*.env)
+    if [ -f "${ENV_MATCHES[0]}" ]; then
+        set -a && source "${ENV_MATCHES[0]}" && set +a
+    fi
+fi
 
 run_watchdog() {
     echo "$$" > "$PID_FILE"

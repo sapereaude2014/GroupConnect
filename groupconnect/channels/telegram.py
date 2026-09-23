@@ -533,3 +533,10 @@ class TelegramChannel(BaseChannel):
             except Exception as e:
                 logger.error(f"Error in Telegram long-polling loop: {e}")
                 await asyncio.sleep(3)
+
+    async def stop(self) -> None:
+        self.is_running = False
+        try:
+            await self.client.aclose()
+        except Exception:
+            pass

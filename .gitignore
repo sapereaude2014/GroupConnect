@@ -6,6 +6,8 @@ __pycache__/
 # Config & local secrets
 config.json
 config.*.json
+groupconnect.yaml
+groupconnect.yml
 *.pid
 *.log
 
@@ -13,6 +15,12 @@ config.*.json
 /autonomous_config.json
 /router_prompt.txt
 /routing_rules.md
+
+# Build & packaging
+*.egg-info/
+build/
+dist/
+.pytest_cache/
 
 # Local replay benchmark with private group chat logs
 tests/replay_arbiter.py
