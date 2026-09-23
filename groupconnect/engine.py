@@ -1200,28 +1200,24 @@ class GroupConnectEngine:
         """Execute a pattern-matched command directly, bypassing LLM routing.
         Reuses _run_custom_command for script execution, ack, and error handling.
 
-        Lock granularity is configurable via 'lock_group' (1-indexed regex
-        capture group number). If set, that group's value becomes the lock key
-        so commands targeting the same entity serialize while different ones
-        run in parallel. If not set, falls back to the full trigger text as
-        the lock key (conservative: every distinct command serializes independently)."""
+        Lock granularity is per-device: the device name is extracted from the
+        regex capture groups so that '开卧室空调' and '关卧室空调' share a lock
+        (same device, must serialize) while '开卧室空调' and '关工作室空调' do not
+        (different devices, run in parallel)."""
         cmd_cfg = pc["_cmd_cfg"]
         cmd_name = str(cmd_cfg.get("command", "")).strip().lower()
 
         lock_key = None
         if cmd_cfg.get("lock", False):
-            lock_group = pc.get("lock_group")
-            device = text  # fallback: full trigger text
-            if lock_group:
-                groups = [lock_group] if isinstance(lock_group, int) else list(lock_group)
-                m = pc["_compiled"].search(text)
-                if m:
-                    for gi in groups:
-                        if isinstance(gi, int) and 1 <= gi <= len(m.groups()):
-                            g = m.group(gi)
-                            if g:
-                                device = g
-                                break
+            # Extract device name from regex groups: the capture group that is
+            # neither 开/关 nor a temperature number is the device name.
+            device = text
+            m = pc["_compiled"].search(text)
+            if m:
+                for g in m.groups():
+                    if g and g not in ("开", "关") and not g.isdigit():
+                        device = g
+                        break
             lock_key = f"{cmd_name}:{device}"
             if lock_key in self._running_custom_commands:
                 await self.channel.send_reply(
