@@ -61,7 +61,9 @@ class TestPatternCommands(unittest.IsolatedAsyncioTestCase):
         }])
         self.assertEqual(len(engine._pattern_commands), 1)
         pc = engine._pattern_commands[0]
-        self.assertEqual(pc["command"], "pattern_1")
+        # Pattern dict stays clean (no command fields); identity lives in _cmd_cfg
+        self.assertNotIn("command", pc)
+        self.assertEqual(pc["_cmd_cfg"]["command"], "pattern_1")
         self.assertEqual(pc["_cmd_cfg"]["script"], "/tmp/device.py")
         self.assertTrue(pc["_cmd_cfg"]["pass_args"])
 

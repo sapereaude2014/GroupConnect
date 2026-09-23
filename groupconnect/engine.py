@@ -164,13 +164,23 @@ class GroupConnectEngine:
             elif pc.get("script"):
                 if not cmd_name:
                     cmd_name = f"pattern_{len(self._pattern_commands) + 1}"
-                    pc["command"] = cmd_name
-                # Safe defaults for standalone patterns: pass the matched text through
-                # (a pattern script without its trigger text is useless) and serialize
-                # concurrent triggers (interleaved multi-step ops corrupt device state).
-                pc.setdefault("pass_args", True)
-                pc.setdefault("lock", True)
-                pc["_cmd_cfg"] = pc
+                # Build a clean, separate command-config dict instead of self-referencing
+                # the pattern dict, so pattern-specific fields (pattern/max_length) can
+                # never collide with command fields (script/lock/messages).
+                # Safe defaults: pass_args=True (a pattern script without its trigger
+                # text is useless); lock=True (interleaved concurrent triggers corrupt
+                # multi-step device operations). Explicit config always wins.
+                pc["_cmd_cfg"] = {
+                    "command": cmd_name,
+                    "script": pc.get("script", ""),
+                    "pass_args": bool(pc.get("pass_args", True)),
+                    "lock": bool(pc.get("lock", True)),
+                    "ack_message": pc.get("ack_message", ""),
+                    "success_message": pc.get("success_message", ""),
+                    "error_message": pc.get("error_message", ""),
+                    "default_args": list(pc.get("default_args", [])),
+                    "force_arg": pc.get("force_arg", ""),
+                }
             else:
                 logger.warning(
                     f"Pattern command skipped (needs 'command' or 'script'): {pattern_str[:50]}"
