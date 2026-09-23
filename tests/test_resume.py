@@ -4,6 +4,7 @@ import unittest
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from groupconnect.channels.base import InboundMessage
 from groupconnect.core.config import GatewayConfig
 from groupconnect.engine import GroupConnectEngine
 
@@ -22,7 +23,7 @@ def make_item(text, sender="Zheng Ma", is_bot=False, when=None, msg_id=101):
 class TestResumeUnanswered(unittest.IsolatedAsyncioTestCase):
     """Startup resume: recent unanswered human messages are re-dispatched after a restart."""
 
-    def _make_engine(self, resume_secs=300, allowed_chats=None):
+    def _make_engine(self, resume_secs=300, allowed_chats=None, mock_inbound=True):
         self.test_dir = tempfile.mkdtemp()
         config = GatewayConfig({
             "platform": "telegram",
@@ -39,7 +40,8 @@ class TestResumeUnanswered(unittest.IsolatedAsyncioTestCase):
         with patch.object(GroupConnectEngine, "_create_adapter", return_value=MagicMock()), \
              patch.object(GroupConnectEngine, "_create_channel", return_value=mock_channel):
             engine = GroupConnectEngine(config)
-        engine.on_inbound_message = AsyncMock()
+        if mock_inbound:
+            engine.on_inbound_message = AsyncMock()
         engine.context_mgr.buffers = {}
         return engine
 
@@ -114,6 +116,31 @@ class TestResumeUnanswered(unittest.IsolatedAsyncioTestCase):
         engine.context_mgr.buffers[-100123] = [item]
         await engine._resume_unanswered_messages()
         engine.on_inbound_message.assert_not_awaited()
+
+    async def test_re_dispatch_skips_history_re_recording(self):
+        """The resumed message is already the buffer's last entry, so the re-dispatch
+        must flow through the pipeline without writing a duplicate history entry."""
+        engine = self._make_engine()
+        engine.context_mgr.buffers[-100123] = [
+            make_item("开电脑", when=datetime.now() - timedelta(seconds=30), msg_id=101),
+        ]
+        await engine._resume_unanswered_messages()
+        engine.on_inbound_message.assert_awaited_once()
+        self.assertFalse(engine.on_inbound_message.await_args[1].get("record", True))
+
+    async def test_record_false_skips_context_recording(self):
+        """on_inbound_message(record=False) leaves the history buffer untouched while
+        the default still records — this is what keeps resume re-dispatch duplicate-free."""
+        engine = self._make_engine(mock_inbound=False)
+        msg = InboundMessage(
+            chat_id=-100123, chat_type="group", msg_id=101,
+            sender_name="Zheng Ma", from_user={"id": 1, "first_name": "Zheng"},
+            text="开电脑", is_triggered=False,
+        )
+        await engine.on_inbound_message(msg, record=False)
+        self.assertEqual(len(engine.context_mgr.get_buffer(-100123)), 0)
+        await engine.on_inbound_message(msg)
+        self.assertEqual(len(engine.context_mgr.get_buffer(-100123)), 1)
 
 
 if __name__ == "__main__":

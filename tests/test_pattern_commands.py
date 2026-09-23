@@ -1,4 +1,5 @@
 import asyncio
+import os
 import shutil
 import tempfile
 import unittest
@@ -22,7 +23,7 @@ class TestPatternCommands(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         shutil.rmtree(self.test_dir, ignore_errors=True)
 
-    def _make_engine(self, pattern_cfg):
+    def _make_engine(self, pattern_cfg, mock_pattern_cmd=True):
         config = GatewayConfig({
             "platform": "telegram",
             "engine_type": "opencode",
@@ -38,7 +39,8 @@ class TestPatternCommands(unittest.IsolatedAsyncioTestCase):
         with patch.object(GroupConnectEngine, "_create_adapter", return_value=MagicMock()), \
              patch.object(GroupConnectEngine, "_create_channel", return_value=mock_channel):
             engine = GroupConnectEngine(config)
-        engine._run_pattern_command = AsyncMock()
+        if mock_pattern_cmd:
+            engine._run_pattern_command = AsyncMock()
         return engine
 
     @staticmethod
@@ -196,3 +198,28 @@ class TestPatternCommands(unittest.IsolatedAsyncioTestCase):
         await engine.on_inbound_message(self._msg("开电脑"))
         await asyncio.sleep(0)
         engine._run_pattern_command.assert_awaited_once()
+
+    async def test_pattern_reply_recorded_in_history(self):
+        """Terminal fast-lane replies are recorded in chat history, so the startup
+        resume of unanswered messages sees the conversation as already answered."""
+        script = os.path.join(self.test_dir, "ok.sh")
+        with open(script, "w") as f:
+            f.write("#!/bin/sh\necho '✅ 卧室灯已打开'\n")
+        os.chmod(script, 0o755)
+        engine = self._make_engine([{"pattern": DEVICE_PATTERN, "script": script}], mock_pattern_cmd=False)
+        engine.channel.send_reply.return_value = 42
+
+        await engine.on_inbound_message(self._msg("关卧室灯"))
+        for _ in range(60):  # fast-lane task + subprocess round-trip
+            buf = engine.context_mgr.get_buffer(9999)
+            if len(buf) >= 2 and buf[-1].get("is_bot"):
+                break
+            await asyncio.sleep(0.05)
+
+        buf = engine.context_mgr.get_buffer(9999)
+        self.assertEqual(len(buf), 2)
+        self.assertFalse(buf[0]["is_bot"])
+        self.assertEqual(buf[0]["text"], "关卧室灯")
+        self.assertTrue(buf[1]["is_bot"])
+        self.assertIn("卧室灯已打开", buf[1]["text"])
+        self.assertIn("test_bot", buf[1]["sender"])

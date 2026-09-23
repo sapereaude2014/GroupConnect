@@ -467,11 +467,11 @@ class GroupConnectEngine:
                     from_user={},
                     text=str(last.get("text", "")),
                     is_triggered=False
-                ))
+                ), record=False)
             except Exception as e:
                 logger.warning(f"[RESUME] Failed to resume chat {chat_id}: {e}")
 
-    async def on_inbound_message(self, msg: InboundMessage) -> None:
+    async def on_inbound_message(self, msg: InboundMessage, record: bool = True) -> None:
         chat_id = msg.chat_id
         chat_type = msg.chat_type
 
@@ -543,18 +543,20 @@ class GroupConnectEngine:
             return
 
         # 4. Immediate Real-Time Context Recording (Unblocked)
+        # Resume re-dispatch passes record=False: the message is already the buffer's last entry.
         is_bot = getattr(msg, "is_bot_relay", False) or bool(getattr(msg, "from_user", {}).get("is_bot", False))
         relay_bot_username = msg.from_user.get("username", "") if is_bot else ""
-        self.context_mgr.record_message(
-            chat_id=chat_id,
-            sender_name=msg.sender_name,
-            text=msg.text,
-            msg_id=msg.msg_id,
-            reply_preview=msg.reply_preview,
-            attachments=msg.attachments,
-            is_bot_reply=is_bot,
-            bot_username=relay_bot_username
-        )
+        if record:
+            self.context_mgr.record_message(
+                chat_id=chat_id,
+                sender_name=msg.sender_name,
+                text=msg.text,
+                msg_id=msg.msg_id,
+                reply_preview=msg.reply_preview,
+                attachments=msg.attachments,
+                is_bot_reply=is_bot,
+                bot_username=relay_bot_username
+            )
 
         # 5. Untriggered messages complete here (already captured in context buffer)
         if not msg.is_triggered:
@@ -1027,6 +1029,24 @@ class GroupConnectEngine:
             except Exception as e:
                 logger.warning(f"Failed to broadcast reply via relay: {e}")
 
+    async def _reply_and_record(self, chat_id: Any, text: str, reply_to_msg_id: Any = None) -> None:
+        """Send a terminal command reply and record it in chat history, so the startup
+        resume of unanswered messages sees the conversation as already answered.
+        Non-terminal notices (ack, lock-busy) stay unrecorded on purpose: an
+        unfinished command should still be re-dispatched after a restart."""
+        sent_id = await self.channel.send_reply(chat_id, text, reply_to_msg_id=reply_to_msg_id)
+        try:
+            self.context_mgr.record_message(
+                chat_id=chat_id,
+                sender_name=f"{self.config.bot_name} (@{self.config.bot_username})",
+                text=text,
+                msg_id=sent_id or 0,
+                is_bot_reply=True,
+                bot_username=self.config.bot_username
+            )
+        except Exception as e:
+            logger.warning(f"[CUSTOM_CMD] Failed to record command reply in history: {e}")
+
     async def _run_custom_command(
         self,
         chat_id: Any,
@@ -1039,7 +1059,7 @@ class GroupConnectEngine:
         bot_name = self.config.bot_name
 
         if not os.path.isfile(script):
-            await self.channel.send_reply(chat_id, f"❌ 未找到执行脚本: {script}", reply_to_msg_id=reply_to_msg_id)
+            await self._reply_and_record(chat_id, f"❌ 未找到执行脚本: {script}", reply_to_msg_id=reply_to_msg_id)
             if cmd_name in self._running_custom_commands:
                 self._running_custom_commands.remove(cmd_name)
             return
@@ -1061,7 +1081,7 @@ class GroupConnectEngine:
                     check_msg = cmd_cfg.get("check_success_message")
                     if check_msg:
                         msg_text = check_msg.format(bot_name=bot_name, command=cmd_name)
-                        await self.channel.send_reply(chat_id, msg_text, reply_to_msg_id=reply_to_msg_id)
+                        await self._reply_and_record(chat_id, msg_text, reply_to_msg_id=reply_to_msg_id)
                         if cmd_name in self._running_custom_commands:
                             self._running_custom_commands.remove(cmd_name)
                         return
@@ -1114,17 +1134,17 @@ class GroupConnectEngine:
                     reply_text = success_tmpl.format(**format_kwargs)
                 else:
                     reply_text = out_str or f"✅ 指令 `{cmd_name}` 执行完成（耗时 {duration}s）。"
-                await self.channel.send_reply(chat_id, reply_text, reply_to_msg_id=reply_to_msg_id)
+                await self._reply_and_record(chat_id, reply_text, reply_to_msg_id=reply_to_msg_id)
             else:
                 error_tmpl = cmd_cfg.get("error_message")
                 if error_tmpl:
                     reply_text = error_tmpl.format(**format_kwargs)
                 else:
                     reply_text = f"❌ 指令 `{cmd_name}` 执行失败 (Exit {proc.returncode}): {err_str or out_str}"
-                await self.channel.send_reply(chat_id, reply_text, reply_to_msg_id=reply_to_msg_id)
+                await self._reply_and_record(chat_id, reply_text, reply_to_msg_id=reply_to_msg_id)
         except Exception as e:
             logger.error(f"[CUSTOM_CMD] Failed to execute '{cmd_name}': {e}", exc_info=True)
-            await self.channel.send_reply(chat_id, f"❌ 执行指令 `{cmd_name}` 时出错: {e}", reply_to_msg_id=reply_to_msg_id)
+            await self._reply_and_record(chat_id, f"❌ 执行指令 `{cmd_name}` 时出错: {e}", reply_to_msg_id=reply_to_msg_id)
         finally:
             if cmd_name in self._running_custom_commands:
                 self._running_custom_commands.remove(cmd_name)
