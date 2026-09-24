@@ -333,7 +333,8 @@ class TelegramChannel(BaseChannel):
 
     async def _download_file(self, file_id: str, dest_filename: str) -> Optional[str]:
         try:
-            local_path = os.path.join(self.config.attachments_dir, dest_filename)
+            safe_filename = os.path.basename(dest_filename)
+            local_path = os.path.join(self.config.attachments_dir, safe_filename)
             if os.path.isfile(local_path) and os.path.getsize(local_path) > 0:
                 logger.debug(f"Attachment already exists locally: {local_path}")
                 return local_path
@@ -437,7 +438,7 @@ class TelegramChannel(BaseChannel):
         if "document" in msg:
             doc = msg["document"]
             fid = doc["file_id"]
-            orig_name = doc.get("file_name", "file")
+            orig_name = os.path.basename(doc.get("file_name", "file")) or "file"
             fname = f"{msg_date}_{chat_id}_{msg_id}_{orig_name}"
             local_path = await self._download_file(fid, fname)
             if local_path:

@@ -4,7 +4,7 @@ Enforces default-deny access control, group isolation, and optional dynamic memb
 """
 
 import logging
-from typing import Any, Callable, Coroutine, Dict, Optional, Set, Tuple
+from typing import Any, Callable, Coroutine, Dict, List, Optional, Set, Tuple, Union
 
 logger = logging.getLogger("groupconnect.gatekeeper")
 
@@ -14,14 +14,26 @@ class Gatekeeper:
 
     def __init__(
         self,
-        allowed_chat_ids: Optional[Set[int]] = None,
-        allowed_user_ids: Optional[Set[int]] = None,
+        allowed_chat_ids: Optional[Union[Set[Union[int, str]], List[Union[int, str]]]] = None,
+        allowed_user_ids: Optional[Union[Set[Union[int, str]], List[Union[int, str]]]] = None,
         allowed_usernames: Optional[Set[str]] = None,
         allow_open_access: bool = False,
         allow_group_members_dm: bool = True
     ):
-        self.allowed_chat_ids: Set[int] = set(allowed_chat_ids or [])
-        self.allowed_user_ids: Set[int] = set(allowed_user_ids or [])
+        self.allowed_chat_ids: Set[Union[int, str]] = set()
+        for x in (allowed_chat_ids or []):
+            try:
+                self.allowed_chat_ids.add(int(x))
+            except (ValueError, TypeError):
+                self.allowed_chat_ids.add(str(x))
+
+        self.allowed_user_ids: Set[Union[int, str]] = set()
+        for x in (allowed_user_ids or []):
+            try:
+                self.allowed_user_ids.add(int(x))
+            except (ValueError, TypeError):
+                self.allowed_user_ids.add(str(x))
+
         self.allowed_usernames: Set[str] = set(
             u.lower().lstrip("@") for u in (allowed_usernames or [])
         )
@@ -33,10 +45,10 @@ class Gatekeeper:
 
     async def verify_sender(
         self,
-        chat_id: int,
+        chat_id: Union[int, str],
         chat_type: str,
         from_user: Dict[str, Any],
-        dynamic_checker: Optional[Callable[[int, int], Coroutine[Any, Any, bool]]] = None
+        dynamic_checker: Optional[Callable[[Union[int, str], Union[int, str]], Coroutine[Any, Any, bool]]] = None
     ) -> Tuple[bool, str]:
         """
         Verifies if an incoming message is authorized under secure-by-default rules.
@@ -56,22 +68,44 @@ class Gatekeeper:
 
         # 1. Group Chat Evaluation
         if is_group:
-            if self.allowed_chat_ids and chat_id not in self.allowed_chat_ids:
-                return False, "unauthorized_group"
+            if self.allowed_chat_ids:
+                matched = (
+                    chat_id in self.allowed_chat_ids
+                    or str(chat_id) in self.allowed_chat_ids
+                )
+                if not matched:
+                    try:
+                        matched = int(chat_id) in self.allowed_chat_ids
+                    except (ValueError, TypeError):
+                        pass
+                if not matched:
+                    return False, "unauthorized_group"
 
             # In authorized group, cache sender ID if username matches
             if username and username in self.allowed_usernames and user_id:
                 self.allowed_user_ids.add(user_id)
+                self.allowed_user_ids.add(str(user_id))
 
             return True, "authorized_group"
 
         # 2. Private Chat Evaluation
-        if user_id and user_id in self.allowed_user_ids:
-            return True, "user_id_matched"
+        if user_id:
+            uid_matched = (
+                user_id in self.allowed_user_ids
+                or str(user_id) in self.allowed_user_ids
+            )
+            if not uid_matched:
+                try:
+                    uid_matched = int(user_id) in self.allowed_user_ids
+                except (ValueError, TypeError):
+                    pass
+            if uid_matched:
+                return True, "user_id_matched"
 
         if username and username in self.allowed_usernames:
             if user_id:
                 self.allowed_user_ids.add(user_id)
+                self.allowed_user_ids.add(str(user_id))
             return True, "username_matched"
 
         # 3. Dynamic Group Membership Check (if enabled by config)

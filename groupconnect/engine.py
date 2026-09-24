@@ -364,12 +364,17 @@ class GroupConnectEngine:
             return
 
         # 2. Gatekeeper authorization check
-        if self.gatekeeper.is_whitelist_active():
-            try:
-                cid_int = int(chat_id)
-                if self.config.allowed_chat_ids and cid_int not in self.config.allowed_chat_ids:
-                    return
-            except (ValueError, TypeError):
+        if self.gatekeeper.is_whitelist_active() and self.config.allowed_chat_ids:
+            matched = (
+                chat_id in self.config.allowed_chat_ids
+                or str(chat_id) in self.config.allowed_chat_ids
+            )
+            if not matched:
+                try:
+                    matched = int(chat_id) in self.config.allowed_chat_ids
+                except (ValueError, TypeError):
+                    pass
+            if not matched:
                 return
 
         # 3. Check trigger conditions (@my_bot_username and within hop limit)
@@ -765,7 +770,7 @@ class GroupConnectEngine:
             return True
         elif cmd in self._custom_commands_map:
             cmd_cfg = self._custom_commands_map[cmd]
-            cmd_name = str(cmd_cfg.get("command", "")).strip().lower()
+            clean_cmd_name = str(cmd_cfg.get("command", "")).strip().lower().lstrip("/")
             is_arbiter = (self.autonomous.is_arbiter if getattr(self, "autonomous", None) else True)
 
             if cmd_cfg.get("arbiter_only_on_broadcast", False):
@@ -774,19 +779,18 @@ class GroupConnectEngine:
 
             should_lock = cmd_cfg.get("lock", False)
             if should_lock:
-                if cmd_name in self._running_custom_commands:
+                if not self.command_dispatcher.acquire_lock(clean_cmd_name):
                     await self.channel.send_reply(
                         chat_id,
-                        f"⏳ 指令 `/{cmd_name}` 正在执行中，请勿重复触发，稍后会自动汇报结果。",
+                        f"⏳ 指令 `/{clean_cmd_name}` 正在执行中，请勿重复触发，稍后会自动汇报结果。",
                         reply_to_msg_id=msg.msg_id
                     )
                     return True
-                self._running_custom_commands.add(cmd_name)
 
             cmd_from_raw, _, raw_args = parse_bot_command(msg.text or "", self.config.bot_username)
             effective_args = raw_args if cmd_from_raw else clean_query
             asyncio.create_task(
-                self._run_slash_command(chat_id, cmd_cfg, effective_args, should_lock, cmd_name, reply_to_msg_id=msg.msg_id, chat_type=msg.chat_type)
+                self._run_slash_command(chat_id, cmd_cfg, effective_args, should_lock, clean_cmd_name, reply_to_msg_id=msg.msg_id, chat_type=msg.chat_type)
             )
             return True
 

@@ -120,6 +120,31 @@ class TestTelegramChannelOutbound(unittest.IsolatedAsyncioTestCase):
                 reply_to_message_id=None
             )
 
+    async def test_download_file_sanitizes_path_traversal(self):
+        import tempfile
+        import os
+        with tempfile.TemporaryDirectory() as tmp_att:
+            cfg = GatewayConfig({
+                "platform": "telegram",
+                "bot_token": "mock_token",
+            })
+            cfg.attachments_dir = tmp_att
+            channel = TelegramChannel(cfg, AsyncMock())
+            channel._api_call = AsyncMock(return_value={"ok": True, "result": {"file_path": "photos/file_0.jpg"}})
+
+            mock_resp = AsyncMock()
+            mock_resp.status_code = 200
+            mock_resp.content = b"fake image bytes"
+            channel.client.get = AsyncMock(return_value=mock_resp)
+
+            # Attempt directory traversal
+            malicious_dest = "../../evil.sh"
+            saved_path = await channel._download_file("file_id_123", malicious_dest)
+
+            # Must save inside tmp_att as evil.sh, NOT in parent directories
+            self.assertEqual(saved_path, os.path.join(tmp_att, "evil.sh"))
+            self.assertTrue(os.path.isfile(os.path.join(tmp_att, "evil.sh")))
+
 
 if __name__ == "__main__":
     unittest.main()

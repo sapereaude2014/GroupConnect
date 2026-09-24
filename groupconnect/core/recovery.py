@@ -102,7 +102,7 @@ class ResumeManager:
             try:
                 if not buf:
                     continue
-                if allowed and chat_id not in allowed:
+                if allowed and (chat_id not in allowed and str(chat_id) not in {str(x) for x in allowed}):
                     continue
 
                 # Backward-scan with seen_bot tracking:

@@ -227,12 +227,23 @@ class GatewayConfig:
         self.allow_group_members_dm: bool = bool(
             security.get("allow_group_members_dm", data.get("allow_group_members_dm", True))
         )
-        self.allowed_chat_ids: Set[int] = set(
-            int(x) for x in security.get("allowed_chat_ids", security.get("groups", data.get("allowed_chat_ids", [])))
-        )
-        self.allowed_user_ids: Set[int] = set(
-            int(x) for x in security.get("allowed_user_ids", data.get("allowed_user_ids", []))
-        )
+        raw_chat_ids = security.get("allowed_chat_ids", security.get("groups", data.get("allowed_chat_ids", []))) or []
+        allowed_chats: Set[Union[int, str]] = set()
+        for x in raw_chat_ids:
+            try:
+                allowed_chats.add(int(x))
+            except (ValueError, TypeError):
+                allowed_chats.add(str(x))
+        self.allowed_chat_ids: Set[Union[int, str]] = allowed_chats
+
+        raw_user_ids = security.get("allowed_user_ids", data.get("allowed_user_ids", [])) or []
+        allowed_users: Set[Union[int, str]] = set()
+        for x in raw_user_ids:
+            try:
+                allowed_users.add(int(x))
+            except (ValueError, TypeError):
+                allowed_users.add(str(x))
+        self.allowed_user_ids: Set[Union[int, str]] = allowed_users
         self.allowed_usernames: Set[str] = set(
             str(x).lower().lstrip("@")
             for x in security.get("allowed_usernames", security.get("users", data.get("allowed_usernames", [])))

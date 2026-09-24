@@ -74,6 +74,39 @@ class TestGatekeeper(unittest.TestCase):
 
         loop.close()
 
+    def test_string_ids_support(self):
+        """String IDs used by Feishu, Slack, and WeCom are properly supported without type errors."""
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        gk = Gatekeeper(
+            allowed_chat_ids={"oc_feishu_group_123"},
+            allowed_user_ids={"ou_feishu_user_456"}
+        )
+        self.assertTrue(gk.is_whitelist_active())
+
+        # 1. Authorized group chat with string chat_id
+        auth_group, _ = loop.run_until_complete(
+            gk.verify_sender("oc_feishu_group_123", "group", {"id": "ou_someone", "username": "someone"})
+        )
+        self.assertTrue(auth_group)
+
+        # 2. Unauthorized group chat
+        auth_unauth, reason = loop.run_until_complete(
+            gk.verify_sender("oc_other_group", "group", {"id": "ou_someone", "username": "someone"})
+        )
+        self.assertFalse(auth_unauth)
+        self.assertEqual(reason, "unauthorized_group")
+
+        # 3. Authorized private DM with string user_id
+        auth_dm, _ = loop.run_until_complete(
+            gk.verify_sender("ou_feishu_user_456", "private", {"id": "ou_feishu_user_456", "username": "user"})
+        )
+        self.assertTrue(auth_dm)
+
+        loop.close()
+
 
 if __name__ == "__main__":
     unittest.main()

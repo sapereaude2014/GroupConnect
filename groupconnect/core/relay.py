@@ -108,13 +108,15 @@ class CrossBotRelay:
                 writer.close()
                 await writer.wait_closed()
                 logger.debug(f"Broadcast event to peer socket {sock_file}")
-            except (ConnectionRefusedError, FileNotFoundError, asyncio.TimeoutError):
-                logger.debug(f"Peer socket {sock_file} unavailable")
+            except (ConnectionRefusedError, FileNotFoundError):
+                logger.debug(f"Peer socket {sock_file} dead, removing stale socket")
                 try:
                     if os.path.exists(sock_file):
                         os.remove(sock_file)
                 except OSError:
                     pass
+            except asyncio.TimeoutError:
+                logger.warning(f"Peer socket {sock_file} timed out, skipping")
             except Exception as e:
                 logger.warning(f"Failed to broadcast event to {sock_file}: {e}")
 
@@ -155,13 +157,15 @@ class CrossBotRelay:
                 writer.close()
                 await writer.wait_closed()
                 logger.debug(f"Broadcast reply to peer socket {sock_file}")
-            except (ConnectionRefusedError, FileNotFoundError, asyncio.TimeoutError):
-                logger.debug(f"Peer socket {sock_file} unavailable")
+            except (ConnectionRefusedError, FileNotFoundError):
+                logger.debug(f"Peer socket {sock_file} dead, removing stale socket")
                 try:
                     if os.path.exists(sock_file):
                         os.remove(sock_file)
                 except OSError:
                     pass
+            except asyncio.TimeoutError:
+                logger.warning(f"Peer socket {sock_file} timed out, skipping")
             except Exception as e:
                 logger.warning(f"Failed to broadcast to {sock_file}: {e}")
 

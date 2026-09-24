@@ -6,6 +6,7 @@ Handles execution, pre-flight checks, concurrency locks, and history synchroniza
 import asyncio
 import logging
 import os
+import shlex
 import time
 from typing import Any, Dict, List, Optional, Set
 
@@ -147,9 +148,11 @@ class CustomCommandDispatcher:
             if force_arg not in cmd_args:
                 cmd_args.append(force_arg)
         elif cmd_cfg.get("pass_args", False) and args:
-            for part in args.split():
-                if part not in cmd_args:
-                    cmd_args.append(part)
+            try:
+                parsed_args = shlex.split(args)
+            except ValueError:
+                parsed_args = args.split()
+            cmd_args.extend(parsed_args)
 
         logger.info(f"[CUSTOM_CMD] Executing '{cmd_name}' ({cmd_args}) for chat {chat_id}...")
         start_ts = time.time()

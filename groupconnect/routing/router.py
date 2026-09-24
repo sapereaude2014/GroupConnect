@@ -681,9 +681,10 @@ class AutonomousArbiter:
                 bot_probs = {b: 0.0 for b in self.cfg.roles.keys()}
                 none_prob = float(probs.get("none_drop", 0.0) or 0.0)
                 for k, p in probs.items():
-                    for b in bot_probs:
-                        if k.startswith(b):
-                            bot_probs[b] += float(p or 0.0)
+                    if k in jev_map:
+                        mapped_bot, _ = jev_map[k]
+                        if mapped_bot in bot_probs:
+                            bot_probs[mapped_bot] += float(p or 0.0)
 
                 best_bot, best_bot_prob = max(bot_probs.items(), key=lambda x: x[1])
                 if best_bot_prob >= self.cfg.confidence_threshold and best_bot_prob > none_prob:
@@ -913,7 +914,10 @@ class AutonomousController:
 
     def chat_allowed(self, chat_id: Any) -> bool:
         if self.cfg.allowed_chat_ids:
-            return chat_id in self.cfg.allowed_chat_ids
+            return (
+                chat_id in self.cfg.allowed_chat_ids
+                or str(chat_id) in {str(x) for x in self.cfg.allowed_chat_ids}
+            )
         return True
 
     def sender_allowed(self, sender_name: str) -> bool:

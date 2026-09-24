@@ -1,3 +1,4 @@
+import asyncio
 import os
 import unittest
 
@@ -514,6 +515,55 @@ class TestAutonomousRouting(unittest.TestCase):
                     self.assertEqual(mock_post.call_args[0][0], "https://api.deepseek.com/v1/chat/completions")
 
             asyncio.run(run())
+
+    def test_jev_prefix_collision_prevention(self):
+        """Bots sharing name prefix (e.g. 'bot' and 'bot_helper') must not bleed probabilities."""
+        from unittest.mock import MagicMock, patch
+        from groupconnect.routing.router import AutonomousArbiter
+
+        cfg = AutonomousConfig({
+            "enabled": True,
+            "roles": {
+                "bot": "General Bot",
+                "bot_helper": "Specialist Helper",
+            },
+            "classifier": {
+                "engine": "jev",
+                "confidence_threshold": 0.8,
+                "providers": {
+                    "typesafe": {
+                        "api_key": "dummy_key",
+                        "engine": "jev"
+                    }
+                }
+            }
+        })
+        arb = AutonomousArbiter(cfg)
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "answers": {
+                "routing": {
+                    "choice": "bot_helper_immediate",
+                    "probabilities": {
+                        "bot_helper_immediate": 0.85,
+                        "bot_immediate": 0.10,
+                        "none_drop": 0.05
+                    }
+                }
+            }
+        }
+
+        async def run():
+            with patch("httpx.AsyncClient.post", return_value=mock_resp):
+                res = await arb.classify("Ask helper for assistance", "Alice", "")
+                # Must select bot_helper, NOT bot
+                self.assertEqual(res["target_bot"], "bot_helper")
+                self.assertEqual(res["urgency"], "immediate")
+                self.assertAlmostEqual(res["confidence"], 0.85)
+
+        asyncio.run(run())
 
 
 if __name__ == "__main__":

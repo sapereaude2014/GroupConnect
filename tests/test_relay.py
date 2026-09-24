@@ -102,3 +102,75 @@ class TestCrossBotRelay(unittest.TestCase):
 
         loop.run_until_complete(run_test())
         loop.close()
+
+    def test_timeout_does_not_remove_active_socket(self):
+        from unittest.mock import patch
+
+        peer_sock = os.path.join(self.test_dir, "busy_bot.sock")
+        with open(peer_sock, "w") as f:
+            f.write("active_socket_file")
+
+        relay_a = CrossBotRelay(
+            bot_username="guaguahome_bot",
+            bot_name="guaguahome",
+            ipc_dir=self.test_dir
+        )
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        async def run_test():
+            await relay_a.start()
+            with patch("asyncio.open_unix_connection", side_effect=asyncio.TimeoutError()):
+                await relay_a.broadcast_reply(
+                    chat_id=-1004324820543,
+                    chat_type="supergroup",
+                    msg_id=1003,
+                    text="Broadcast when peer is busy",
+                    hop_count=0
+                )
+            # The active peer socket MUST NOT be deleted on timeout
+            self.assertTrue(os.path.exists(peer_sock))
+            await relay_a.stop()
+
+        loop.run_until_complete(run_test())
+        loop.close()
+
+    def test_relay_string_chat_id_not_dropped(self):
+        from unittest.mock import AsyncMock, patch
+        from groupconnect.core.config import GatewayConfig
+        from groupconnect.engine import GroupConnectEngine
+
+        cfg = GatewayConfig({
+            "platform": "telegram",
+            "bot_token": "mock_token",
+            "allowed_chat_ids": ["oc_feishu_group_123"]
+        })
+        engine = GroupConnectEngine(cfg)
+        engine.channel = AsyncMock()
+        engine.context_mgr = AsyncMock()
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        # Event targeting @my_bot with string chat_id
+        event = {
+            "event": "bot_reply",
+            "from_bot": "peer_bot",
+            "from_name": "Peer",
+            "chat_id": "oc_feishu_group_123",
+            "chat_type": "group",
+            "msg_id": 999,
+            "text": f"@{engine.config.bot_username} hello from feishu",
+            "hop_count": 0
+        }
+
+        with patch.object(engine, "on_inbound_message", new_callable=AsyncMock) as mock_handle:
+            loop.run_until_complete(engine.on_relay_event(event))
+            # Must NOT be dropped due to ValueError on int(chat_id)
+            mock_handle.assert_called_once()
+            called_inbound = mock_handle.call_args[0][0]
+            self.assertEqual(called_inbound.chat_id, "oc_feishu_group_123")
+            self.assertTrue(called_inbound.is_triggered)
+
+        loop.close()
