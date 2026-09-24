@@ -184,7 +184,7 @@ bots:
           hour: 4
 
     pattern_commands:
-      - pattern: '^(开|关)(灯|空调)(\d{1,2})?$'
+      - pattern: '^(turn on|turn off)\s+(lights|ac)(\s+\d{1,2})?$'
         script: "~/.local/bin/device.py"
 ```
 

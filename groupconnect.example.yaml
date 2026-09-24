@@ -3,9 +3,9 @@
 # ==============================================================================
 # Secrets (Bot Tokens, API Keys) are referenced via ${ENV_VAR} from .env.
 
-# 共享工作空间与人设目录（整个配置文件内全局唯一，各 Bot 自动按 {username}.md 加载人设）
+# Shared workspace and persona directory (each bot automatically loads {username}.md)
 workspace: ~/workspace
-souls_dir: ~/workspace/.agents/souls    # 可选：不填则默认查找 <workspace>/.agents/souls
+souls_dir: ~/workspace/.agents/souls    # Optional: defaults to <workspace>/.agents/souls if omitted
 
 # ------------------------------------------------------------------------------
 # 1. Bots & Local Execution Agents (First bot on each platform is the Arbiter)
@@ -20,7 +20,7 @@ bots:
     role: "Code authoring, debugging, automated testing, and server maintenance."
     aliases:
       - "coder"
-      - "码农"
+      - "dev"
     agent:
       engine: codex                     # codex | claude | antigravity | opencode | teleagent
       bin: /usr/local/bin/codex         # Optional: explicit binary path (defaults to PATH lookup)
@@ -29,29 +29,29 @@ bots:
       session_idle_timeout_mins: 120
     custom_commands:
       - command: status
-        description: "检查服务健康状态"
+        description: "Check service health status"
         description_en: "Check service health status"
         script: "~/.local/bin/check-service.py"
         check_args: ["--check-only"]
-        check_success_message: "✅ [{bot_name}] 服务当前处于健康在线状态（ONLINE）。\n如需强制重启，请输入：`/{command} force`"
-        ack_message: "🚀 [{bot_name}] 正在执行服务诊断与恢复..."
+        check_success_message: "✅ [{bot_name}] Service is healthy and ONLINE.\nTo force a restart, run: `/{command} force`"
+        ack_message: "🚀 [{bot_name}] Running service diagnostics and recovery..."
         default_args: ["--timeout", "600"]
         force_arg: "--force"
         lock: true
       - command: backup
-        description: "执行工作区全量备份"
+        description: "Run full workspace backup"
         description_en: "Run full workspace backup"
         script: "~/.local/bin/workspace-backup"
-        ack_message: "📦 正在执行工作区全量备份，请稍候..."
-        success_message: "✅ 备份完成（耗时 {duration}s）"
-        error_message: "❌ 备份失败 (Exit {returncode}): {stderr}"
+        ack_message: "📦 Running full workspace backup, please wait..."
+        success_message: "✅ Backup finished in {duration}s"
+        error_message: "❌ Backup failed (Exit {returncode}): {stderr}"
         lock: true
         arbiter_only_on_broadcast: true
         schedule:
           weekday: 6
           hour: 4
     pattern_commands:
-      - pattern: "^(开|关)(灯|空调)(\\d{1,2})?$|^(灯|空调)(开|关|\\d{1,2})$"
+      - pattern: "^(turn on|turn off)\\s+(lights|ac)(\\s+\\d{1,2})?$"
         script: "~/.local/bin/device-control.py"
 
   - name: "Arch Reviewer"
@@ -63,7 +63,7 @@ bots:
     role: "Architecture design, code review, security auditing, and technical documentation."
     aliases:
       - "reviewer"
-      - "评审"
+      - "lead"
     agent:
       engine: antigravity
       bin: ~/.local/bin/agy
@@ -72,12 +72,12 @@ bots:
       session_idle_timeout_mins: 120
     custom_commands:
       - command: backup
-        description: "执行工作区全量备份"
+        description: "Run full workspace backup"
         description_en: "Run full workspace backup"
         script: "~/.local/bin/workspace-backup"
-        ack_message: "📦 正在执行工作区全量备份，请稍候..."
-        success_message: "✅ 备份完成（耗时 {duration}s）"
-        error_message: "❌ 备份失败 (Exit {returncode}): {stderr}"
+        ack_message: "📦 Running full workspace backup, please wait..."
+        success_message: "✅ Backup finished in {duration}s"
+        error_message: "❌ Backup failed (Exit {returncode}): {stderr}"
         lock: true
         arbiter_only_on_broadcast: true
 
