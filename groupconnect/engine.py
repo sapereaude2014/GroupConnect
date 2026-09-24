@@ -11,7 +11,7 @@ import logging
 import os
 import re
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from groupconnect.adapters.base import BaseAgentAdapter, get_adapter_class
 import groupconnect.adapters.antigravity
@@ -975,6 +975,10 @@ class GroupConnectEngine:
         )
         if sent_msg_id:
             session["last_bot_msg_id"] = sent_msg_id
+            try:
+                self.resume_manager.mark_completed(msg.chat_id, msg.msg_id, msg.text or "")
+            except Exception:
+                pass
 
     async def _run_slash_command(
         self,

@@ -642,10 +642,10 @@ class AutonomousArbiter:
         retryable = {429, 500, 502, 503, 504}
         backoffs = [1.0, 2.0, 4.0]
         async with self._call_lock:
-            wait = self._min_interval - (asyncio.get_event_loop().time() - self._last_call_ts)
+            wait = self._min_interval - (asyncio.get_running_loop().time() - self._last_call_ts)
             if wait > 0:
                 await asyncio.sleep(wait)
-            self._last_call_ts = asyncio.get_event_loop().time()
+            self._last_call_ts = asyncio.get_running_loop().time()
             res = None
             for attempt in range(len(backoffs) + 1):
                 try:
@@ -809,10 +809,10 @@ class AutonomousArbiter:
 
         timeout = self.cfg.timeout_ms / 1000.0
         async with self._call_lock:  # throttle: no classifier bursts (anti-429)
-            wait = self._min_interval - (asyncio.get_event_loop().time() - self._last_call_ts)
+            wait = self._min_interval - (asyncio.get_running_loop().time() - self._last_call_ts)
             if wait > 0:
                 await asyncio.sleep(wait)
-            self._last_call_ts = asyncio.get_event_loop().time()
+            self._last_call_ts = asyncio.get_running_loop().time()
             try:
                 async with httpx.AsyncClient(timeout=timeout) as client:
                     res = await client.post(url, json=payload, headers=headers)
