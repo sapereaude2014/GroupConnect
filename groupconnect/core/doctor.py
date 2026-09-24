@@ -114,8 +114,16 @@ class Doctor:
         bot_label = f"{self.config.platform} · @{self.config.bot_username}" if self.config.bot_username else self.config.platform
         print(f"\n[{Colors.BOLD}2. 消息平台连通性 ({bot_label}){Colors.RESET}]")
         if not self.config.bot_token:
-            self.print_item("fail", "未配置 Bot Token", "在 groupconnect.yaml 的 channel.token 中填写")
+            self.print_item("fail", "未配置 Bot Token", "在 .env 文件中设置 Bot Token，yaml 中用 ${VAR} 引用")
             return
+
+        # Check .env file
+        if self.config.config_path:
+            env_file = os.path.join(os.path.dirname(self.config.config_path), ".env")
+            if os.path.isfile(env_file):
+                self.print_item("pass", ".env 文件已就绪")
+            else:
+                self.print_item("warn", "未找到 .env 文件", f"参考 .env.example 创建 {env_file}")
 
         if self.config.platform == "telegram":
             last_err = None

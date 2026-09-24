@@ -55,7 +55,7 @@ def detect_installed_agents() -> List[dict]:
     return detected
 
 
-def run_init_wizard(target_path: Optional[str] = None) -> None:
+def run_init_wizard(target_path: Optional[str] = None) -> str:
     """Streamlined 5-step interactive setup wizard."""
     print("=" * 65)
     print("🚀 欢迎使用 GroupConnect 配置向导 (Init Wizard)")
@@ -141,11 +141,43 @@ def run_init_wizard(target_path: Optional[str] = None) -> None:
             if k_input:
                 jev_key = k_input
 
-    # Generate groupconnect.yaml
-    out_file = target_path or "groupconnect.yaml"
+    # Determine output path (default: ~/.config/groupconnect/groupconnect.yaml)
+    if target_path and os.path.dirname(target_path):
+        out_file = os.path.expanduser(target_path)
+    else:
+        out_file = os.path.join(
+            os.path.expanduser("~/.config/groupconnect"), "groupconnect.yaml"
+        )
     if not out_file.endswith((".yaml", ".yml")):
-        out_file = "groupconnect.yaml"
+        out_file = os.path.join(os.path.dirname(out_file) or ".", "groupconnect.yaml")
 
+    cfg_dir = os.path.dirname(os.path.abspath(out_file))
+    os.makedirs(cfg_dir, exist_ok=True)
+
+    # Generate env var name from bot username
+    env_token_name = f"{bot_username.upper()}_TOKEN"
+
+    # Write .env file with secrets (create or append missing vars)
+    env_file = os.path.join(cfg_dir, ".env")
+    env_vars = {env_token_name: bot_token}
+    if enable_zero and jev_key and not os.environ.get("JEV_API_KEY"):
+        env_vars["JEV_API_KEY"] = jev_key
+
+    existing_env = ""
+    if os.path.exists(env_file):
+        with open(env_file, "r", encoding="utf-8") as f:
+            existing_env = f.read()
+
+    new_lines = [f"{k}={v}" for k, v in env_vars.items() if k not in existing_env]
+    if new_lines:
+        with open(env_file, "a" if existing_env else "w", encoding="utf-8") as f:
+            if existing_env:
+                f.write("\n")
+            for line in new_lines:
+                f.write(f"{line}\n")
+        os.chmod(env_file, 0o600)
+
+    # Generate groupconnect.yaml with ${ENV_VAR} references
     yaml_lines = [
         "# ================================================================",
         "# GroupConnect Configuration File",
@@ -156,7 +188,7 @@ def run_init_wizard(target_path: Optional[str] = None) -> None:
         f'  - name: "{bot_name}"',
         f'    username: "{bot_username}"',
         f"    platform: {platform}",
-        f'    token: "{bot_token}"',
+        f'    token: "${env_token_name}"  # 从 .env 文件读取',
         '    role: "通用主力助手，负责解答问题与执行工作区任务"',
         "    aliases: []",
         "    agent:",
@@ -166,29 +198,21 @@ def run_init_wizard(target_path: Optional[str] = None) -> None:
         "# 2. 智能免 @ (Zero-@ 决策路由，默认读取系统环境变量 JEV_API_KEY)",
         "zero_at:",
         f"  enabled: {'true' if enable_zero else 'false'}",
-    ]
-    if enable_zero and jev_key and not os.environ.get("JEV_API_KEY"):
-        yaml_lines.extend([
-            "  classifier:",
-            "    engine: jev",
-            f'    api_key: "{jev_key}"',
-        ])
-
-    yaml_lines.extend([
         "",
-        "# 4. 安全访问控制 (可选白名单)",
+        "# 3. 安全访问控制 (可选白名单)",
         "security:",
         "  allow_open_access: false",
         "  allow_group_members_dm: true",
         "  # allowed_chat_ids: [-100123456789]",
         "  # allowed_usernames: [\"admin\"]",
         "",
-    ])
+    ]
 
     with open(out_file, "w", encoding="utf-8") as f:
         f.write("\n".join(yaml_lines))
 
     print(f"\n✅ 配置文件已生成: {os.path.abspath(out_file)}")
+    print(f"✅ 密钥已写入: {env_file} (权限 600)")
 
     if privacy_mode_warn:
         print("\n" + "!" * 65)
@@ -199,9 +223,11 @@ def run_init_wizard(target_path: Optional[str] = None) -> None:
         print("!" * 65)
 
     print("\n👉 接下来您可以：")
-    print(f"   • 诊断环境: groupconnect doctor -c {out_file}")
-    print(f"   • 终端模拟: groupconnect test -c {out_file}")
-    print(f"   • 启动网关: groupconnect run -c {out_file}\n")
+    print("   • 诊断环境: groupconnect doctor")
+    print("   • 终端模拟: groupconnect test")
+    print("   • 启动网关: groupconnect run")
+    print()
+    return out_file
 
 
 def resolve_config_path(explicit_path: Optional[str]) -> str:
@@ -287,7 +313,7 @@ def main() -> None:
         print(f"⚠️ 未找到配置文件 '{config_path}'。")
         choice = input("是否立即运行向导生成配置？ [Y/n]: ").strip().lower()
         if choice in ("", "y", "yes"):
-            run_init_wizard(config_path)
+            config_path = run_init_wizard(config_path)
             if not os.path.exists(config_path):
                 sys.exit(1)
         else:
