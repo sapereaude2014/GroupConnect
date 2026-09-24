@@ -135,7 +135,7 @@ bots:
   # - name: "Arch Reviewer"
   #   username: "reviewer_bot"
   #   platform: telegram
-  #   token: "987654321:BBG..."
+  #   token: ${REVIEWER_BOT_TOKEN}
   #   role: "Architecture review and code auditing"
   #   aliases: ["reviewer", "lead"]
   #   agent:

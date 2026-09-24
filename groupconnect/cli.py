@@ -155,7 +155,9 @@ def run_init_wizard(target_path: Optional[str] = None) -> str:
     os.makedirs(cfg_dir, exist_ok=True)
 
     # Generate env var name from bot username
-    env_token_name = f"{bot_username.upper()}_TOKEN"
+    import re as _re
+    safe_uname = _re.sub(r"[^A-Za-z0-9_]", "_", bot_username).upper().strip("_") or "BOT"
+    env_token_name = f"{safe_uname}_TOKEN"
 
     # Write .env file with secrets (create or append missing vars)
     env_file = os.path.join(cfg_dir, ".env")
@@ -188,7 +190,7 @@ def run_init_wizard(target_path: Optional[str] = None) -> str:
         f'  - name: "{bot_name}"',
         f'    username: "{bot_username}"',
         f"    platform: {platform}",
-        f'    token: "${env_token_name}"  # 从 .env 文件读取',
+        f'    token: "${{{env_token_name}}}"  # 从 .env 文件读取',
         '    role: "通用主力助手，负责解答问题与执行工作区任务"',
         "    aliases: []",
         "    agent:",

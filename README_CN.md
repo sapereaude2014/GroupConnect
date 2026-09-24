@@ -135,7 +135,7 @@ bots:
   # - name: "架构评审"
   #   username: "reviewer_bot"
   #   platform: telegram
-  #   token: "987654321:BBG..."
+  #   token: ${REVIEWER_BOT_TOKEN}
   #   role: "负责架构审查与代码审计"
   #   aliases: ["评审", "reviewer"]
   #   agent:

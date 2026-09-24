@@ -27,7 +27,7 @@ bots:
   # - name: "架构评审"
   #   username: "reviewer_bot"
   #   platform: telegram
-  #   token: "your-second-bot-token-here"
+  #   token: ${REVIEWER_BOT_TOKEN}
   #   role: "负责代码审查、安全检查与架构设计"
   #   aliases: ["评审", "总管"]
   #   agent:
