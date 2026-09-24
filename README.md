@@ -48,8 +48,6 @@ Assistant: "Recorded in schedule.md:
 - **Default-Deny Security**: Strict sender whitelisting; `/stop` instantly kills running agent processes.
 - **Lightweight Intent Classifier**: Built-in routing rules with hot-reloadable YAML slots, waking your heavy local CLI agent only when needed. Supports TypeSafe Jev (100–200ms) and standard LLM protocols (`openai` / `anthropic` / `gemini`) with custom `base_url`.
 - **Zero-Token Fast Lane**: Regex-matched natural language phrases (e.g. "开卧室灯") bypass LLM entirely for instant local script execution.
-- **Crash Recovery**: On restart, re-dispatches recent messages that received no reply (e.g. after LMK kill). Poison quarantine prevents crash loops.
-- **Bot Persona (Soul)**: Define each bot's personality in a Markdown file, injected into the agent prompt at session start.
 
 ---
 
