@@ -3,9 +3,9 @@
 # ==============================================================================
 # Secrets (Bot Tokens, API Keys) are referenced via ${ENV_VAR} from .env.
 
-# Default workspace shared by all bots in this config ( automatically inferred if placed at <workspace>/.agents/groupconnect.yaml )
+# 共享工作空间与人设目录（整个配置文件内全局唯一，各 Bot 自动按 {username}.md 加载人设）
 workspace: ~/workspace
-# souls_dir: ~/workspace/.agents/souls  # Optional: defaults to <workspace>/.agents/souls if present
+souls_dir: ~/workspace/.agents/souls    # 可选：不填则默认查找 <workspace>/.agents/souls
 
 # ------------------------------------------------------------------------------
 # 1. Bots & Local Execution Agents (First bot on each platform is the Arbiter)
@@ -21,12 +21,10 @@ bots:
     aliases:
       - "coder"
       - "码农"
-    # souls_dir: ~/souls                # Optional per-bot persona directory ({username}.md)
     agent:
       engine: codex                     # codex | claude | antigravity | opencode | teleagent
       bin: /usr/local/bin/codex         # Optional: explicit binary path (defaults to PATH lookup)
       # model: gpt-5                    # Optional: override CLI default model
-      # workspace: ~/workspace          # Optional: per-bot workspace override
       timeout_secs: 1800
       session_idle_timeout_mins: 120
     custom_commands:
