@@ -40,7 +40,7 @@ class TestPatternCommands(unittest.IsolatedAsyncioTestCase):
              patch.object(GroupConnectEngine, "_create_channel", return_value=mock_channel):
             engine = GroupConnectEngine(config)
         if mock_pattern_cmd:
-            engine._run_pattern_command = AsyncMock()
+            engine.pattern_executor.execute = AsyncMock()
         return engine
 
     @staticmethod
@@ -125,7 +125,7 @@ class TestPatternCommands(unittest.IsolatedAsyncioTestCase):
         await engine.on_inbound_message(self._msg("关卧室灯"))
         await asyncio.sleep(0)
 
-        engine._run_pattern_command.assert_awaited_once()
+        engine.pattern_executor.execute.assert_awaited_once()
         au.on_human_message.assert_not_called()
 
     async def test_scene_word_no_longer_hits_fast_lane(self):
@@ -142,7 +142,7 @@ class TestPatternCommands(unittest.IsolatedAsyncioTestCase):
         await engine.on_inbound_message(self._msg("睡觉"))
         await asyncio.sleep(0)
 
-        engine._run_pattern_command.assert_not_awaited()
+        engine.pattern_executor.execute.assert_not_awaited()
         au.on_human_message.assert_called_once()
 
     async def test_cjk_particle_after_at_reaches_autonomous(self):
@@ -160,7 +160,7 @@ class TestPatternCommands(unittest.IsolatedAsyncioTestCase):
         await engine.on_inbound_message(self._msg("快车道本来就不用@呀，给我说懵了"))
         await asyncio.sleep(0)
 
-        engine._run_pattern_command.assert_not_awaited()
+        engine.pattern_executor.execute.assert_not_awaited()
         au.on_human_message.assert_called_once()
 
     async def test_real_username_mention_still_filtered(self):
@@ -177,7 +177,7 @@ class TestPatternCommands(unittest.IsolatedAsyncioTestCase):
         await engine.on_inbound_message(self._msg("@guaguahome_fun_bot 去看一眼"))
         await asyncio.sleep(0)
 
-        engine._run_pattern_command.assert_not_awaited()
+        engine.pattern_executor.execute.assert_not_awaited()
         au.on_human_message.assert_not_called()
 
     async def test_chatter_bypasses_fast_lane(self):
@@ -194,7 +194,7 @@ class TestPatternCommands(unittest.IsolatedAsyncioTestCase):
         await engine.on_inbound_message(self._msg("今晚开电脑打游戏吗"))
         await asyncio.sleep(0)
 
-        engine._run_pattern_command.assert_not_awaited()
+        engine.pattern_executor.execute.assert_not_awaited()
 
     async def test_trailing_punctuation_stripped_before_match(self):
         """Trailing punctuation is stripped so voice-to-text output still matches."""
@@ -210,8 +210,8 @@ class TestPatternCommands(unittest.IsolatedAsyncioTestCase):
         await engine.on_inbound_message(self._msg("开电脑。"))
         await asyncio.sleep(0)
 
-        engine._run_pattern_command.assert_awaited_once()
-        args = engine._run_pattern_command.await_args
+        engine.pattern_executor.execute.assert_awaited_once()
+        args = engine.pattern_executor.execute.await_args
         self.assertEqual(args[0][2], "开电脑")
 
     async def test_max_length_config_respected(self):
@@ -229,12 +229,12 @@ class TestPatternCommands(unittest.IsolatedAsyncioTestCase):
         # 5 chars > max_length 4 -> falls through to autonomous routing
         await engine.on_inbound_message(self._msg("开卧室空调"))
         await asyncio.sleep(0)
-        engine._run_pattern_command.assert_not_awaited()
+        engine.pattern_executor.execute.assert_not_awaited()
 
         # 3 chars <= max_length 4 -> fast lane fires
         await engine.on_inbound_message(self._msg("开电脑"))
         await asyncio.sleep(0)
-        engine._run_pattern_command.assert_awaited_once()
+        engine.pattern_executor.execute.assert_awaited_once()
 
     async def test_pattern_reply_recorded_in_history(self):
         """Terminal fast-lane replies are recorded in chat history, so the startup
@@ -280,7 +280,7 @@ class TestPatternCommands(unittest.IsolatedAsyncioTestCase):
         await engine.on_inbound_message(msg)
         await asyncio.sleep(0)
 
-        engine._run_pattern_command.assert_awaited_once()
+        engine.pattern_executor.execute.assert_awaited_once()
 
     async def test_pattern_fast_lane_triggered_group_with_bot_tag(self):
         """Pattern fast lane fires for triggered group messages (@bot + device command)."""
@@ -301,7 +301,7 @@ class TestPatternCommands(unittest.IsolatedAsyncioTestCase):
         await engine.on_inbound_message(msg)
         await asyncio.sleep(0)
 
-        engine._run_pattern_command.assert_awaited_once()
+        engine.pattern_executor.execute.assert_awaited_once()
 
     async def test_pattern_fast_lane_skipped_for_reply_to_other_bot(self):
         """Pattern fast lane does not fire when replying to another bot."""
@@ -323,7 +323,7 @@ class TestPatternCommands(unittest.IsolatedAsyncioTestCase):
         await engine.on_inbound_message(msg)
         await asyncio.sleep(0)
 
-        engine._run_pattern_command.assert_not_awaited()
+        engine.pattern_executor.execute.assert_not_awaited()
 
     async def test_per_device_lock_allows_parallel_different_devices(self):
         """Lock is per-device (per trigger text): different device commands run
@@ -339,7 +339,7 @@ class TestPatternCommands(unittest.IsolatedAsyncioTestCase):
         engine._running_custom_commands.add(lock_key_1)
 
         # Same device → blocked
-        # (We check the lock set directly since _run_custom_command needs a real script)
+        # (We check the lock set directly since pattern_executor.execute needs a real script)
         self.assertIn(lock_key_1, engine._running_custom_commands)
 
         # Different device → not blocked (different lock key)

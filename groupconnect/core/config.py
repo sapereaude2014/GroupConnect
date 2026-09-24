@@ -98,6 +98,9 @@ def load_raw_config_file(path: str) -> Dict[str, Any]:
 
 class GatewayConfig:
     def __init__(self, data: Dict[str, Any], config_path: Optional[str] = None):
+        if "bots" in data and isinstance(data["bots"], list) and data["bots"] and "bot" not in data:
+            data = self._merge_bot_entry(data, data["bots"][0])
+
         self.raw: Dict[str, Any] = data
         self.config_path: Optional[str] = os.path.abspath(config_path) if config_path else None
 
@@ -174,8 +177,8 @@ class GatewayConfig:
         )
 
         # Soul Persona Settings
-        self.soul_path: Optional[str] = data.get("soul_path", bot.get("soul_path"))
-        self.souls_dir: Optional[str] = data.get("souls_dir", bot.get("souls_dir"))
+        self.soul_path: Optional[str] = agent.get("soul_path", bot.get("soul_path", data.get("soul_path")))
+        self.souls_dir: Optional[str] = agent.get("souls_dir", bot.get("souls_dir", data.get("souls_dir")))
 
         # Context & Window Settings
         self.max_history_len: int = int(tuning.get("max_history_len", data.get("max_history_len", 30)))
@@ -248,7 +251,7 @@ class GatewayConfig:
             if not self.bot_token or self.bot_token in ("your-telegram-bot-token-here", "YOUR_TELEGRAM_BOT_TOKEN"):
                 raise ValueError(
                     f"[Config Error] Missing or empty bot token for '{self.bot_username}' ({self.bot_name}). "
-                    f"Ensure the token environment variable is set in ~/.config/groupconnect/guaguahome.env."
+                    f"Configure channel.token in groupconnect.yaml or set the environment variable in .env."
                 )
 
     def _setup_autonomous(self, zero_at: Any, bot: Dict[str, Any], agent: Dict[str, Any], tuning: Optional[Dict[str, Any]] = None) -> None:
@@ -267,6 +270,7 @@ class GatewayConfig:
             return
 
         zero_dict["enabled"] = True
+        zero_dict.setdefault("platform", self.platform)
         zero_dict.setdefault("arbiter_bot", self.bot_username)
         zero_dict.setdefault("ipc_dir", self.ipc_dir)
         if tuning and "silence_window_secs" in tuning and "silence_secs" not in zero_dict:
@@ -361,14 +365,24 @@ class GatewayConfig:
             "soul_path": bot_entry.get("soul_path", root_data.get("soul_path")),
         }
 
-        # Token
-        if "token" in bot_entry:
-            merged["channel"]["token"] = bot_entry["token"]
-        elif "bot_token" in bot_entry:
-            merged["channel"]["token"] = bot_entry["bot_token"]
+        # Platform & Channel credentials per bot (override root channel defaults)
+        bot_channel = bot_entry.get("channel") if isinstance(bot_entry.get("channel"), dict) else {}
+        root_platform = str(merged["channel"].get("platform", root_data.get("platform", "telegram"))).lower()
+        bot_platform = str(
+            bot_entry.get("platform", bot_channel.get("platform", root_platform))
+        ).lower()
+        merged["channel"]["platform"] = bot_platform
+
+        for cred_key in ("token", "bot_token", "app_id", "app_secret", "corp_id", "corp_secret", "slack_app_token"):
+            if cred_key in bot_entry:
+                merged["channel"]["token" if cred_key == "bot_token" else cred_key] = bot_entry[cred_key]
+            elif cred_key in bot_channel:
+                merged["channel"]["token" if cred_key == "bot_token" else cred_key] = bot_channel[cred_key]
 
         # Channel options
-        if "options" in bot_entry:
+        if "options" in bot_channel and isinstance(bot_channel["options"], dict):
+            merged["channel"].setdefault("options", {}).update(bot_channel["options"])
+        if "options" in bot_entry and isinstance(bot_entry["options"], dict):
             merged["channel"].setdefault("options", {}).update(bot_entry["options"])
 
         # Agent (inherit root agent defaults, then override per-bot)
@@ -390,17 +404,26 @@ class GatewayConfig:
         if "pattern_commands" in bot_entry:
             merged["pattern_commands"].extend(bot_entry["pattern_commands"])
 
-        # Build Multi-Bot collective roles and aliases for Zero-@
+        # Build Multi-Bot collective roles and aliases for Zero-@ (scoped to bots on the same platform)
         zero_at = root_data.get("zero_at", root_data.get("autonomous"))
         if zero_at is not False:
             zero_dict = dict(zero_at) if isinstance(zero_at, dict) else {"enabled": True}
 
-            # All bots in the list
             all_bots = root_data.get("bots", [])
+            same_platform_bots = [
+                b for b in all_bots
+                if isinstance(b, dict) and str(
+                    b.get(
+                        "platform",
+                        (b.get("channel") if isinstance(b.get("channel"), dict) else {}).get("platform", root_platform)
+                    )
+                ).lower() == bot_platform
+            ] or all_bots
+
             roles = dict(zero_dict.get("roles", {}))
             aliases = dict(zero_dict.get("aliases", {}))
 
-            for b in all_bots:
+            for b in same_platform_bots:
                 uname = (b.get("username") or b.get("name") or "").lower().lstrip("@")
                 if uname:
                     if uname not in roles and "role" in b:
@@ -410,9 +433,9 @@ class GatewayConfig:
 
             zero_dict["roles"] = roles
             zero_dict["aliases"] = aliases
-            # First bot is arbiter by default
-            if all_bots and not zero_dict.get("arbiter_bot"):
-                first_uname = (all_bots[0].get("username") or all_bots[0].get("name") or "").lower().lstrip("@")
+            # First bot on this platform is arbiter by default
+            if same_platform_bots and not zero_dict.get("arbiter_bot"):
+                first_uname = (same_platform_bots[0].get("username") or same_platform_bots[0].get("name") or "").lower().lstrip("@")
                 zero_dict["arbiter_bot"] = first_uname
 
             merged["zero_at"] = zero_dict

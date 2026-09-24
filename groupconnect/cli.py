@@ -151,34 +151,32 @@ def run_init_wizard(target_path: Optional[str] = None) -> None:
         "# GroupConnect Configuration File",
         "# ================================================================",
         "",
-        "# 1. 聊天接入通道",
-        "channel:",
-        f"  platform: {platform}",
-        f'  token: "{bot_token}"',
+        "# 1. Bot 与本地执行 Agent (多 Bot 协同或跨平台部署直接在列表下继续追加)",
+        "bots:",
+        f'  - name: "{bot_name}"',
+        f'    username: "{bot_username}"',
+        f"    platform: {platform}",
+        f'    token: "{bot_token}"',
+        '    role: "通用主力助手，负责解答问题与执行工作区任务"',
+        "    aliases: []",
+        "    agent:",
+        f"      engine: {selected_agent['engine']}",
+        f'      workspace: "{ws_dir}"',
         "",
-        "# 2. Bot 基础身份",
-        "bot:",
-        f'  name: "{bot_name}"',
-        f'  username: "{bot_username}"',
-        "",
-        "# 3. 本地 Agent 驱动",
-        "agent:",
-        f"  engine: {selected_agent['engine']}",
-        f'  workspace: "{ws_dir}"',
-        "",
-        "# 4. 智能免 @ (Zero-@ 决策路由)",
+        "# 2. 智能免 @ (Zero-@ 决策路由，默认读取系统环境变量 JEV_API_KEY)",
         "zero_at:",
         f"  enabled: {'true' if enable_zero else 'false'}",
     ]
-    if enable_zero:
-        if jev_key:
-            yaml_lines.append(f'  api_key: "{jev_key}"')
-        else:
-            yaml_lines.append('  # api_key: "${JEV_API_KEY}"')
+    if enable_zero and jev_key and not os.environ.get("JEV_API_KEY"):
+        yaml_lines.extend([
+            "  classifier:",
+            "    engine: jev",
+            f'    api_key: "{jev_key}"',
+        ])
 
     yaml_lines.extend([
         "",
-        "# 5. 安全访问控制 (可选白名单)",
+        "# 4. 安全访问控制 (可选白名单)",
         "security:",
         "  allow_open_access: false",
         "  allow_group_members_dm: true",

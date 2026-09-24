@@ -165,12 +165,34 @@ class AutonomousConfig:
         else:
             cfg = dict(cfg)
 
+        if getattr(self, "_bound_platform", ""):
+            cfg.setdefault("platform", self._bound_platform)
+        self._bound_platform: str = str(cfg.get("platform", "")).lower()
+
         # Merge multi-bot roles/aliases/arbiter/ipc/security when loading unified YAML directly
         if "bots" in raw and isinstance(raw["bots"], list):
             all_bots = raw["bots"]
+            root_platform = str(
+                (raw.get("channel") if isinstance(raw.get("channel"), dict) else {}).get(
+                    "platform", raw.get("platform", "telegram")
+                )
+            ).lower()
+            if self._bound_platform:
+                same_platform_bots = [
+                    b for b in all_bots
+                    if isinstance(b, dict) and str(
+                        b.get(
+                            "platform",
+                            (b.get("channel") if isinstance(b.get("channel"), dict) else {}).get("platform", root_platform)
+                        )
+                    ).lower() == self._bound_platform
+                ] or all_bots
+            else:
+                same_platform_bots = all_bots
+
             roles = dict(cfg.get("roles", {}))
             aliases = dict(cfg.get("aliases", {}))
-            for b in all_bots:
+            for b in same_platform_bots:
                 if not isinstance(b, dict):
                     continue
                 uname = (b.get("username") or b.get("name") or "").lower().lstrip("@")
@@ -181,8 +203,8 @@ class AutonomousConfig:
                         aliases[uname] = list(b["aliases"])
             cfg["roles"] = roles
             cfg["aliases"] = aliases
-            if all_bots and not cfg.get("arbiter_bot"):
-                first = all_bots[0] if isinstance(all_bots[0], dict) else {}
+            if same_platform_bots and not cfg.get("arbiter_bot"):
+                first = same_platform_bots[0] if isinstance(same_platform_bots[0], dict) else {}
                 cfg["arbiter_bot"] = (first.get("username") or first.get("name") or "").lower().lstrip("@")
 
         if "tuning" in raw and isinstance(raw["tuning"], dict):
@@ -612,7 +634,8 @@ class AutonomousArbiter:
                         "instructions": p_inst,
                     }
 
-        url = "https://api.typesafe.ai/v1/systemone"
+        api_root = getattr(self.cfg, "base_url", "") or "https://api.typesafe.ai/v1"
+        url = api_root if api_root.endswith("/systemone") else f"{api_root}/systemone"
         timeout = self.cfg.timeout_ms / 1000.0
         payload = {"state": state, "model": self.cfg.model, "questions": questions}
         headers = {"Authorization": f"Bearer {self.cfg.api_key}"}
@@ -741,7 +764,7 @@ class AutonomousArbiter:
 
         engine = self.cfg.engine
         base_url = getattr(self.cfg, "base_url", "")
-        use_gemini_native = (engine == "gemini") and (not base_url or "googleapis.com" in base_url)
+        use_gemini_native = (engine == "gemini")
         use_anthropic = (engine == "anthropic")
 
         if use_gemini_native:

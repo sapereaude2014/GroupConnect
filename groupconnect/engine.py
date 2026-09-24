@@ -31,7 +31,7 @@ import groupconnect.channels.slack
 import groupconnect.channels.feishu
 import groupconnect.channels.wecom
 
-from groupconnect.core.command import parse_bot_command
+from groupconnect.core.parser import parse_bot_command
 from groupconnect.core.config import GatewayConfig
 from groupconnect.core.context import ContextManager
 from groupconnect.core.gatekeeper import Gatekeeper
@@ -63,50 +63,18 @@ def _load_soul(config: GatewayConfig) -> str:
     return ""
 
 
-SENDFILE_TAG_PATTERN = re.compile(
-    r"[【\[](?:send_?file|file|send_document|发文件):\s*([^\s`\"'<>|\]】]+)(?:\s*\|\s*([^\]】]+))?[】\]]",
-    re.IGNORECASE
+from groupconnect.core.commands import CustomCommandDispatcher
+from groupconnect.core.delivery import (
+    OutboundDelivery,
+    SENDFILE_TAG_PATTERN,
+    extract_outbound_files,
+    strip_sendfile_tags,
 )
+from groupconnect.core.pattern import PatternExecutor
+from groupconnect.core.recovery import ResumeManager
 
-
-def _extract_outbound_files(reply_text: str, workspace_dir: str) -> List[Tuple[str, Optional[str]]]:
-    """
-    Extract outbound file attachments from bot reply text.
-    Only explicit send tags are recognized:
-      【SendFile: /path/to/file】
-      【SendFile: /path/to/file | caption】
-      [SendFile: /path/to/file]
-      [SendFile: /path/to/file | caption]
-    Markdown file links ([doc](file:///...)) and bare file:// URIs are NOT extracted
-    to prevent accidental spamming of referenced source code or documentation files.
-    Returns a list of (file_path, caption) tuples.
-    """
-    if not reply_text:
-        return []
-
-    found = []
-    seen = set()
-
-    for m in SENDFILE_TAG_PATTERN.finditer(reply_text):
-        raw_path = m.group(1).strip().strip("`'\"")
-        caption = m.group(2).strip() if m.group(2) else None
-        path = raw_path if os.path.isabs(raw_path) else os.path.join(workspace_dir, raw_path)
-        if os.path.isfile(path) and path not in seen:
-            seen.add(path)
-            found.append((path, caption))
-
-    return found
-
-
-def _strip_sendfile_tags(text: str) -> str:
-    """
-    Remove outbound send tags from reply text so internal markup doesn't appear in chat.
-    """
-    if not text:
-        return ""
-    cleaned = SENDFILE_TAG_PATTERN.sub("", text)
-    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
-    return cleaned
+_extract_outbound_files = extract_outbound_files
+_strip_sendfile_tags = strip_sendfile_tags
 
 
 class GroupConnectEngine:
@@ -147,51 +115,42 @@ class GroupConnectEngine:
         self.chat_queues: Dict[Any, asyncio.Queue] = {}
         self.chat_tasks: Dict[Any, asyncio.Task] = {}
         self._triggered_msg_ids: collections.deque = collections.deque(maxlen=200)
-        self._running_custom_commands: Set[str] = set()
-        self._custom_commands_map: Dict[str, Dict[str, Any]] = {
-            str(c.get("command", "")).strip().lower().lstrip("/"): c
-            for c in getattr(config, "custom_commands", [])
-            if c.get("command")
-        }
-        self._pattern_commands: List[Dict[str, Any]] = []
-        for pc in getattr(config, "pattern_commands", []):
-            pattern_str = pc.get("pattern", "")
-            if not pattern_str:
-                continue
-            cmd_name = str(pc.get("command", "")).strip().lower().lstrip("/")
-            if cmd_name in self._custom_commands_map:
-                pc["_cmd_cfg"] = self._custom_commands_map[cmd_name]
-            elif pc.get("script"):
-                if not cmd_name:
-                    cmd_name = f"pattern_{len(self._pattern_commands) + 1}"
-                # Build a clean, separate command-config dict instead of self-referencing
-                # the pattern dict, so pattern-specific fields (pattern/max_length) can
-                # never collide with command fields (script/lock/messages).
-                # Safe defaults: pass_args=True (a pattern script without its trigger
-                # text is useless); lock=True (interleaved concurrent triggers corrupt
-                # multi-step device operations). Explicit config always wins.
-                pc["_cmd_cfg"] = {
-                    "command": cmd_name,
-                    "script": pc.get("script", ""),
-                    "pass_args": bool(pc.get("pass_args", True)),
-                    "lock": bool(pc.get("lock", True)),
-                    "ack_message": pc.get("ack_message", ""),
-                    "success_message": pc.get("success_message", ""),
-                    "error_message": pc.get("error_message", ""),
-                    "default_args": list(pc.get("default_args", [])),
-                    "force_arg": pc.get("force_arg", ""),
-                }
-            else:
-                logger.warning(
-                    f"Pattern command skipped (needs 'command' or 'script'): {pattern_str[:50]}"
-                )
-                continue
-            try:
-                pc["_compiled"] = re.compile(pattern_str)
-                self._pattern_commands.append(pc)
-                logger.info(f"Pattern command registered: pattern='{pattern_str[:50]}' -> {cmd_name}")
-            except re.error as e:
-                logger.warning(f"Invalid regex in pattern_commands: {e}")
+
+        # 5. Modular Subsystems: Commands, Pattern Fast Lane, Delivery, Recovery
+        self.command_dispatcher = CustomCommandDispatcher(
+            commands=getattr(config, "custom_commands", []),
+            channel=self.channel,
+            context_mgr=self.context_mgr,
+            bot_name=config.bot_name,
+            bot_username=config.bot_username,
+            relay=self.relay
+        )
+        self._custom_commands_map = self.command_dispatcher.commands_map
+        self._running_custom_commands = self.command_dispatcher.running_commands
+
+        self.pattern_executor = PatternExecutor(
+            pattern_configs=getattr(config, "pattern_commands", []),
+            custom_commands_map=self._custom_commands_map,
+            command_dispatcher=self.command_dispatcher,
+            channel=self.channel
+        )
+        self._pattern_commands = self.pattern_executor.patterns
+
+        resume_secs = int(getattr(config, "resume_unanswered_secs", 300))
+        self.resume_manager = ResumeManager(
+            context_mgr=self.context_mgr,
+            bot_username=config.bot_username,
+            window_seconds=resume_secs
+        )
+
+        self.outbound_delivery = OutboundDelivery(
+            channel=self.channel,
+            context_mgr=self.context_mgr,
+            workspace_dir=config.workspace_dir,
+            bot_name=config.bot_name,
+            bot_username=config.bot_username,
+            relay=self.relay
+        )
         self.is_running = False
 
         # 5. Autonomous Routing (免@自主唤醒: single-arbiter + symmetric observers)
@@ -441,81 +400,14 @@ class GroupConnectEngine:
 
     async def _resume_unanswered_messages(self) -> None:
         """After a restart, re-dispatch recent human messages that never received any bot reply.
-
-        The rehydrated sliding window (restored from disk chat logs) already contains the full
-        conversation, including other bots' replies, so 'unanswered' is determined by scanning
-        backward from the buffer tail: skip trailing bot messages, then find the most recent
-        human message that has NO bot reply anywhere after it in the buffer. Guarded by a
-        freshness window (resume_unanswered_secs, 0 disables) so a restart hours later never
-        replies to stale messages. Runs once at startup only; the re-injected message flows
-        through the normal pipeline (fast lane + Zero-@ routing)."""
+        Delegates to ResumeManager with freshness window and poison message quarantine."""
         window = int(getattr(self.config, "resume_unanswered_secs", 300))
-        if window <= 0:
-            return
-        for chat_id, buf in list(self.context_mgr.buffers.items()):
-            try:
-                if not buf:
-                    continue
-                if self.config.allowed_chat_ids and chat_id not in self.config.allowed_chat_ids:
-                    continue
-
-                # Scan backward to find the most recent human message that has no
-                # bot reply after it. We track "seen_bot" going backward: when we
-                # encounter a human message with seen_bot=True, it's answered (some
-                # bot replied between it and the next human message going forward);
-                # we reset seen_bot and continue looking for an older unanswered one.
-                last_human_idx = None
-                seen_bot = False
-                for i in range(len(buf) - 1, -1, -1):
-                    if buf[i].get("is_bot"):
-                        seen_bot = True
-                        continue
-                    if not str(buf[i].get("text", "")).strip():
-                        continue
-                    if not seen_bot:
-                        last_human_idx = i
-                        break
-                    seen_bot = False
-
-                if last_human_idx is None:
-                    continue
-
-                last = buf[last_human_idx]
-                raw = str(last.get("text", ""))
-                try:
-                    msg_time = datetime.strptime(str(last.get("time", "")), "%Y-%m-%d %H:%M:%S")
-                except ValueError:
-                    continue
-                if not (0 <= time.time() - msg_time.timestamp() <= window):
-                    continue
-                logger.info(
-                    f"[RESUME] Re-dispatching unanswered message in chat {chat_id}: "
-                    f"'{raw[:30]}'"
-                )
-                # Chat logs persist neither is_triggered nor chat_type, so re-evaluate
-                # them from the raw text exactly like a fresh inbound message (see the
-                # trigger check in channels/telegram.py). Otherwise a restart-killed
-                # @bot message gets demoted to untriggered and dies in the source-level
-                # mention filter before Jev ever sees it.
-                try:
-                    chat_type = "private" if int(chat_id) > 0 else "group"
-                except (TypeError, ValueError):
-                    chat_type = "group"
-                is_trig = chat_type == "private" or f"@{self.config.bot_username}".lower() in raw.lower()
-                if not is_trig and raw.startswith("/"):
-                    cmd, target_bot, _ = parse_bot_command(raw, self.config.bot_username)
-                    is_trig = bool(cmd and (target_bot is None or target_bot.lower() == self.config.bot_username.lower()))
-                await self.on_inbound_message(InboundMessage(
-                    chat_id=chat_id,
-                    chat_type=chat_type,
-                    msg_id=last.get("msg_id", 0),
-                    sender_name=str(last.get("sender", "")),
-                    from_user={},
-                    text=raw,
-                    is_triggered=is_trig
-                ), record=False)
-            except Exception as e:
-                logger.warning(f"[RESUME] Failed to resume chat {chat_id}: {e}")
+        resumable = self.resume_manager.find_unanswered_messages(
+            window_seconds=window,
+            allowed_chat_ids=self.config.allowed_chat_ids
+        )
+        for chat_id, inbound in resumable:
+            await self.on_inbound_message(inbound, record=False)
 
     async def on_inbound_message(self, msg: InboundMessage, record: bool = True) -> None:
         chat_id = msg.chat_id
@@ -609,15 +501,13 @@ class GroupConnectEngine:
         if not is_bot and self._pattern_commands and not getattr(msg, "reply_to_bot_username", ""):
             _fast = clean_query or (msg.text or "").strip()
             if _fast and not _fast.startswith("/"):
-                raw = re.sub(r"[，。！？.!?、…]+$", "", _fast).strip()
-                if raw:
-                    for pc in self._pattern_commands:
-                        max_len = int(pc.get("max_length", 20))
-                        if len(raw) <= max_len and pc["_compiled"].search(raw):
-                            asyncio.create_task(
-                                self._run_pattern_command(chat_id, pc, raw, reply_to_msg_id=msg.msg_id)
-                            )
-                            return
+                matched = self.pattern_executor.match(_fast)
+                if matched:
+                    pc, raw = matched
+                    asyncio.create_task(
+                        self.pattern_executor.execute(chat_id, pc, raw, reply_to_msg_id=msg.msg_id, chat_type=chat_type)
+                    )
+                    return
 
         # 6. Untriggered messages complete here (already captured in context buffer)
         if not msg.is_triggered:
@@ -799,7 +689,30 @@ class GroupConnectEngine:
         session = self.context_mgr.get_session(chat_id)
         cid = session.get("conversation_id")
 
-        # Determine whether command was explicitly targeted at this bot
+        # 1. Slash command routing (returns True if handled)
+        if await self._route_slash_command(msg, clean_query, cmd):
+            return
+
+        # 2. Build agent prompt from attachments, coalesced items, and context
+        full_prompt, active_attachments, user_query = self._build_agent_prompt(
+            msg, clean_query, is_group, session, cid, coalesced_items
+        )
+
+        # 3. Invoke agent and deliver response
+        await self._invoke_agent_and_deliver(msg, full_prompt, active_attachments, session, cid)
+
+    async def _route_slash_command(
+        self,
+        msg: InboundMessage,
+        clean_query: str,
+        cmd: Optional[str]
+    ) -> bool:
+        """Routes built-in and custom slash commands. Returns True if handled."""
+        chat_id = msg.chat_id
+        is_group = msg.chat_type in ("group", "supergroup")
+        session = self.context_mgr.get_session(chat_id)
+        cid = session.get("conversation_id")
+
         _, target_bot, _ = parse_bot_command(msg.text or "", self.config.bot_username)
         is_explicitly_targeted = (
             (target_bot is not None and target_bot.lower() == self.config.bot_username.lower())
@@ -807,12 +720,11 @@ class GroupConnectEngine:
             or (msg.chat_type == "private")
         )
 
-        # Built-in Slash Commands
         if cmd in ("clear", "new", "reset"):
             self.context_mgr.reset_session(chat_id)
             self.adapter.terminate(chat_id)
             await self.channel.send_reply(chat_id, "🧹 Session reset. Started fresh conversation context.", reply_to_msg_id=msg.msg_id)
-            return
+            return True
         elif cmd == "status":
             buf = self.context_mgr.get_buffer(chat_id)
             cid_display = f"`{cid[:8]}...{cid[-6:]}` ({session.get('turns', 0)} turns)" if cid else "Fresh / Idle"
@@ -829,7 +741,7 @@ class GroupConnectEngine:
                 f"- **Service State**: `Active & Running`"
             )
             await self.channel.send_reply(chat_id, status_text, reply_to_msg_id=msg.msg_id)
-            return
+            return True
         elif cmd in ("help", "start"):
             custom_cmd_lines = ""
             if self.config.custom_commands:
@@ -850,36 +762,50 @@ class GroupConnectEngine:
                 f"• `/help` - Show this guide{custom_cmd_lines}"
             )
             await self.channel.send_reply(chat_id, help_text, reply_to_msg_id=msg.msg_id)
-            return
+            return True
         elif cmd in self._custom_commands_map:
             cmd_cfg = self._custom_commands_map[cmd]
             cmd_name = str(cmd_cfg.get("command", "")).strip().lower()
             is_arbiter = (self.autonomous.is_arbiter if getattr(self, "autonomous", None) else True)
 
-            # If configured arbiter_only_on_broadcast, ignore untargeted group messages if not arbiter
             if cmd_cfg.get("arbiter_only_on_broadcast", False):
                 if not is_explicitly_targeted and not is_arbiter:
-                    return
+                    return True
 
-            # Concurrency lock
-            if cmd_cfg.get("lock", False):
+            should_lock = cmd_cfg.get("lock", False)
+            if should_lock:
                 if cmd_name in self._running_custom_commands:
                     await self.channel.send_reply(
                         chat_id,
                         f"⏳ 指令 `/{cmd_name}` 正在执行中，请勿重复触发，稍后会自动汇报结果。",
                         reply_to_msg_id=msg.msg_id
                     )
-                    return
+                    return True
                 self._running_custom_commands.add(cmd_name)
 
             cmd_from_raw, _, raw_args = parse_bot_command(msg.text or "", self.config.bot_username)
             effective_args = raw_args if cmd_from_raw else clean_query
             asyncio.create_task(
-                self._run_custom_command(chat_id, cmd_cfg, effective_args, reply_to_msg_id=msg.msg_id)
+                self._run_slash_command(chat_id, cmd_cfg, effective_args, should_lock, cmd_name, reply_to_msg_id=msg.msg_id, chat_type=msg.chat_type)
             )
-            return
+            return True
 
-        # Prepare Attachments Prompt Section
+        return False
+
+    def _build_agent_prompt(
+        self,
+        msg: InboundMessage,
+        clean_query: str,
+        is_group: bool,
+        session: Dict[str, Any],
+        cid: Optional[str],
+        coalesced_items: Optional[List[Tuple[InboundMessage, str, Optional[str]]]] = None
+    ) -> Tuple[str, List[Dict[str, Any]], str]:
+        """Builds the full agent prompt from attachments, coalesced items, and conversation context.
+        Returns (full_prompt, active_attachments, user_query)."""
+        chat_id = msg.chat_id
+
+        # Collect attachments
         active_attachments = list(msg.attachments)
         for att in msg.reply_attachments:
             if not any(a.get("path") == att.get("path") for a in active_attachments):
@@ -917,12 +843,12 @@ class GroupConnectEngine:
                 + "\n".join(coalesce_lines) + "\n"
             )
 
-        # Prepare Soul Prompt Section (Session Initialization only)
+        # Soul prompt (session initialization only)
         soul_section = ""
         if cid is None:
             soul_section = _load_soul(self.config)
 
-        # Build Full Prompt with Context
+        # Build full prompt with context
         if not is_group:
             if cid is None:
                 full_prompt = (
@@ -986,11 +912,23 @@ class GroupConnectEngine:
                     f"Please continue the conversation naturally."
                 )
 
-        # Update incremental context anchor to current input message,
-        # so messages arriving during processing are included next turn.
+        return full_prompt, active_attachments, user_query
+
+    async def _invoke_agent_and_deliver(
+        self,
+        msg: InboundMessage,
+        full_prompt: str,
+        active_attachments: List[Dict[str, Any]],
+        session: Dict[str, Any],
+        cid: Optional[str]
+    ) -> None:
+        """Invokes the agent with typing heartbeat, then delivers the response."""
+        chat_id = msg.chat_id
+
+        # Update incremental context anchor
         session["last_input_msg_id"] = msg.msg_id
 
-        # Typing Heartbeat Loop
+        # Typing heartbeat
         stop_typing = asyncio.Event()
         interval = max(self.config.typing_interval_secs, 1.0)
 
@@ -1016,7 +954,6 @@ class GroupConnectEngine:
             await typing_task
 
         if reply_text is None:
-            # Request was cancelled via /stop
             if new_cid:
                 session["conversation_id"] = new_cid
                 session["last_active"] = time.time()
@@ -1029,215 +966,31 @@ class GroupConnectEngine:
         else:
             session["conversation_id"] = None
 
-        # Outbound Multimedia / File Delivery
-        outbound_files = _extract_outbound_files(reply_text, self.config.workspace_dir)
-        clean_reply_text = _strip_sendfile_tags(reply_text)
-
-        sent_msg_id = None
-        try:
-            if clean_reply_text and clean_reply_text.strip():
-                sent_msg_id = await self.channel.send_reply(chat_id, clean_reply_text, reply_to_msg_id=msg.msg_id)
-                if sent_msg_id:
-                    session["last_bot_msg_id"] = sent_msg_id
-            elif not outbound_files:
-                # No files and empty text: trigger default fallback message
-                sent_msg_id = await self.channel.send_reply(chat_id, clean_reply_text, reply_to_msg_id=msg.msg_id)
-                if sent_msg_id:
-                    session["last_bot_msg_id"] = sent_msg_id
-        except Exception as e:
-            logger.error(f"Failed to deliver reply to chat {chat_id}: {e}")
-
-        for file_path, file_caption in outbound_files:
-            try:
-                logger.info(f"Delivering outbound attachment: {file_path} (caption={file_caption}) to chat {chat_id}")
-                await self.channel.send_file(
-                    chat_id=chat_id,
-                    file_path=file_path,
-                    caption=file_caption,
-                    reply_to_msg_id=sent_msg_id or msg.msg_id
-                )
-            except Exception as e:
-                logger.error(f"Failed to deliver outbound attachment {file_path} to chat {chat_id}: {e}")
-
-        self.context_mgr.record_message(
+        sent_msg_id, clean_reply_text = await self.outbound_delivery.deliver(
             chat_id=chat_id,
-            sender_name=f"{self.config.bot_name} (@{self.config.bot_username})",
-            text=clean_reply_text,
-            msg_id=sent_msg_id,
-            is_bot_reply=True,
-            bot_username=self.config.bot_username
+            reply_text=reply_text,
+            reply_to_msg_id=msg.msg_id,
+            chat_type=msg.chat_type,
+            hop_count=getattr(msg, "hop_count", 0)
         )
+        if sent_msg_id:
+            session["last_bot_msg_id"] = sent_msg_id
 
-        # Broadcast reply to local peer bots via CrossBotRelay
-        if getattr(self, "relay", None):
-            try:
-                await self.relay.broadcast_reply(
-                    chat_id=chat_id,
-                    chat_type=msg.chat_type,
-                    msg_id=sent_msg_id or 0,
-                    text=clean_reply_text,
-                    hop_count=getattr(msg, "hop_count", 0)
-                )
-            except Exception as e:
-                logger.warning(f"Failed to broadcast reply via relay: {e}")
-
-    async def _reply_and_record(self, chat_id: Any, text: str, reply_to_msg_id: Any = None,
-                                chat_type: str = "group") -> None:
-        """Send a terminal command reply and record it in chat history, so the startup
-        resume of unanswered messages sees the conversation as already answered.
-        Also broadcasts via CrossBotRelay so peer bots' context stays in sync.
-        Non-terminal notices (ack, lock-busy) stay unrecorded on purpose: an
-        unfinished command should still be re-dispatched after a restart."""
-        sent_id = await self.channel.send_reply(chat_id, text, reply_to_msg_id=reply_to_msg_id)
-        try:
-            self.context_mgr.record_message(
-                chat_id=chat_id,
-                sender_name=f"{self.config.bot_name} (@{self.config.bot_username})",
-                text=text,
-                msg_id=sent_id or 0,
-                is_bot_reply=True,
-                bot_username=self.config.bot_username
-            )
-        except Exception as e:
-            logger.warning(f"[CUSTOM_CMD] Failed to record command reply in history: {e}")
-
-        # Broadcast reply to local peer bots via CrossBotRelay
-        if getattr(self, "relay", None):
-            try:
-                await self.relay.broadcast_reply(
-                    chat_id=chat_id,
-                    chat_type=chat_type,
-                    msg_id=sent_id or 0,
-                    text=text,
-                    hop_count=0
-                )
-            except Exception as e:
-                logger.warning(f"Failed to broadcast command reply via relay: {e}")
-
-    async def _run_custom_command(
+    async def _run_slash_command(
         self,
         chat_id: Any,
         cmd_cfg: Dict[str, Any],
         args: str,
-        reply_to_msg_id: Any = None
+        should_lock: bool,
+        cmd_name: str,
+        reply_to_msg_id: Any = None,
+        chat_type: str = "group"
     ) -> None:
-        cmd_name = str(cmd_cfg.get("command", "")).strip().lower()
-        script = os.path.expanduser(cmd_cfg.get("script", ""))
-        bot_name = self.config.bot_name
-
-        if not os.path.isfile(script):
-            await self._reply_and_record(chat_id, f"❌ 未找到执行脚本: {script}", reply_to_msg_id=reply_to_msg_id)
-            if cmd_name in self._running_custom_commands:
-                self._running_custom_commands.remove(cmd_name)
-            return
-
-        # 1. Optional check-only pre-flight inspection
-        check_args = cmd_cfg.get("check_args")
-        force_arg = cmd_cfg.get("force_arg")
-        force_requested = bool(force_arg and force_arg in args) or ("force" in (args or "").lower())
-        if check_args and not force_requested:
-            try:
-                check_exec_args = [script] + list(check_args)
-                check_proc = await asyncio.create_subprocess_exec(
-                    *check_exec_args,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
-                )
-                await check_proc.communicate()
-                if check_proc.returncode == 0:
-                    check_msg = cmd_cfg.get("check_success_message")
-                    if check_msg:
-                        msg_text = check_msg.format(bot_name=bot_name, command=cmd_name)
-                        await self._reply_and_record(chat_id, msg_text, reply_to_msg_id=reply_to_msg_id)
-                        if cmd_name in self._running_custom_commands:
-                            self._running_custom_commands.remove(cmd_name)
-                        return
-            except Exception as e:
-                logger.warning(f"[CUSTOM_CMD] Pre-check failed for '{cmd_name}': {e}")
-
-        # 2. Optional immediate acknowledgement message
-        ack_tmpl = cmd_cfg.get("ack_message")
-        if ack_tmpl:
-            ack_text = ack_tmpl.format(bot_name=bot_name, command=cmd_name)
-            await self.channel.send_reply(chat_id, ack_text, reply_to_msg_id=reply_to_msg_id)
-
-        # 3. Build execution arguments
-        cmd_args = [script]
-        if cmd_cfg.get("default_args"):
-            cmd_args.extend(list(cmd_cfg.get("default_args")))
-        if force_requested and force_arg:
-            if force_arg not in cmd_args:
-                cmd_args.append(force_arg)
-        elif cmd_cfg.get("pass_args", False) and args:
-            for part in args.split():
-                if part not in cmd_args:
-                    cmd_args.append(part)
-
-        logger.info(f"[CUSTOM_CMD] Executing '{cmd_name}' ({cmd_args}) for chat {chat_id}...")
-        start_ts = time.time()
+        """Execute a slash command with lock release guaranteed by the caller."""
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd_args,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+            await self.command_dispatcher.execute_command(
+                chat_id, cmd_cfg, args, reply_to_msg_id=reply_to_msg_id, chat_type=chat_type
             )
-            stdout, stderr = await proc.communicate()
-            duration = max(1, int(time.time() - start_ts))
-            out_str = (stdout or b"").decode(errors="ignore").strip()
-            err_str = (stderr or b"").decode(errors="ignore").strip()
-
-            format_kwargs = {
-                "bot_name": bot_name,
-                "duration": duration,
-                "stdout": out_str,
-                "stderr": err_str,
-                "returncode": proc.returncode,
-                "command": cmd_name
-            }
-
-            if proc.returncode == 0:
-                success_tmpl = cmd_cfg.get("success_message")
-                if success_tmpl:
-                    reply_text = success_tmpl.format(**format_kwargs)
-                else:
-                    reply_text = out_str or f"✅ 指令 `{cmd_name}` 执行完成（耗时 {duration}s）。"
-                await self._reply_and_record(chat_id, reply_text, reply_to_msg_id=reply_to_msg_id)
-            else:
-                error_tmpl = cmd_cfg.get("error_message")
-                if error_tmpl:
-                    reply_text = error_tmpl.format(**format_kwargs)
-                else:
-                    reply_text = f"❌ 指令 `{cmd_name}` 执行失败 (Exit {proc.returncode}): {err_str or out_str}"
-                await self._reply_and_record(chat_id, reply_text, reply_to_msg_id=reply_to_msg_id)
-        except Exception as e:
-            logger.error(f"[CUSTOM_CMD] Failed to execute '{cmd_name}': {e}", exc_info=True)
-            await self._reply_and_record(chat_id, f"❌ 执行指令 `{cmd_name}` 时出错: {e}", reply_to_msg_id=reply_to_msg_id)
         finally:
-            if cmd_name in self._running_custom_commands:
-                self._running_custom_commands.remove(cmd_name)
-
-    async def _run_pattern_command(self, chat_id: Any, pc: Dict[str, Any], text: str, reply_to_msg_id: Any = None) -> None:
-        """Execute a pattern-matched command directly, bypassing LLM routing.
-        Reuses _run_custom_command for script execution, ack, and error handling.
-
-        Lock granularity is per-device: the trigger text itself is the lock key
-        so that commands targeting different devices run in parallel while
-        repeated commands on the same device are serialized."""
-        cmd_cfg = pc["_cmd_cfg"]
-        cmd_name = str(cmd_cfg.get("command", "")).strip().lower()
-
-        lock_key = None
-        if cmd_cfg.get("lock", False):
-            lock_key = f"{cmd_name}:{text}"
-            if lock_key in self._running_custom_commands:
-                await self.channel.send_reply(
-                    chat_id, f"⏳ `{text}` 正在执行中…", reply_to_msg_id=reply_to_msg_id
-                )
-                return
-            self._running_custom_commands.add(lock_key)
-
-        try:
-            await self._run_custom_command(chat_id, cmd_cfg, text, reply_to_msg_id=reply_to_msg_id)
-        finally:
-            if lock_key is not None:
-                self._running_custom_commands.discard(lock_key)
+            if should_lock:
+                self.command_dispatcher.release_lock(cmd_name)

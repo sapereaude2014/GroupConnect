@@ -151,6 +151,60 @@ class TestUnifiedConfig(unittest.TestCase):
         finally:
             os.environ.pop("GC_CLF_KEY", None)
 
+    def test_per_bot_platform_binding_and_cross_platform_isolation(self):
+        import tempfile
+        import time
+        import yaml
+
+        doc = {
+            "bots": [
+                {
+                    "name": "tg_coder",
+                    "username": "tg_coder_bot",
+                    "platform": "telegram",
+                    "token": "tg_tok_1",
+                    "role": "TG Coding",
+                    "aliases": ["码农"],
+                    "agent": {"engine": "codex", "workspace": "./test_workspace"},
+                },
+                {
+                    "name": "dc_helper",
+                    "username": "dc_helper_bot",
+                    "platform": "discord",
+                    "token": "dc_tok_1",
+                    "role": "Discord Helper",
+                    "aliases": ["小助"],
+                    "agent": {"engine": "claude", "workspace": "./test_workspace"},
+                },
+            ],
+            "zero_at": {"enabled": True},
+        }
+        with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as tf:
+            yaml.safe_dump(doc, tf)
+            tmp_path = tf.name
+
+        try:
+            g_tg = GatewayConfig.from_file(tmp_path, bot_name="tg_coder_bot")
+            g_dc = GatewayConfig.from_file(tmp_path, bot_name="dc_helper_bot")
+
+            self.assertEqual(g_tg.platform, "telegram")
+            self.assertEqual(g_tg.bot_token, "tg_tok_1")
+            self.assertEqual(g_tg.autonomous_config.arbiter_bot, "tg_coder_bot")
+            self.assertEqual(set(g_tg.autonomous_config.roles.keys()), {"tg_coder_bot"})
+
+            self.assertEqual(g_dc.platform, "discord")
+            self.assertEqual(g_dc.bot_token, "dc_tok_1")
+            self.assertEqual(g_dc.autonomous_config.arbiter_bot, "dc_helper_bot")
+            self.assertEqual(set(g_dc.autonomous_config.roles.keys()), {"dc_helper_bot"})
+
+            # Verify hot reload preserves platform isolation
+            os.utime(tmp_path, (time.time() + 10, time.time() + 10))
+            g_dc.autonomous_config.reload_if_modified()
+            self.assertEqual(g_dc.autonomous_config.arbiter_bot, "dc_helper_bot")
+            self.assertEqual(set(g_dc.autonomous_config.roles.keys()), {"dc_helper_bot"})
+        finally:
+            os.unlink(tmp_path)
+
 
 if __name__ == "__main__":
     unittest.main()

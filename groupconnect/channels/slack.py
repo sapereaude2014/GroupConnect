@@ -13,7 +13,7 @@ from typing import Any, Callable, Coroutine, Dict, List, Optional, Union
 import httpx
 
 from groupconnect.channels.base import BaseChannel, ChannelField, InboundMessage, register_channel
-from groupconnect.core.command import parse_bot_command
+from groupconnect.core.parser import parse_bot_command
 from groupconnect.core.config import GatewayConfig
 
 logger = logging.getLogger("groupconnect.channel.slack")

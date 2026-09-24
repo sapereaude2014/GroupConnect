@@ -250,14 +250,22 @@ class Doctor:
         provider_name = acfg.active_provider
         api_key = acfg.api_key
         if not api_key:
+            env_map = {
+                "jev": "JEV_API_KEY",
+                "openai": "OPENAI_API_KEY",
+                "llm": "OPENAI_API_KEY",
+                "anthropic": "ANTHROPIC_API_KEY",
+                "gemini": "GEMINI_API_KEY",
+            }
+            expected_env = env_map.get(acfg.engine, "JEV_API_KEY")
             self.print_item(
                 "fail",
-                f"分类器 [{provider_name}] 缺少 API Key",
-                "export JEV_API_KEY='your-key' 或在 groupconnect.yaml 的 zero_at.api_key 中配置"
+                f"分类器 [{acfg.engine}] 缺少 API Key",
+                f"配置环境变量 {expected_env} 或在 groupconnect.yaml 的 zero_at.classifier.api_key 中指定"
             )
         else:
             masked = api_key[:4] + "..." + api_key[-4:] if len(api_key) > 8 else "***"
-            self.print_item("pass", f"分类器 [{provider_name}] API Key 存在 ({masked})")
+            self.print_item("pass", f"分类器 [{acfg.engine}] API Key 已就绪 ({masked})")
 
         # Rules Check
         if acfg.rule_templates:

@@ -34,7 +34,7 @@ class TestCustomCommands(unittest.IsolatedAsyncioTestCase):
         })
         engine = GroupConnectEngine(cfg)
         engine.channel.send_reply = AsyncMock()
-        engine._run_custom_command = AsyncMock()
+        engine._run_slash_command = AsyncMock()
 
         msg = InboundMessage(
             chat_id=12345,
@@ -48,9 +48,9 @@ class TestCustomCommands(unittest.IsolatedAsyncioTestCase):
 
         await engine._handle_triggered_message(msg, "/backup", "backup")
 
-        # Concurrency lock active & _run_custom_command invoked
+        # Lock acquired & command dispatched via wrapper
         self.assertIn("backup", engine._running_custom_commands)
-        engine._run_custom_command.assert_called_once()
+        engine._run_slash_command.assert_called_once()
 
     async def test_untargeted_broadcast_arbiter_isolation(self):
         """Untargeted broadcast /cmd only runs on the arbiter bot when arbiter_only_on_broadcast is set."""
@@ -66,7 +66,7 @@ class TestCustomCommands(unittest.IsolatedAsyncioTestCase):
         engine_follower.autonomous = MagicMock()
         engine_follower.autonomous.is_arbiter = False
         engine_follower.channel.send_reply = AsyncMock()
-        engine_follower._run_custom_command = AsyncMock()
+        engine_follower._run_slash_command = AsyncMock()
 
         msg = InboundMessage(
             chat_id=12345,
@@ -81,7 +81,7 @@ class TestCustomCommands(unittest.IsolatedAsyncioTestCase):
         await engine_follower._handle_triggered_message(msg, "/backup", "backup")
         # Follower bot drops untargeted command
         engine_follower.channel.send_reply.assert_not_called()
-        engine_follower._run_custom_command.assert_not_called()
+        engine_follower._run_slash_command.assert_not_called()
         self.assertNotIn("backup", engine_follower._running_custom_commands)
 
         # Arbiter bot
@@ -96,10 +96,10 @@ class TestCustomCommands(unittest.IsolatedAsyncioTestCase):
         engine_arbiter.autonomous = MagicMock()
         engine_arbiter.autonomous.is_arbiter = True
         engine_arbiter.channel.send_reply = AsyncMock()
-        engine_arbiter._run_custom_command = AsyncMock()
+        engine_arbiter._run_slash_command = AsyncMock()
 
         await engine_arbiter._handle_triggered_message(msg, "/backup", "backup")
-        engine_arbiter._run_custom_command.assert_called_once()
+        engine_arbiter._run_slash_command.assert_called_once()
         self.assertIn("backup", engine_arbiter._running_custom_commands)
 
     async def test_concurrency_lock(self):
@@ -114,7 +114,7 @@ class TestCustomCommands(unittest.IsolatedAsyncioTestCase):
         engine = GroupConnectEngine(cfg)
         engine._running_custom_commands.add("backup")
         engine.channel.send_reply = AsyncMock()
-        engine._run_custom_command = AsyncMock()
+        engine._run_slash_command = AsyncMock()
 
         msg = InboundMessage(
             chat_id=12345,
@@ -129,7 +129,7 @@ class TestCustomCommands(unittest.IsolatedAsyncioTestCase):
         await engine._handle_triggered_message(msg, "/backup", "backup")
         engine.channel.send_reply.assert_called_once()
         self.assertIn("正在执行中，请勿重复触发", engine.channel.send_reply.call_args[0][1])
-        engine._run_custom_command.assert_not_called()
+        engine._run_slash_command.assert_not_called()
 
     async def test_dynamic_telegram_menu(self):
         """TelegramChannel dynamically registers only the commands defined in config."""
