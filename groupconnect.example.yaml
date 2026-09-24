@@ -54,7 +54,7 @@ bots:
         schedule:                                       # Optional periodic schedule (automatically runs script and broadcasts report to allowed_chat_ids)
           weekday: 6                                    # Day of week (0 = Monday ... 6 = Sunday; omit for every day)
           hour: 4                                       # Hour of day in 24h format (0..23)
-    pattern_commands:                   # Zero-latency regex fast lane (matches plain group text without '/' and bypasses LLM completely)
+    pattern_commands:                   # Direct regex script triggers (matches plain group text without '/' and runs local script without invoking any LLM)
       - pattern: "^(turn on|turn off)\\s+(lights|ac)(\\s+\\d{1,2})?$"  # Regex pattern matched against incoming message text
         script: "~/.local/bin/device-control.py"        # Script invoked immediately with the matched message text as argument
 

@@ -44,12 +44,11 @@ Assistant: "Recorded in schedule.md:
 
 - **Zero-@ Perception & Lightweight Routing**: Converse naturally — a fast pre-classifier (Jev ~200ms by default, switchable to `openai` / `anthropic` / `gemini`) reads conversation context to decide whether and who should respond, staying silent during human chitchat and waking heavy local CLI agents only when needed.
 - **Heterogeneous Multi-Bot Collaboration & Personas**: Run multiple specialized bots in one group or across platforms (each bound to its own engine like `Claude Code`, `Antigravity`, `Codex`, or `TeleAgent`, plus its own `souls/{username}.md` persona). Supports **targeted dispatch** ("A, let B check this" → only A responds) and **parallel consultation** ("Both of you take a look" → both respond).
-- **Regex Fast Lane & Custom Slash Commands**:
-  - **Zero-Latency Fast Lane (`pattern_commands`)**: Match natural phrases (e.g., "turn on bedroom lights") via regex to execute local scripts in milliseconds, bypassing the LLM completely;
-  - **Slash Commands & Cron Broadcasts (`custom_commands`)**: Register local scripts as native `/` menu commands (e.g., `/backup`) with pre-check hooks, concurrency mutex locks, and scheduled group broadcasts.
+- **Direct Script Triggers & Custom Commands**:
+  - **Natural-Language Script Triggers (`pattern_commands`)**: Match fixed phrases (e.g., "turn on bedroom lights") via regex to execute local scripts in milliseconds without invoking any LLM;
+  - **Custom `/Commands` & Scheduled Tasks (`custom_commands`)**: Register local scripts as native `/` menu commands (e.g., `/backup`) with pre-check hooks, concurrency locks, and scheduled group broadcasts.
 - **Persistent Context, Bidirectional Files & Auto-Folding**: Restart-safe context buffer that **automatically re-dispatches unanswered messages after a restart**; group photos, audio, and documents are saved to the workspace for agents, agent-generated files upload back via `【SendFile: /path】`, and long replies auto-fold into Telegraph articles or expandable blockquotes.
 - **Default-Deny Security & Process Control**: Rejects all unauthorized chats and users by default, supports live hot-reload of allowlists and routing rules, and `/stop` immediately kills the underlying agent process tree.
-- **Built-in Diagnostics & Terminal Sandbox**: Ships with `groupconnect init` wizard, `groupconnect doctor` full-stack health check (verifying tokens, Telegram privacy mode, and agent binaries), and `groupconnect test` terminal group simulator.
 
 ---
 
@@ -71,10 +70,9 @@ Assistant: "Recorded in schedule.md:
 git clone https://github.com/sapereaude2014/GroupConnect.git
 cd GroupConnect
 pip install -e .
-groupconnect init      # Interactive 5-step setup wizard
-groupconnect doctor    # Full-stack health check before first run
-groupconnect test      # Optional: simulate group chat & Zero-@ routing in terminal
-groupconnect run       # Start gateway (Ctrl+C to stop)
+groupconnect init      # Interactive 5-step wizard
+groupconnect doctor    # Health check before first run
+groupconnect run       # Start (Ctrl+C to stop)
 ```
 
 <details>
@@ -126,7 +124,7 @@ cp groupconnect.example.yaml groupconnect.yaml
 cp .env.example .env
 ```
 
-- **Full Configuration Reference (with inline comments for every parameter)**: see [`groupconnect.example.yaml`](groupconnect.example.yaml) (multi-bot routing, local agent harnesses, custom slash commands, regex fast lanes, Zero-@ classifier, and security allowlists).
+- **Full Configuration Reference (with inline comments for every parameter)**: see [`groupconnect.example.yaml`](groupconnect.example.yaml) (multi-bot routing, local agent harnesses, custom slash commands, direct script triggers, Zero-@ classifier, and security allowlists).
 - **Environment Variables & Secrets**: see [`.env.example`](.env.example).
 
 ---
