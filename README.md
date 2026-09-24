@@ -42,13 +42,18 @@ Assistant: "Recorded in schedule.md:
 
 ## ✨ Key Features
 
-- **Zero-@ Perception & Lightweight Routing**: Converse naturally — a fast pre-classifier (Jev ~200ms by default, switchable to `openai` / `anthropic` / `gemini`) reads conversation context to decide whether and who should respond, staying silent during human chitchat and waking heavy local CLI agents only when needed.
-- **Heterogeneous Multi-Bot Collaboration & Personas**: Run multiple specialized bots in one group or across platforms (each bound to its own engine like `Claude Code`, `Antigravity`, `Codex`, or `TeleAgent`, plus its own `souls/{username}.md` persona). Supports **targeted dispatch** ("A, let B check this" → only A responds) and **parallel consultation** ("Both of you take a look" → both respond).
-- **Direct Script Triggers & Custom Commands**:
+- **Multi-Stage Filtering & Zero-@ Routing (Wake Heavy Agents Only When Needed)**:
+  Incoming group messages pass through a two-stage filter before ever waking a local CLI agent:
+  - **Stage 1 · Deterministic Rules & Alias Matching (0 Tokens)**: Automatically drops casual acknowledgements ("ok/thanks") and immediately routes explicit `@mentions` or natural nickname calls (`aliases`, e.g., "Coder, check the logs") to the target bot in milliseconds without calling any LLM;
+  - **Stage 2 · Lightweight Classifier Dispatch (~200ms)**: Unmentioned group messages are evaluated by a fast classifier (Jev by default, switchable to `openai` / `anthropic` / `gemini`) using conversation context and each bot's `role` — staying silent on human chitchat, performing **targeted dispatch** ("A, let B handle it" → wakes only A), or triggering **parallel consultation** ("Both of you review this" → wakes both bots).
+- **Heterogeneous Multi-Agent Roster & Personas**:
+  Run multiple specialized bots in one group or across platforms, freely mixing local CLI harnesses (`Claude Code`, `Antigravity`, `Codex`, `OpenCode`, `TeleAgent`), each with its own `souls/{username}.md` persona file and shared workspace.
+- **Direct Script Triggers & Custom Commands (Bypass AI)**:
   - **Natural-Language Script Triggers (`pattern_commands`)**: Match fixed phrases (e.g., "turn on bedroom lights") via regex to execute local scripts in milliseconds without invoking any LLM;
   - **Custom `/Commands` & Scheduled Tasks (`custom_commands`)**: Register local scripts as native `/` menu commands (e.g., `/backup`) with pre-check hooks, concurrency locks, and scheduled group broadcasts.
-- **Persistent Context, Bidirectional Files & Auto-Folding**: Restart-safe context buffer that **automatically re-dispatches unanswered messages after a restart**; group photos, audio, and documents are saved to the workspace for agents, agent-generated files upload back via `【SendFile: /path】`, and long replies auto-fold into Telegraph articles or expandable blockquotes.
-- **Default-Deny Security & Process Control**: Rejects all unauthorized chats and users by default, supports live hot-reload of allowlists and routing rules, and `/stop` immediately kills the underlying agent process tree.
+- **Workspace File Loop & Default-Deny Security**:
+  - **Bidirectional Files & Crash Resume**: Group photos, audio, and documents auto-save to the workspace for agents, agent-generated files upload back via `【SendFile: /path】`, long replies auto-fold into Telegraph pages, and unanswered messages are **automatically re-dispatched after a restart**;
+  - **Default-Deny Allowlist & Process Kill**: Strictly blocks all unauthorized groups and users by default, supports live config hot-reload, and `/stop` immediately terminates the running agent process tree.
 
 ---
 
