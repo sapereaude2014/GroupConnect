@@ -170,11 +170,22 @@ def run_init_wizard(target_path: Optional[str] = None) -> str:
         with open(env_file, "r", encoding="utf-8") as f:
             existing_env = f.read()
 
-    existing_keys = {
-        line.strip().removeprefix("export ").split("=", 1)[0].strip()
-        for line in existing_env.splitlines()
-        if "=" in line and not line.strip().startswith("#")
-    }
+    # Dedup against ALL env files in cfg_dir (.env + *.env), matching the loader's
+    # discovery order — prevents duplicate key definitions across sibling files.
+    existing_keys = set()
+    for ep in [env_file] + sorted(glob.glob(os.path.join(cfg_dir, "*.env"))):
+        if not os.path.isfile(ep):
+            continue
+        try:
+            with open(ep, "r", encoding="utf-8") as f:
+                for raw_line in f:
+                    line = raw_line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    line = line.removeprefix("export ").strip()
+                    existing_keys.add(line.split("=", 1)[0].strip())
+        except Exception:
+            continue
     new_lines = [f"{k}={v}" for k, v in env_vars.items() if k not in existing_keys]
     if new_lines:
         with open(env_file, "a" if existing_env else "w", encoding="utf-8") as f:
