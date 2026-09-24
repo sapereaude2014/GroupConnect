@@ -123,21 +123,26 @@ bots:
   - name: "代码助手"
     username: "coder_bot"
     platform: telegram
-    token: ${CODER_BOT_TOKEN}     # 用 ${ENV_VAR} 注入敏感信息，配置文件可安全入库
+    token: "${CODER_BOT_TOKEN}"   # 用 ${ENV_VAR} 注入敏感信息，配置文件可安全入库
     role: "负责代码编写与 Bug 修复"
     aliases: ["码农", "coder"]
-    # souls_dir: ~/souls        # 可选：从该目录加载 {username}.md 人设文件
+    souls_dir: ~/souls            # 可选：按 {username}.md 加载人设
     agent:
-      engine: codex             # codex | claude | antigravity | opencode | teleagent
+      engine: codex               # codex | claude | antigravity | opencode | teleagent
+      bin: /usr/local/bin/codex   # 可选：指定二进制路径（不填则从 PATH 查找）
+      # model: gpt-5              # 可选：指定模型覆盖 CLI 默认值
       workspace: ~/workspace
+      timeout_secs: 1800          # 可选：单次执行超时秒数
+      session_idle_timeout_mins: 120
 
   # 如需同群多 Bot 协同（或跨平台托管其他 Bot），直接追加：
   # - name: "架构评审"
   #   username: "reviewer_bot"
   #   platform: telegram
-  #   token: ${REVIEWER_BOT_TOKEN}
+  #   token: "${REVIEWER_BOT_TOKEN}"
   #   role: "负责架构审查与代码审计"
   #   aliases: ["评审", "reviewer"]
+  #   souls_dir: ~/souls
   #   agent:
   #     engine: claude
   #     workspace: ~/workspace
@@ -160,24 +165,29 @@ zero_at:
     # api_key: ""                         # 可选：不填则按 engine 自动读取环境变量 JEV_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY / GEMINI_API_KEY
 ```
 
-### 自定义斜杠指令与快车道
+### 自定义斜杠指令与快车道（挂载于对应 Bot 下）
 
-`custom_commands` 注册后即为斜杠指令（如 `/backup`），与内置指令同类，会出现在 `/help` 和平台菜单中。`pattern_commands` 则是自然语言正则直通，无需 `/` 前缀，完全绕过 LLM：
+在 `bots` 列表中对应 Bot 下声明：`custom_commands` 注册后即为该 Bot 的斜杠指令（如 `/backup`），支持互斥锁、健康预检与定时调度；`pattern_commands` 则是自然语言正则直通，无需 `/` 前缀，完全绕过 LLM：
 
 ```yaml
-custom_commands:
-  - command: backup
-    description: "备份工作区"
-    script: "scripts/backup.sh"
-    lock: true
-    schedule:
-      weekday: 6
-      hour: 4
+bots:
+  - name: "代码助手"
+    # ...
+    custom_commands:
+      - command: backup
+        description: "备份工作区"
+        script: "~/.local/bin/my-backup"
+        ack_message: "📦 正在执行备份..."
+        success_message: "✅ 备份完成（耗时 {duration}s）"
+        lock: true
+        arbiter_only_on_broadcast: true
+        schedule:
+          weekday: 6
+          hour: 4
 
-pattern_commands:
-  - pattern: '^(开|关)(灯|空调)(\d{1,2})?$'
-    script: "scripts/device.py"
-    # pass_args: true 和 lock: true 为默认值，无需声明
+    pattern_commands:
+      - pattern: '^(开|关)(灯|空调)(\d{1,2})?$'
+        script: "~/.local/bin/device.py"
 ```
 
 ### 安全与崩溃恢复

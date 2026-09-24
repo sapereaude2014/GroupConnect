@@ -123,21 +123,26 @@ bots:
   - name: "Code Assistant"
     username: "coder_bot"
     platform: telegram
-    token: ${CODER_BOT_TOKEN}     # Use ${ENV_VAR} for secrets — keeps config file safe for Git
+    token: "${CODER_BOT_TOKEN}"   # Use ${ENV_VAR} for secrets — keeps config file safe for Git
     role: "Code authoring and bug fixes"
     aliases: ["coder", "dev"]
-    # souls_dir: ~/souls        # Optional: loads {username}.md persona from this directory
+    souls_dir: ~/souls            # Optional: loads {username}.md persona from this directory
     agent:
-      engine: codex             # codex | claude | antigravity | opencode | teleagent
+      engine: codex               # codex | claude | antigravity | opencode | teleagent
+      bin: /usr/local/bin/codex   # Optional: explicit binary path (defaults to PATH lookup)
+      # model: gpt-5              # Optional: model override
       workspace: ~/workspace
+      timeout_secs: 1800          # Optional: per-turn execution timeout in seconds
+      session_idle_timeout_mins: 120
 
   # Append another entry for same-group collaboration or cross-platform bots:
   # - name: "Arch Reviewer"
   #   username: "reviewer_bot"
   #   platform: telegram
-  #   token: ${REVIEWER_BOT_TOKEN}
+  #   token: "${REVIEWER_BOT_TOKEN}"
   #   role: "Architecture review and code auditing"
   #   aliases: ["reviewer", "lead"]
+  #   souls_dir: ~/souls
   #   agent:
   #     engine: claude
   #     workspace: ~/workspace
@@ -160,24 +165,29 @@ zero_at:
     # api_key: ""                         # Optional: if omitted, auto-reads JEV_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY / GEMINI_API_KEY
 ```
 
-### Custom Slash Commands & Pattern Fast Lane
+### Custom Slash Commands & Pattern Fast Lane (Per-Bot)
 
-`custom_commands` register as slash commands (e.g. `/backup`) alongside built-in ones. `pattern_commands` match natural language phrases without a `/` prefix, bypassing the LLM entirely:
+Declare `custom_commands` and `pattern_commands` directly under the target bot in `bots:`. `custom_commands` register as slash commands (e.g. `/backup`) with mutex locks, health pre-checks, and cron schedules; `pattern_commands` match natural language phrases without a `/` prefix, bypassing the LLM entirely:
 
 ```yaml
-custom_commands:
-  - command: backup
-    description: "Backup workspace"
-    script: "scripts/backup.sh"
-    lock: true
-    schedule:
-      weekday: 6
-      hour: 4
+bots:
+  - name: "Code Assistant"
+    # ...
+    custom_commands:
+      - command: backup
+        description: "Backup workspace"
+        script: "~/.local/bin/my-backup"
+        ack_message: "📦 Running backup..."
+        success_message: "✅ Backup finished in {duration}s"
+        lock: true
+        arbiter_only_on_broadcast: true
+        schedule:
+          weekday: 6
+          hour: 4
 
-pattern_commands:
-  - pattern: '^(开|关)(灯|空调)(\d{1,2})?$'
-    script: "scripts/device.py"
-    # pass_args: true (default) and lock: true (default) — no need to declare
+    pattern_commands:
+      - pattern: '^(开|关)(灯|空调)(\d{1,2})?$'
+        script: "~/.local/bin/device.py"
 ```
 
 ### Security & Crash Recovery
