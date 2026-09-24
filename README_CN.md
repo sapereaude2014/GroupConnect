@@ -48,6 +48,8 @@ Alice:  "谁来把行程记到日程里"
 - **默认安全锁定**：严格白名单机制，未授权用户无法执行本地命令；`/stop` 一键强杀进程树。
 - **轻量分诊分类器**：内置路由规则并支持 YAML 槽位热替换，仅在需要回复时才唤醒本地重型 Agent；支持 TypeSafe Jev（100~200ms）及主流大模型协议（`openai` / `anthropic` / `gemini`）与自定义 `base_url`。
 - **0-Token 快车道**：正则匹配自然语言短句（如"开卧室灯"），直接执行本地脚本，完全绕过 LLM。
+- **崩溃恢复**：重启后自动补发未获回复的近期消息（如 LMK 强杀后），带毒消息隔离防崩溃循环。
+- **Bot 人设 (Soul)**：用 Markdown 文件定义每个 Bot 的性格人设，在会话启动时注入 Agent 提示词。
 
 ---
 
@@ -126,6 +128,7 @@ bots:
     token: ${CODER_BOT_TOKEN}     # 用 ${ENV_VAR} 注入敏感信息，配置文件可安全入库
     role: "负责代码编写与 Bug 修复"
     aliases: ["码农", "coder"]
+    # souls_dir: ~/souls        # 可选：从该目录加载 {username}.md 人设文件
     agent:
       engine: codex             # codex | claude | antigravity | opencode | teleagent
       workspace: ~/workspace
@@ -177,6 +180,22 @@ pattern_commands:
   - pattern: '^(开|关)(灯|空调)(\d{1,2})?$'
     script: "scripts/device.py"
     # pass_args: true 和 lock: true 为默认值，无需声明
+```
+
+### 安全与崩溃恢复
+
+默认即开即用（默认拦截、默认 5 分钟恢复窗口），按需微调：
+
+```yaml
+security:
+  allow_open_access: false       # 默认：拦截所有未授权群组与用户
+  allow_group_members_dm: true   # 允许白名单群成员私聊 Bot
+  # allowed_chat_ids: [-100123456789]
+  # allowed_user_ids: [123456789]
+
+tuning:
+  resume_unanswered_secs: 300   # 重启时补发 N 秒内未获回复的消息（0 关闭）
+  max_history_len: 30           # 内存上下文滑动窗口轮数
 ```
 
 完整字段见 [`groupconnect.example.yaml`](groupconnect.example.yaml)。
