@@ -24,12 +24,16 @@ ENV_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
 
 
 def load_dotenv_for_config(config_path: Optional[str]) -> None:
-    """Loads .env and *.env files in config_path's directory and ~/.config/groupconnect into os.environ (non-overwriting)."""
+    """Loads .env and *.env files in config_path's directory, workspace root, and ~/.config/groupconnect into os.environ (non-overwriting)."""
     search_dirs: List[str] = []
     if config_path:
         cfg_dir = os.path.dirname(os.path.abspath(os.path.expanduser(config_path)))
         if os.path.isdir(cfg_dir):
             search_dirs.append(cfg_dir)
+            if os.path.basename(cfg_dir) == ".agents":
+                ws_root = os.path.dirname(cfg_dir)
+                if os.path.isdir(ws_root) and ws_root not in search_dirs:
+                    search_dirs.append(ws_root)
     global_cfg_dir = os.path.expanduser("~/.config/groupconnect")
     if os.path.isdir(global_cfg_dir) and global_cfg_dir not in search_dirs:
         search_dirs.append(global_cfg_dir)
@@ -119,7 +123,7 @@ class GatewayConfig:
         self.platform: str = str(channel.get("platform", data.get("platform", "telegram"))).lower()
         self.bot_token: str = str(channel.get("token", channel.get("bot_token", data.get("bot_token", "")))).strip()
         self.bot_username: str = (
-            str(bot.get("username", bot.get("bot_username", data.get("bot_username", "group_agent_bot"))))
+            str(bot.get("username", bot.get("id", bot.get("bot_username", data.get("bot_username", "group_agent_bot")))))
             .lower()
             .lstrip("@")
         )
@@ -157,8 +161,16 @@ class GatewayConfig:
             if "corp_secret" in channel:
                 self.channel_options["wecom_corp_secret"] = channel["corp_secret"]
 
-        # Workspace & Storage Settings
-        ws_dir = agent.get("workspace", agent.get("workspace_dir", data.get("workspace_dir", "./workspace")))
+        # Workspace & Storage Settings (auto-infer from <workspace>/.agents/groupconnect.yaml if omitted)
+        default_ws = "./workspace"
+        if self.config_path:
+            cfg_parent = os.path.dirname(self.config_path)
+            if os.path.basename(cfg_parent) == ".agents":
+                default_ws = os.path.dirname(cfg_parent)
+        ws_dir = agent.get(
+            "workspace",
+            agent.get("workspace_dir", data.get("workspace", data.get("workspace_dir", default_ws))),
+        )
         self.workspace_dir: str = os.path.abspath(os.path.expanduser(ws_dir))
         self.attachments_dir: str = os.path.join(self.workspace_dir, "inbox", "attachments")
         self.chat_logs_dir: str = os.path.join(self.workspace_dir, "inbox", "chat_logs")
@@ -176,9 +188,14 @@ class GatewayConfig:
             "teleworker_bin", agent.get("bin", data.get("teleworker_bin", "tele-worker"))
         )
 
-        # Soul Persona Settings
+        # Soul Persona Settings (auto-default to <workspace>/.agents/souls if present)
         self.soul_path: Optional[str] = agent.get("soul_path", bot.get("soul_path", data.get("soul_path")))
-        self.souls_dir: Optional[str] = agent.get("souls_dir", bot.get("souls_dir", data.get("souls_dir")))
+        raw_souls_dir: Optional[str] = agent.get("souls_dir", bot.get("souls_dir", data.get("souls_dir")))
+        if raw_souls_dir:
+            self.souls_dir: Optional[str] = os.path.abspath(os.path.expanduser(raw_souls_dir))
+        else:
+            candidate_souls = os.path.join(self.workspace_dir, ".agents", "souls")
+            self.souls_dir = candidate_souls if os.path.isdir(candidate_souls) else None
 
         # Context & Window Settings
         self.max_history_len: int = int(tuning.get("max_history_len", data.get("max_history_len", 30)))
@@ -215,8 +232,13 @@ class GatewayConfig:
             for x in security.get("allowed_usernames", security.get("users", data.get("allowed_usernames", [])))
         )
 
-        # Cross-Bot IPC Relay Settings
-        ipc_dir_raw = tuning.get("ipc_dir", data.get("ipc_dir", "/tmp/groupconnect_ipc"))
+        # Cross-Bot IPC Relay Settings (auto-isolated per workspace when config_path is present)
+        if self.config_path:
+            ws_slug = re.sub(r"[^a-zA-Z0-9_-]", "_", os.path.basename(self.workspace_dir)) or "default"
+            default_ipc = os.path.expanduser(f"~/.local/run/groupconnect_ipc/{ws_slug}")
+        else:
+            default_ipc = "/tmp/groupconnect_ipc"
+        ipc_dir_raw = tuning.get("ipc_dir", data.get("ipc_dir", default_ipc))
         self.ipc_dir: str = os.path.abspath(os.path.expanduser(ipc_dir_raw))
         self.max_bot_hops: int = int(tuning.get("max_bot_hops", data.get("max_bot_hops", 1)))
 
@@ -311,13 +333,14 @@ class GatewayConfig:
             if bot_name:
                 target_norm = bot_name.lower().lstrip("@")
                 for b in bots_list:
+                    b_id = str(b.get("id", "")).lower().lstrip("@")
                     b_uname = str(b.get("username", "")).lower().lstrip("@")
                     b_name = str(b.get("name", "")).lower().lstrip("@")
-                    if target_norm in (b_uname, b_name):
+                    if target_norm in (b_id, b_uname, b_name):
                         chosen = b
                         break
                 if not chosen:
-                    names = [b.get("username") or b.get("name", "unnamed") for b in bots_list]
+                    names = [b.get("id") or b.get("username") or b.get("name", "unnamed") for b in bots_list]
                     raise ValueError(f"Bot '{bot_name}' not found in {path}. Available bots: {names}")
             else:
                 chosen = bots_list[0]
@@ -354,13 +377,13 @@ class GatewayConfig:
         }
 
         # Bot identity
-        b_name = bot_entry.get("name", bot_entry.get("bot_name", "GroupConnect"))
-        b_username = bot_entry.get("username", bot_entry.get("bot_username", b_name)).lower().lstrip("@")
+        b_name = bot_entry.get("name", bot_entry.get("bot_name", bot_entry.get("id", "GroupConnect")))
+        b_username = bot_entry.get("username", bot_entry.get("id", bot_entry.get("bot_username", b_name))).lower().lstrip("@")
         merged["bot"] = {
             "name": b_name,
             "username": b_username,
             "aliases": bot_entry.get("aliases", []),
-            "role": bot_entry.get("role", "Assistant"),
+            "role": bot_entry.get("role", bot_entry.get("role_summary", "Assistant")),
             "souls_dir": bot_entry.get("souls_dir", root_data.get("souls_dir")),
             "soul_path": bot_entry.get("soul_path", root_data.get("soul_path")),
         }
@@ -385,8 +408,12 @@ class GatewayConfig:
         if "options" in bot_entry and isinstance(bot_entry["options"], dict):
             merged["channel"].setdefault("options", {}).update(bot_entry["options"])
 
-        # Agent (inherit root agent defaults, then override per-bot)
+        # Agent (inherit root workspace/agent defaults, then override per-bot)
         merged["agent"] = dict(root_data.get("agent", {}))
+        root_ws = root_data.get("workspace") or root_data.get("workspace_dir")
+        if root_ws and "workspace" not in merged["agent"]:
+            merged["agent"]["workspace"] = root_ws
+
         agent_data = bot_entry.get("agent")
         if isinstance(agent_data, dict):
             merged["agent"].update(agent_data)
@@ -424,10 +451,11 @@ class GatewayConfig:
             aliases = dict(zero_dict.get("aliases", {}))
 
             for b in same_platform_bots:
-                uname = (b.get("username") or b.get("name") or "").lower().lstrip("@")
+                uname = (b.get("username") or b.get("id") or b.get("name") or "").lower().lstrip("@")
+                role_val = b.get("role") or b.get("role_summary")
                 if uname:
-                    if uname not in roles and "role" in b:
-                        roles[uname] = b["role"]
+                    if uname not in roles and role_val:
+                        roles[uname] = role_val
                     if uname not in aliases and "aliases" in b:
                         aliases[uname] = list(b["aliases"])
 
@@ -435,7 +463,12 @@ class GatewayConfig:
             zero_dict["aliases"] = aliases
             # First bot on this platform is arbiter by default
             if same_platform_bots and not zero_dict.get("arbiter_bot"):
-                first_uname = (same_platform_bots[0].get("username") or same_platform_bots[0].get("name") or "").lower().lstrip("@")
+                first_uname = (
+                    same_platform_bots[0].get("username")
+                    or same_platform_bots[0].get("id")
+                    or same_platform_bots[0].get("name")
+                    or ""
+                ).lower().lstrip("@")
                 zero_dict["arbiter_bot"] = first_uname
 
             merged["zero_at"] = zero_dict

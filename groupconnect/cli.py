@@ -241,8 +241,13 @@ def resolve_config_path(explicit_path: Optional[str]) -> str:
     if env_cfg and os.path.exists(os.path.expanduser(env_cfg)):
         return os.path.expanduser(env_cfg)
 
-    # Priority 1: CWD groupconnect.yaml / groupconnect.yml
-    for name in ("groupconnect.yaml", "groupconnect.yml"):
+    # Priority 1: Current workspace .agents/groupconnect.yaml or CWD groupconnect.yaml
+    for name in (
+        ".agents/groupconnect.yaml",
+        ".agents/groupconnect.yml",
+        "groupconnect.yaml",
+        "groupconnect.yml",
+    ):
         if os.path.exists(name):
             return name
 
@@ -260,7 +265,7 @@ def resolve_config_path(explicit_path: Optional[str]) -> str:
         if os.path.exists(expanded):
             return expanded
 
-    return "groupconnect.yaml"
+    return ".agents/groupconnect.yaml"
 
 
 def main() -> None:

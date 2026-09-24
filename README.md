@@ -114,41 +114,40 @@ groupconnect run       # Start (Ctrl+C to stop)
 
 ---
 
-## ⚙️ Configuration: `groupconnect.yaml`
+## ⚙️ Configuration: `<workspace>/.agents/groupconnect.yaml` (One Config Per Workspace)
 
-Each bot entry binds its own chat `platform`, credentials (`token`), and local execution `agent`. Write 1 entry for a single bot, or append more entries for multi-bot collaboration or multi-platform hosting (the first bot on each platform acts as the Arbiter). Secrets use `${ENV_VAR}` — see [`.env.example`](.env.example) for all variables:
+Place `groupconnect.yaml` inside `<workspace>/.agents/groupconnect.yaml`: **each workspace acts as a self-contained collaborative scenario**, carrying its own `security` (group allowlist), `zero_at` (arbitration rules), `tuning` (isolated IPC directory), and `bots` roster wherever the workspace directory moves. All bots under `bots:` automatically inherit the workspace root and `.agents/souls/` directory without repeating paths. Secrets use `${ENV_VAR}` from `.agents/.env` or global `~/.config/groupconnect/.env` (see [`.env.example`](.env.example)):
 
 ```yaml
+# Auto-inferred when placed at <workspace>/.agents/groupconnect.yaml
+workspace: ~/workspace
+
 bots:
-  - name: "Code Assistant"
-    username: "coder_bot"
+  - id: coder_bot
+    name: "Code Assistant"
     platform: telegram
     token: "${CODER_BOT_TOKEN}"   # Use ${ENV_VAR} for secrets — keeps config file safe for Git
-    role: "Code authoring and bug fixes"
+    role_summary: "Code authoring and bug fixes"
     aliases: ["coder", "dev"]
-    souls_dir: ~/souls            # Optional: loads {username}.md persona from this directory
     agent:
       engine: codex               # codex | claude | antigravity | opencode | teleagent
       bin: /usr/local/bin/codex   # Optional: explicit binary path (defaults to PATH lookup)
       # model: gpt-5              # Optional: model override
-      workspace: ~/workspace
       timeout_secs: 1800          # Optional: per-turn execution timeout in seconds
       session_idle_timeout_mins: 120
 
-  # Append another entry for same-group collaboration or cross-platform bots:
-  # - name: "Arch Reviewer"
-  #   username: "reviewer_bot"
+  # Append another entry for same-workspace collaboration or cross-platform bots:
+  # - id: reviewer_bot
+  #   name: "Arch Reviewer"
   #   platform: telegram
   #   token: "${REVIEWER_BOT_TOKEN}"
-  #   role: "Architecture review and code auditing"
+  #   role_summary: "Architecture review and code auditing"
   #   aliases: ["reviewer", "lead"]
-  #   souls_dir: ~/souls
   #   agent:
   #     engine: claude
-  #     workspace: ~/workspace
 
 zero_at:
-  enabled: true                 # Uses Jev classifier (100–200ms) by default and auto-reads JEV_API_KEY from environment
+  enabled: true                 # Uses Jev classifier (100–200ms) by default and auto-reads JEV_API_KEY
 ```
 
 ### Classifier Configuration (Optional)

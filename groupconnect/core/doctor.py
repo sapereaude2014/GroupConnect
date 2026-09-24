@@ -121,8 +121,16 @@ class Doctor:
         if self.config.config_path:
             import glob as _glob
             cfg_dir = os.path.dirname(self.config.config_path)
-            env_candidates = [os.path.join(cfg_dir, ".env")] + sorted(_glob.glob(os.path.join(cfg_dir, "*.env")))
-            found_envs = [os.path.basename(p) for p in env_candidates if os.path.isfile(p)]
+            global_cfg_dir = os.path.expanduser("~/.config/groupconnect")
+            search_dirs = [cfg_dir]
+            if os.path.basename(cfg_dir) == ".agents":
+                search_dirs.append(os.path.dirname(cfg_dir))
+            if os.path.isdir(global_cfg_dir) and global_cfg_dir not in search_dirs:
+                search_dirs.append(global_cfg_dir)
+            env_candidates = []
+            for d in search_dirs:
+                env_candidates.extend([os.path.join(d, ".env")] + sorted(_glob.glob(os.path.join(d, "*.env"))))
+            found_envs = list(dict.fromkeys(os.path.basename(p) for p in env_candidates if os.path.isfile(p)))
             if found_envs:
                 self.print_item("pass", f"环境变量文件已就绪 ({', '.join(found_envs)})")
             else:

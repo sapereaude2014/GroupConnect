@@ -114,41 +114,40 @@ groupconnect run       # 运行（Ctrl+C 停止）
 
 ---
 
-## ⚙️ 配置文件：`groupconnect.yaml`
+## ⚙️ 配置文件：`<workspace>/.agents/groupconnect.yaml`（一空间一配置）
 
-每条 Bot 直接绑定自身所属的聊天平台（`platform`）、凭证（`token`）与本地执行 Agent（`agent`）。单 Bot 写 1 项，多 Bot 协同或跨平台部署直接往下追加即可（同平台首项默认作为主裁决官 Arbiter 负责调度）。密钥用 `${ENV_VAR}` 引用，所有变量见 [`.env.example`](.env.example)：
+推荐将配置文件置于每个工作空间的 `.agents/groupconnect.yaml` 下：**一个工作空间即一个独立协同场景**，该空间的 `security`（群白名单）、`zero_at`（群聊免 @ 仲裁规则）、`tuning`（IPC 仲裁隔离）与 `bots`（协作 Bot 矩阵）全部随该空间目录一起打包移动。`bots:` 下的所有 Bot 默认自动继承当前工作空间根目录与 `.agents/souls/` 人设目录，无需重复书写。密钥通过 `${ENV_VAR}` 引用 `.agents/.env` 或全局 `~/.config/groupconnect/.env`（详见 [`.env.example`](.env.example)）：
 
 ```yaml
+# 置于 <workspace>/.agents/groupconnect.yaml 时，workspace 与 .agents/souls 自动推导，可省略
+workspace: ~/workspace
+
 bots:
-  - name: "代码助手"
-    username: "coder_bot"
+  - id: coder_bot
+    name: "代码助手"
     platform: telegram
     token: "${CODER_BOT_TOKEN}"   # 用 ${ENV_VAR} 注入敏感信息，配置文件可安全入库
-    role: "负责代码编写与 Bug 修复"
+    role_summary: "负责代码编写与 Bug 修复"
     aliases: ["码农", "coder"]
-    souls_dir: ~/souls            # 可选：按 {username}.md 加载人设
     agent:
       engine: codex               # codex | claude | antigravity | opencode | teleagent
       bin: /usr/local/bin/codex   # 可选：指定二进制路径（不填则从 PATH 查找）
       # model: gpt-5              # 可选：指定模型覆盖 CLI 默认值
-      workspace: ~/workspace
       timeout_secs: 1800          # 可选：单次执行超时秒数
       session_idle_timeout_mins: 120
 
-  # 如需同群多 Bot 协同（或跨平台托管其他 Bot），直接追加：
-  # - name: "架构评审"
-  #   username: "reviewer_bot"
+  # 如需同空间多 Bot 协同（或跨平台托管其他 Bot），直接追加（自动共享当前 workspace）：
+  # - id: reviewer_bot
+  #   name: "架构评审"
   #   platform: telegram
   #   token: "${REVIEWER_BOT_TOKEN}"
-  #   role: "负责架构审查与代码审计"
+  #   role_summary: "负责架构审查与代码审计"
   #   aliases: ["评审", "reviewer"]
-  #   souls_dir: ~/souls
   #   agent:
   #     engine: claude
-  #     workspace: ~/workspace
 
 zero_at:
-  enabled: true                 # 默认使用 Jev 分类器（100~200ms），自动读取系统环境变量 JEV_API_KEY
+  enabled: true                 # 默认使用 Jev 分类器（100~200ms），自动读取环境变量 JEV_API_KEY
 ```
 
 ### 分类器配置（可选）

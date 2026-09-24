@@ -1,119 +1,109 @@
 # ==============================================================================
-# GroupConnect Configuration Template
+# GroupConnect 场景/工作空间配置文件 (推荐置于 <workspace>/.agents/groupconnect.yaml)
 # ==============================================================================
-# 配置说明：
-# 1. 每个 Bot 的完整定义（平台、Token、Agent 参数、职责、专属指令与正则快车道）均收敛在 bots 列表下；
-# 2. 敏感信息（Token / API Key）推荐用 ${ENV_VAR} 环境变量注入，配置文件可安全入库；
-#    环境变量可配置在系统环境或同目录 / ~/.config/groupconnect/ 下的 .env / *.env 文件中。
-# 3. 所有字符串字段均支持 ${ENV_VAR} 或 ${ENV_VAR:-default} 插值。
-# ==============================================================================
+# 架构设计（一空间一配置，随工作空间移动）：
+# - 每个工作空间（如家庭空间、研发项目空间）拥有独立的 `.agents/groupconnect.yaml`；
+# - 置于 `<workspace>/.agents/groupconnect.yaml` 时，默认自动以 `<workspace>` 作为当前空间根目录，
+#   并自动加载 `<workspace>/.agents/souls/{username}.md` 作为各 Bot 人设，无需在每个 Bot 下重复指定路径；
+# - 顶层 `zero_at`（免 @ 仲裁规则）、`security`（群白名单）、`tuning`（IPC 隔离与调优）
+#   均归属于当前空间，随文件夹一起打包迁移；
+# - 敏感凭证（Bot Token、API Key）通过 ${ENV_VAR} 引用 `.agents/*.env` 或全局 `~/.config/groupconnect/*.env`。
 
-# 1. Bot 与本地执行 Agent (单 Bot 配置 1 项，多 Bot 继续追加；同平台首项默认为主裁决官 Arbiter)
+# ------------------------------------------------------------------------------
+# 1. 本空间协作 Bot 矩阵 (同平台首项默认为主裁决官 Arbiter)
+# ------------------------------------------------------------------------------
 bots:
-  - name: "代码助手"
-    username: "coder_bot"
-    platform: telegram                    # 聊天平台: telegram | discord | slack | feishu | wecom
-    token: "${CODER_BOT_TOKEN}"           # 从 .env / *.env 读取 Bot Token
+  - name: "瓜瓜管家"
+    username: "guaguahome_bot"
+    platform: telegram
+    token: "${GUAGUAHOME_BOT_TOKEN}"
     options:
-      auto_telegraph_threshold: 60        # 可选：超长消息自动转 Telegraph 文章的行数阈值
-    role: "负责代码编写、重构、自动化脚本与客观数据查询"
+      auto_telegraph_threshold: 60
+    role: "Home automation (Mijia appliances, AC/lights/purifier), finance and bills, train schedules and ticket grabbing, alarms/reminders, objective data lookup, household discipline supervision."
     aliases:
-      - "码农"
+      - "管家"
+      - "铁面管家"
       - "老铁"
-    souls_dir: ~/souls                    # 可选：人设目录，按 {username}.md 自动匹配 (或用 soul_path 指定单文件)
+    # souls_dir: /path/to/souls      # 可选：默认自动加载 <workspace>/.agents/souls/{username}.md
     agent:
-      engine: codex                       # 本地 Agent CLI: codex | claude | antigravity | opencode | teleagent
-      bin: /usr/local/bin/codex           # 可选：显式指定 CLI 二进制绝对路径（不填则从 PATH 查找）
-      # model: gpt-5                      # 可选：显式指定模型（不填则使用本地 CLI 自身默认模型）
-      workspace: ~/workspace              # 本地挂载的工作空间目录 (支持 ~ 展开)
-      timeout_secs: 1800                  # 可选：单次任务执行超时秒数 (默认 180)
-      session_idle_timeout_mins: 120      # 可选：会话空闲自动重置分钟数 (默认 30)
+      engine: teleagent              # codex | claude | antigravity | opencode | teleagent
+      bin: ~/.local/bin/tele-worker
+      # workspace: ~/mama_family_files  # 可选：置于 .agents/ 下时自动推导为当前空间根目录
+      timeout_secs: 1800
+      session_idle_timeout_mins: 120
+    custom_commands:
+      - command: login
+        description: "准备TeleAgent登录环境并开启VNC控制台"
+        description_en: "Prepare TeleAgent login form and start VNC console"
+        script: "~/.local/share/TeleAgent/scripts/autologin.py"
+        check_args: ["--check-only"]
+        check_success_message: "✅ [{bot_name}状态]\nTeleAgent 核心引擎当前处于健康在线状态（ONLINE），无需重复登录！\n\n💡 如需强制重新呼出 VNC 控制台，请输入：`/{command} force`"
+        ack_message: "🚀 [{bot_name}指令] 收到指令！正在准备 TeleAgent 登录环境并拉起 VNC 控制台..."
+        default_args: ["--timeout", "600"]
+        force_arg: "--force"
+        lock: true
+      - command: backup
+        description: "执行全量资产备份至移动固态盘"
+        description_en: "Backup all assets and configs to external SSD"
+        script: "~/.local/bin/guagua-backup"
+        ack_message: "📦 [管家备份] 收到指令！正在执行全量资产备份，请稍候..."
+        success_message: "✅ [管家报告 · 备份完成]（耗时 {duration}s）"
+        error_message: "❌ [管家警报] 备份执行失败 (Exit {returncode}): {stderr}"
+        lock: true
+        arbiter_only_on_broadcast: true
+        schedule:
+          weekday: 6
+          hour: 4
+    pattern_commands:
+      - pattern: "^(开|关)(电脑|工作室空调|客厅空调|卧室空调|工作室灯|挂灯|灯带|落地灯|床头灯|卧室灯)(\\d{1,2})?$|^(电脑|工作室空调|客厅空调|卧室空调|工作室灯|挂灯|灯带|落地灯|床头灯|卧室灯)(开|关|\\d{1,2})$"
+        script: "~/.local/share/guaguahome-bot/scripts/device.py"
 
-    # Bot 专属自定义斜杠指令 (启动时自动同步至平台菜单与 /help)
-    # custom_commands:
-    #   - command: backup
-    #     description: "执行全量工作区备份"
-    #     description_en: "Backup workspace assets and configs"
-    #     script: "~/.local/bin/my-backup"
-    #     ack_message: "📦 [{bot_name}] 正在执行备份，请稍候..."
-    #     success_message: "✅ [{bot_name}] 备份完成（耗时 {duration}s）！"
-    #     error_message: "❌ [{bot_name}] 备份失败 (Exit {returncode}): {stderr}"
-    #     lock: true                      # 进程内与跨进程并发互斥锁
-    #     arbiter_only_on_broadcast: true # 群内不带 @ 广播时仅由主裁决官执行一次，防止多 Bot 重复执行
-    #     schedule:                       # 可选：内置定时任务 (每周六 04:00 自动执行)
-    #       weekday: 6
-    #       hour: 4
-    #
-    #   - command: login
-    #     description: "检查登录态或拉起远程登录控制台"
-    #     script: "~/.local/bin/my-autologin"
-    #     check_args: ["--check-only"]    # 可选：先执行健康检查，返回 0 则直接回执 check_success_message
-    #     check_success_message: "✅ [{bot_name}] 核心引擎当前在线，无需重复登录（强制重登请输入 /{command} force）"
-    #     ack_message: "🚀 [{bot_name}] 正在准备登录环境..."
-    #     default_args: ["--timeout", "600"]
-    #     force_arg: "--force"
-    #     lock: true
+  - name: "马马小迷妹"
+    username: "guaguahome_fun_bot"
+    platform: telegram
+    token: "${GUAGUAHOME_FUN_BOT_TOKEN}"
+    options:
+      auto_telegraph_threshold: 60
+    role: "Travel and weekend planning, dining and food recommendations, leisure and entertainment, emotional companionship and life quality arrangements."
+    aliases:
+      - "总管"
+      - "大内总管"
+      - "小迷妹"
+    agent:
+      engine: antigravity
+      bin: ~/.local/bin/agy
+      model: gemini-3.8-flash-high
+      timeout_secs: 1800
+      session_idle_timeout_mins: 120
 
-    # Bot 专属自然语言正则快车道 (纯文本短句命中正则后直接调本地脚本，0-Token 毫秒级响应)
-    # pattern_commands:
-    #   - pattern: "^(开|关)(电脑|空调|卧室灯)(\\d{1,2})?$|^(电脑|空调|卧室灯)(开|关|\\d{1,2})$"
-    #     script: "~/.local/bin/my-device-control"
-    #     max_length: 20                  # 剥离句尾标点后超过此长度不进入快车道 (默认 20)
-
-  # 如需同群多 Bot 协同（或跨平台托管多个 Bot），直接在此追加第 2 个 Bot：
-  # - name: "架构评审"
-  #   username: "reviewer_bot"
-  #   platform: telegram
-  #   token: "${REVIEWER_BOT_TOKEN}"
-  #   options:
-  #     auto_telegraph_threshold: 60
-  #   role: "负责架构设计、代码审查、方案规划与技术探讨"
-  #   aliases:
-  #     - "评审"
-  #     - "总管"
-  #   souls_dir: ~/souls
-  #   agent:
-  #     engine: antigravity
-  #     bin: ~/.local/bin/agy
-  #     model: gemini-3.8-flash-high
-  #     workspace: ~/workspace
-  #     timeout_secs: 1800
-  #     session_idle_timeout_mins: 120
-
-# 2. 智能免 @ 自主感知路由 (默认使用 Jev 分类器并自动读取环境变量中的 JEV_API_KEY)
+# ------------------------------------------------------------------------------
+# 2. 本空间智能免 @ 自主感知路由 (默认使用 Jev 分类器并自动读取环境变量 JEV_API_KEY)
+# ------------------------------------------------------------------------------
 zero_at:
-  enabled: true                           # 开启群内免 @ 意图识别（默认使用 jev-latest 并自动读取 JEV_API_KEY）
-  context_window_size: 5                  # 可选：传入分类器的最近上下文轮数 (默认 3)
-  # confidence_threshold: 0.60            # 可选：分类器触发置信度阈值 (默认 0.60)
-  # parallel_threshold: 0.60              # 可选：多 Bot 并行协同触发阈值 (默认同 confidence_threshold)
-  # silence_secs: 4.0                     # 可选：防抢话静默观察窗口秒数 (默认 4.0)
-  # immediate_secs: 1.0                   # 可选：明确指令/追问的即刻响应延迟秒数 (默认 1.0)
-  # classifier:                           # 可选：仅在需要切换其他分类模型协议、自定义端点或显式指定 api_key 时配置
-  #   engine: openai                      # 接口协议: jev (默认) | openai | anthropic | gemini
-  #   model: deepseek-chat                # 分类模型名称 (如 jev-latest, deepseek-chat, gpt-4o-mini, gemini-2.5-flash-lite)
-  #   base_url: ""                        # 可选：自定义 API Base URL (不配置则使用所选协议的官方默认端点)
-  #   api_key: ""                         # 可选：不配置则按 engine 自动读取环境变量 JEV_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY / GEMINI_API_KEY
-  # rules:                                # 可选：按需原位替换内置路由提示词槽位 (仅填写需修改的项，其余沿用内置默认值)
-  #   group: "这是一个私密群聊，配置了两个不同职责的专职助手 Bot。"
-  #   immediate: "回复 {bot} 刚才的提问，或匹配其职责的直接指令：{role}"
-  #   wait: "需要查询数据、知识或客观建议，且匹配职责：{role}"
-  #   drop: "群成员之间的日常寒暄、玩笑打趣或与助手职责无关的话题"
-  #   parallel: "发送者明确要求 {bot} ({role}) 与其他助手同时回答"
-  # alias_drop_regex: []                  # 可选：追加自定义的第三人称提及过滤正则 (支持 {alias} 与 {any_alias} 占位符)
-  # noise_regex: []                       # 可选：追加自定义的纯噪音过滤正则
+  enabled: true
+  context_window_size: 5
+  # classifier:                      # 可选：不填则默认使用 Jev 并读取环境变量 JEV_API_KEY
+  #   engine: openai                 # jev (默认) | openai | anthropic | gemini
+  #   model: deepseek-chat
+  #   base_url: https://api.deepseek.com/v1
+  rules:
+    group: "Private family group chat (husband Zheng Ma, wife xiaorou) with two specialized assistant bots."
+    drop: "Direct spouse-to-spouse talk only: 2nd-person pronouns (你/咱俩), intimate address (老公/老婆/宝宝/老妹儿), reactions to the spouse's previous message, or pure venting with no action request."
 
-# 3. 安全访问控制 (默认安全拦截未授权群组)
+# ------------------------------------------------------------------------------
+# 3. 本空间安全访问控制 (仅放行当前空间的群组与成员)
+# ------------------------------------------------------------------------------
 security:
-  allow_open_access: false                # 是否开放给所有群组/用户 (默认 false)
-  allow_group_members_dm: true            # 是否允许白名单群组成员直接私聊 Bot
-  # allowed_chat_ids:
-  #   - -100123456789                     # 允许响应的群聊 ID 列表
-  # allowed_user_ids:
-  #   - 123456789                         # 允许响应的管理员/用户 ID 列表
-  # allowed_usernames: ["admin_user"]     # 允许响应的用户名列表 (不带 @)
+  allow_open_access: false
+  allow_group_members_dm: true
+  allowed_chat_ids:
+    - -1004324820543
+  allowed_user_ids:
+    - 8148123619
 
-# 4. 运行参数微调 (Tuning)
+# ------------------------------------------------------------------------------
+# 4. 本空间运行参数微调 (IPC 目录默认按空间名称自动隔离)
+# ------------------------------------------------------------------------------
 tuning:
-  ipc_dir: /tmp/groupconnect_ipc          # 多 Bot 跨进程状态同步与裁决广播目录
-  resume_unanswered_secs: 600             # 重启补偿：自动重发最近 N 秒内未获回复的人类消息 (默认 300，0 关闭)
-  # max_history_len: 30                   # 内存上下文滑动窗口保留轮数 (默认 30)
+  # ipc_dir: ~/.local/run/groupconnect_ipc/mama_family_files  # 可选：默认自动按空间名隔离
+  resume_unanswered_secs: 600

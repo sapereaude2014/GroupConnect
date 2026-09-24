@@ -205,6 +205,44 @@ class TestUnifiedConfig(unittest.TestCase):
         finally:
             os.unlink(tmp_path)
 
+    def test_per_workspace_agents_config_auto_inference(self):
+        """When placed at <workspace>/.agents/groupconnect.yaml, workspace, souls_dir, and isolated ipc_dir auto-resolve."""
+        import shutil
+        import tempfile
+        import yaml
+        ws_root = tempfile.mkdtemp(prefix="gc_ws_test_")
+        try:
+            agents_dir = os.path.join(ws_root, ".agents")
+            souls_dir = os.path.join(agents_dir, "souls")
+            os.makedirs(souls_dir, exist_ok=True)
+            cfg_path = os.path.join(agents_dir, "groupconnect.yaml")
+
+            doc = {
+                "bots": [
+                    {
+                        "id": "steward_bot",
+                        "name": "管家",
+                        "platform": "telegram",
+                        "token": "tok_steward",
+                        "role_summary": "智能家居与财务审计",
+                        "agent": {"engine": "teleagent"},
+                    }
+                ],
+                "security": {"allowed_chat_ids": [-10012345]},
+                "zero_at": {"enabled": True},
+            }
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                yaml.safe_dump(doc, f)
+
+            cfg = GatewayConfig.from_file(cfg_path, bot_name="steward_bot")
+            self.assertEqual(cfg.bot_username, "steward_bot")
+            self.assertEqual(cfg.workspace_dir, os.path.abspath(ws_root))
+            self.assertEqual(cfg.souls_dir, os.path.abspath(souls_dir))
+            self.assertTrue(cfg.ipc_dir.endswith(os.path.basename(ws_root)))
+            self.assertEqual(cfg.autonomous_config.roles.get("steward_bot"), "智能家居与财务审计")
+        finally:
+            shutil.rmtree(ws_root, ignore_errors=True)
+
 
 if __name__ == "__main__":
     unittest.main()
