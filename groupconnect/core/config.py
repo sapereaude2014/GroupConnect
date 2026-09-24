@@ -123,11 +123,17 @@ class GatewayConfig:
         self.platform: str = str(channel.get("platform", data.get("platform", "telegram"))).lower()
         self.bot_token: str = str(channel.get("token", channel.get("bot_token", data.get("bot_token", "")))).strip()
         self.bot_username: str = (
-            str(bot.get("username", bot.get("id", bot.get("bot_username", data.get("bot_username", "group_agent_bot")))))
+            str(
+                bot.get("username")
+                or bot.get("id")
+                or bot.get("bot_username")
+                or data.get("bot_username")
+                or "group_agent_bot"
+            )
             .lower()
             .lstrip("@")
         )
-        self.bot_name: str = str(bot.get("name", bot.get("bot_name", data.get("bot_name", "GroupConnect"))))
+        self.bot_name: str = str(bot.get("name") or bot.get("bot_name") or data.get("bot_name") or "GroupConnect")
 
         # Channel options
         self.channel_options: Dict[str, Any] = dict(
@@ -333,10 +339,10 @@ class GatewayConfig:
             if bot_name:
                 target_norm = bot_name.lower().lstrip("@")
                 for b in bots_list:
-                    b_id = str(b.get("id", "")).lower().lstrip("@")
-                    b_uname = str(b.get("username", "")).lower().lstrip("@")
-                    b_name = str(b.get("name", "")).lower().lstrip("@")
-                    if target_norm in (b_id, b_uname, b_name):
+                    b_id = str(b.get("id") or "").lower().lstrip("@")
+                    b_uname = str(b.get("username") or "").lower().lstrip("@")
+                    b_name = str(b.get("name") or "").lower().lstrip("@")
+                    if target_norm and target_norm in (b_id, b_uname, b_name):
                         chosen = b
                         break
                 if not chosen:
@@ -377,13 +383,19 @@ class GatewayConfig:
         }
 
         # Bot identity
-        b_name = bot_entry.get("name", bot_entry.get("bot_name", bot_entry.get("id", "GroupConnect")))
-        b_username = bot_entry.get("username", bot_entry.get("id", bot_entry.get("bot_username", b_name))).lower().lstrip("@")
+        b_name = bot_entry.get("name") or bot_entry.get("bot_name") or bot_entry.get("id") or "GroupConnect"
+        raw_uname = (
+            bot_entry.get("username")
+            or bot_entry.get("id")
+            or bot_entry.get("bot_username")
+            or b_name
+        )
+        b_username = str(raw_uname).lower().lstrip("@")
         merged["bot"] = {
             "name": b_name,
             "username": b_username,
             "aliases": bot_entry.get("aliases", []),
-            "role": bot_entry.get("role", bot_entry.get("role_summary", "Assistant")),
+            "role": bot_entry.get("role") or bot_entry.get("role_summary") or "Assistant",
             "souls_dir": bot_entry.get("souls_dir", root_data.get("souls_dir")),
             "soul_path": bot_entry.get("soul_path", root_data.get("soul_path")),
         }

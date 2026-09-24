@@ -243,6 +243,79 @@ class TestUnifiedConfig(unittest.TestCase):
         finally:
             shutil.rmtree(ws_root, ignore_errors=True)
 
+    def test_autonomous_config_bot_id_fallback(self):
+        import tempfile
+        import yaml
+        from groupconnect.routing.router import AutonomousConfig
+
+        doc = {
+            "bots": [
+                {
+                    "id": "my_bot_id",
+                    "role_summary": "Summary role",
+                    "aliases": ["id_bot"],
+                },
+                {
+                    "name": "second_bot",
+                    "role": "Second role",
+                }
+            ],
+            "zero_at": {
+                "enabled": True,
+            }
+        }
+        with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as tf:
+            yaml.safe_dump(doc, tf)
+            tmp_path = tf.name
+
+        try:
+            acfg = AutonomousConfig(tmp_path)
+            self.assertEqual(acfg.arbiter_bot, "my_bot_id")
+            self.assertEqual(acfg.roles.get("my_bot_id"), "Summary role")
+            self.assertIn("id_bot", acfg.aliases.get("my_bot_id", []))
+            self.assertEqual(acfg.roles.get("second_bot"), "Second role")
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+
+    def test_bot_resolution_with_none_username_and_id_fallback(self):
+        """When username is None or empty, GatewayConfig safely falls back to id without AttributeError."""
+        import tempfile
+        import yaml
+        from groupconnect.core.config import GatewayConfig
+
+        doc = {
+            "platform": "telegram",
+            "token": "test_token_123",
+            "bots": [
+                {
+                    "id": "my_worker",
+                    "username": None,
+                    "name": "WorkerBot",
+                    "role": "Background Worker",
+                },
+                {
+                    "name": "SecondBot",
+                    "id": None,
+                    "username": "second_user",
+                }
+            ]
+        }
+        with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as tf:
+            yaml.safe_dump(doc, tf)
+            tmp_path = tf.name
+
+        try:
+            cfg = GatewayConfig.from_file(tmp_path, bot_name="my_worker")
+            self.assertEqual(cfg.bot_username, "my_worker")
+            self.assertEqual(cfg.bot_name, "WorkerBot")
+
+            cfg2 = GatewayConfig.from_file(tmp_path, bot_name="SecondBot")
+            self.assertEqual(cfg2.bot_username, "second_user")
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+
 
 if __name__ == "__main__":
     unittest.main()

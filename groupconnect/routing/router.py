@@ -326,7 +326,7 @@ class AutonomousConfig:
             default_engine_model = ""
         self.model: str = str(pcfg.get("model") or default_engine_model)
         self.base_url: str = _expand_env(str(pcfg.get("base_url", clf.get("base_url", "")))).strip().rstrip("/")
-        raw_api_key = os.environ.get(str(pcfg.get("api_key_env", "")), "") or str(pcfg.get("api_key", ""))
+        raw_api_key = os.environ.get(str(pcfg.get("api_key_env") or ""), "") or str(pcfg.get("api_key") or "")
         self.api_key: str = _expand_env(raw_api_key).strip()
         self.timeout_ms: int = int(pcfg.get("timeout_ms", 3000))
 

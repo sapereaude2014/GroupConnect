@@ -170,11 +170,15 @@ def run_init_wizard(target_path: Optional[str] = None) -> str:
         with open(env_file, "r", encoding="utf-8") as f:
             existing_env = f.read()
 
-    existing_keys = {line.split("=", 1)[0].strip() for line in existing_env.splitlines() if "=" in line}
+    existing_keys = {
+        line.strip().removeprefix("export ").split("=", 1)[0].strip()
+        for line in existing_env.splitlines()
+        if "=" in line and not line.strip().startswith("#")
+    }
     new_lines = [f"{k}={v}" for k, v in env_vars.items() if k not in existing_keys]
     if new_lines:
         with open(env_file, "a" if existing_env else "w", encoding="utf-8") as f:
-            if existing_env:
+            if existing_env and not existing_env.endswith("\n"):
                 f.write("\n")
             for line in new_lines:
                 f.write(f"{line}\n")
