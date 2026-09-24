@@ -42,12 +42,12 @@ Assistant: "Recorded in schedule.md:
 
 ## ✨ Key Features
 
-- **Zero-@ Autonomous Perception**: Converse naturally — the bot reads context to decide when to answer, stays silent during chitchat, and yields to humans on open questions (4s grace window).
-- **Multi-Bot Collaboration**: Deploy specialized bots in one chat. Understands dispatch ("A, ask B to run tests" → only A responds) and parallel ("A and B both look at this" → both respond).
-- **True Group Memory**: Sliding context buffer rehydrated from disk on restart; photos and documents auto-saved to workspace for agent inspection.
-- **Default-Deny Security**: Strict sender whitelisting; `/stop` instantly kills running agent processes.
-- **Lightweight Intent Classifier**: Built-in routing rules with hot-reloadable YAML slots, waking your heavy local CLI agent only when needed. Supports TypeSafe Jev (100–200ms) and standard LLM protocols (`openai` / `anthropic` / `gemini`) with custom `base_url`.
-- **Zero-Token Fast Lane**: Regex-matched natural language phrases (e.g. "开卧室灯") bypass LLM entirely for instant local script execution.
+- **Zero-@ Autonomous Perception**: Converse naturally — the bot reads context to decide when to respond, stays silent during chitchat, and yields to humans on open questions.
+- **Multi-Bot Collaboration**: Deploy multiple specialized bots in one chat. Understands dispatch ("A, let B handle it" → only A responds) and parallel ("A and B, both look at this" → both respond).
+- **Group Context Memory**: Restart-safe context buffer; photos and documents auto-saved to workspace for agent access.
+- **Default-Deny Security**: Strict sender whitelist; `/stop` instantly kills running agent processes.
+- **Smart Routing Engine**: A lightweight classifier (Jev, 200ms) decides whether and who should respond — only waking the heavy AI agent when truly needed. Supports `openai` / `anthropic` / `gemini` protocols.
+- **Instant Device Control**: Say "开卧室灯" to trigger local scripts directly — millisecond response, no AI round-trip.
 
 ---
 
