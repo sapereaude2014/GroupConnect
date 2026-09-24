@@ -47,7 +47,7 @@ Assistant: "Recorded in schedule.md:
 - **Group Context Memory**: Restart-safe context buffer; photos and documents auto-saved to workspace for agent access.
 - **Default-Deny Security**: Strict sender whitelist; `/stop` instantly kills running agent processes.
 - **Smart Routing Engine**: A lightweight classifier (Jev, 200ms) decides whether and who should respond — only waking the heavy AI agent when truly needed. Supports `openai` / `anthropic` / `gemini` protocols.
-- **Instant Device Control**: Say "开卧室灯" to trigger local scripts directly — millisecond response, no AI round-trip.
+- **Instant Device Control**: Say "turn on bedroom lights" to trigger local scripts directly — millisecond response, no AI round-trip.
 
 ---
 
