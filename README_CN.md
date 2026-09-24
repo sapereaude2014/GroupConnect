@@ -122,12 +122,12 @@ groupconnect run       # 运行（Ctrl+C 停止）
 workspace: ~/workspace
 
 bots:
-  - name: "代码助手"
-    username: "coder_bot"
+  - name: "代码助手"              # 展示昵称（用于群内自称、日志及命令提示）
+    username: "coder_bot"         # 平台唯一账号名（不带 @，用于识别 @提及、加载 souls/{username}.md 人设及免 @ 路由目标）
     platform: telegram
     token: "${CODER_BOT_TOKEN}"   # 用 ${ENV_VAR} 注入敏感信息，配置文件可安全入库
-    role: "负责代码编写与 Bug 修复"
-    aliases: ["码农", "coder"]
+    role: "负责代码编写与 Bug 修复" # 职责描述（注入免 @ 分类器，决定什么话题分流给该 Bot）
+    aliases: ["码农", "coder"]    # 免 @ 呼唤词/别名（群内说话带这些词时直接唤醒该 Bot）
     agent:
       engine: codex               # codex | claude | antigravity | opencode | teleagent
       bin: /usr/local/bin/codex   # 可选：指定二进制路径（不填则从 PATH 查找）

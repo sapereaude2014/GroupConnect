@@ -3,56 +3,60 @@
 # ==============================================================================
 # Secrets (Bot Tokens, API Keys) are referenced via ${ENV_VAR} from .env.
 
-# Shared workspace and persona directory (each bot automatically loads {username}.md)
+# Root directory where agents read/write files, and where attachments (inbox/attachments/)
+# and chat logs (inbox/chat_logs/) are stored. Auto-inferred if placed at <workspace>/.agents/groupconnect.yaml.
 workspace: ~/workspace
-souls_dir: ~/workspace/.agents/souls    # Optional: defaults to <workspace>/.agents/souls if omitted
+
+# Directory containing bot persona markdown files named {username}.md (injected as system instructions).
+# Optional: defaults to <workspace>/.agents/souls if omitted.
+souls_dir: ~/workspace/.agents/souls
 
 # ------------------------------------------------------------------------------
-# 1. Bots & Local Execution Agents (First bot on each platform is the Arbiter)
+# 1. Bots & Local Execution Agents (First bot on each platform acts as Arbiter)
 # ------------------------------------------------------------------------------
 bots:
-  - name: "Code Assistant"
-    username: "coder_bot"
-    platform: telegram                  # telegram | discord | slack | feishu | wecom
-    token: "${CODER_BOT_TOKEN}"
+  - name: "Code Assistant"              # Display name (used in {bot_name} templates, logs, and agent identity prompt)
+    username: "coder_bot"               # Platform handle without '@' (used to match @mentions, load {username}.md soul file, and route Zero-@ decisions)
+    platform: telegram                  # Chat platform: telegram | discord | slack | feishu | wecom
+    token: "${CODER_BOT_TOKEN}"         # Platform bot token (referenced from .env)
     options:
-      auto_telegraph_threshold: 60      # Auto-fold long replies exceeding N lines into Telegraph / expandable blockquotes
-    role: "Code authoring, debugging, automated testing, and server maintenance."
-    aliases:
+      auto_telegraph_threshold: 60      # Auto-fold long replies exceeding N lines into Telegraph articles or expandable blockquotes
+    role: "Code authoring, debugging, automated testing, and server maintenance."  # Responsibility summary (injected into Zero-@ classifier prompt to route matching topics)
+    aliases:                            # Natural-language wake words (calling any alias in group chat without '@' immediately routes to this bot)
       - "coder"
       - "dev"
     agent:
-      engine: codex                     # codex | claude | antigravity | opencode | teleagent
-      bin: /usr/local/bin/codex         # Optional: explicit binary path (defaults to PATH lookup)
-      # model: gpt-5                    # Optional: override CLI default model
-      timeout_secs: 1800
-      session_idle_timeout_mins: 120
-    custom_commands:
-      - command: status
-        description: "Check service health status"
-        description_en: "Check service health status"
-        script: "~/.local/bin/check-service.py"
-        check_args: ["--check-only"]
+      engine: codex                     # Local CLI agent harness: codex | claude | antigravity | opencode | teleagent
+      bin: /usr/local/bin/codex         # Optional: explicit binary path (defaults to searching PATH)
+      # model: gpt-5                    # Optional: model identifier passed to the CLI (omit to use CLI default)
+      timeout_secs: 1800                # Maximum execution time (seconds) per agent turn before force-termination
+      session_idle_timeout_mins: 120    # Idle minutes before resetting the agent's conversation session
+    custom_commands:                    # Per-bot slash commands (registered in the platform's '/' command menu)
+      - command: status                 # Slash command trigger without '/' (e.g., /status)
+        description: "Check service health status"      # Command menu description (default locale)
+        description_en: "Check service health status"   # Command menu description (English locale)
+        script: "~/.local/bin/check-service.py"         # Local executable or script to run
+        check_args: ["--check-only"]                    # Pre-check arguments run before full execution (exits 0 -> returns check_success_message)
         check_success_message: "✅ [{bot_name}] Service is healthy and ONLINE.\nTo force a restart, run: `/{command} force`"
-        ack_message: "🚀 [{bot_name}] Running service diagnostics and recovery..."
-        default_args: ["--timeout", "600"]
-        force_arg: "--force"
-        lock: true
+        ack_message: "🚀 [{bot_name}] Running service diagnostics and recovery..."  # Sent immediately before script execution starts
+        default_args: ["--timeout", "600"]              # Default arguments passed to script on normal execution
+        force_arg: "--force"                            # Argument passed when user runs '/status force' (bypasses check_args)
+        lock: true                                      # Prevent concurrent runs (true for mutex lock, or path to lockfile)
       - command: backup
         description: "Run full workspace backup"
         description_en: "Run full workspace backup"
         script: "~/.local/bin/workspace-backup"
         ack_message: "📦 Running full workspace backup, please wait..."
-        success_message: "✅ Backup finished in {duration}s"
-        error_message: "❌ Backup failed (Exit {returncode}): {stderr}"
+        success_message: "✅ Backup finished in {duration}s"                 # Sent on exit code 0 (supports {output}, {stdout}, {duration}, {bot_name})
+        error_message: "❌ Backup failed (Exit {returncode}): {stderr}"      # Sent on non-zero exit code (supports {returncode}, {stderr}, {output})
         lock: true
-        arbiter_only_on_broadcast: true
-        schedule:
-          weekday: 6
-          hour: 4
-    pattern_commands:
-      - pattern: "^(turn on|turn off)\\s+(lights|ac)(\\s+\\d{1,2})?$"
-        script: "~/.local/bin/device-control.py"
+        arbiter_only_on_broadcast: true                 # When true, an untargeted '/backup' in a multi-bot group runs only on the Arbiter bot
+        schedule:                                       # Optional periodic schedule (automatically runs script and broadcasts report to allowed_chat_ids)
+          weekday: 6                                    # Day of week (0 = Monday ... 6 = Sunday; omit for every day)
+          hour: 4                                       # Hour of day in 24h format (0..23)
+    pattern_commands:                   # Zero-latency regex fast lane (matches plain group text without '/' and bypasses LLM completely)
+      - pattern: "^(turn on|turn off)\\s+(lights|ac)(\\s+\\d{1,2})?$"  # Regex pattern matched against incoming message text
+        script: "~/.local/bin/device-control.py"        # Script invoked immediately with the matched message text as argument
 
   - name: "Arch Reviewer"
     username: "reviewer_bot"
@@ -85,30 +89,30 @@ bots:
 # 2. Zero-@ Autonomous Routing (Uses Jev classifier & JEV_API_KEY by default)
 # ------------------------------------------------------------------------------
 zero_at:
-  enabled: true
-  context_window_size: 5
-  # classifier:                         # Optional: omit to use Jev by default (reads JEV_API_KEY from env)
-  #   engine: openai                    # jev (default) | openai | anthropic | gemini
-  #   model: deepseek-chat
-  #   base_url: https://api.deepseek.com/v1
+  enabled: true                         # Enable Zero-@ autonomous listening and multi-bot arbitration
+  context_window_size: 5                # Number of recent group messages passed to the classifier as conversational context
+  # classifier:                         # Optional: omit to use Jev by default (auto-reads JEV_API_KEY from env)
+  #   engine: openai                    # Protocol: jev (default) | openai | anthropic | gemini
+  #   model: deepseek-chat              # Classifier model identifier
+  #   base_url: https://api.deepseek.com/v1  # Optional custom API endpoint URL
   rules:
-    group: "Engineering team group chat with specialized assistant bots."
-    drop: "Casual human-to-human banter, acknowledgements (ok/thanks/got it), or direct conversations between teammates with no action request."
+    group: "Engineering team group chat with specialized assistant bots."   # Group context description injected into the classifier prompt
+    drop: "Casual human-to-human banter, acknowledgements (ok/thanks/got it), or direct conversations between teammates with no action request."  # Explicit ignore (DROP) criteria
 
 # ------------------------------------------------------------------------------
 # 3. Security & Access Control
 # ------------------------------------------------------------------------------
 security:
-  allow_open_access: false
-  allow_group_members_dm: true
-  allowed_chat_ids:
+  allow_open_access: false              # When false (default), strictly rejects all unknown groups and users not listed below
+  allow_group_members_dm: true          # Allow members of whitelisted groups (allowed_chat_ids) to also DM the bots privately
+  allowed_chat_ids:                     # Authorized group/channel IDs where the bots are allowed to respond
     - -1001234567890
-  allowed_user_ids:
+  allowed_user_ids:                     # Authorized user IDs allowed direct access and admin operations
     - 123456789
 
 # ------------------------------------------------------------------------------
 # 4. Runtime Tuning
 # ------------------------------------------------------------------------------
 tuning:
-  # ipc_dir: ~/.local/run/groupconnect_ipc/workspace  # Optional: auto-isolated per workspace by default
-  resume_unanswered_secs: 600
+  # ipc_dir: ~/.local/run/groupconnect_ipc/workspace  # Directory for cross-bot IPC heartbeats and arbitration locks (auto-isolated per workspace)
+  resume_unanswered_secs: 600           # On restart, automatically re-dispatch unanswered human messages from the last N seconds (0 to disable)

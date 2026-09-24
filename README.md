@@ -122,12 +122,12 @@ Define the shared `workspace` at the top level; each bot entry binds its own cha
 workspace: ~/workspace
 
 bots:
-  - name: "Code Assistant"
-    username: "coder_bot"
+  - name: "Code Assistant"        # Display name (used in replies, logs, and agent identity prompt)
+    username: "coder_bot"         # Platform handle without '@' (matches @mentions, loads souls/{username}.md, and targets Zero-@ routing)
     platform: telegram
     token: "${CODER_BOT_TOKEN}"   # Use ${ENV_VAR} for secrets — keeps config file safe for Git
-    role: "Code authoring and bug fixes"
-    aliases: ["coder", "dev"]
+    role: "Code authoring and bug fixes"  # Responsibility summary (tells the Zero-@ classifier which topics to route here)
+    aliases: ["coder", "dev"]     # Wake words / nicknames (calling these in group chat without '@' wakes this bot directly)
     agent:
       engine: codex               # codex | claude | antigravity | opencode | teleagent
       bin: /usr/local/bin/codex   # Optional: explicit binary path (defaults to PATH lookup)
