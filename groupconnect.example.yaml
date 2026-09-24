@@ -1,97 +1,89 @@
 # ==============================================================================
 # GroupConnect Configuration Template
 # ==============================================================================
-# Modern, Declarative, Unified Configuration for Local Agent Group Gateways.
-# Environment variables like ${TELEGRAM_BOT_TOKEN} or ${VAR:-default} are expanded.
+# 配置说明：
+# 1. Bot 身份、平台、Token、职责、路由规则等直接写在本文件中；
+# 2. 敏感信息（Token / API Key）推荐用 ${ENV_VAR} 环境变量注入，配置文件可安全入库；
+#    环境变量可配置在系统环境或同目录 / ~/.config/groupconnect/ 下的 .env 文件中。
+# 3. 所有字符串字段均支持 ${ENV_VAR} 或 ${ENV_VAR:-default} 插值。
 # ==============================================================================
 
-# 1. 聊天平台 (支持: telegram, discord, slack, feishu, wecom)
-channel:
-  platform: telegram
-  token: ${TELEGRAM_BOT_TOKEN:-"your-telegram-bot-token-here"}
+# 1. Bot 与本地执行 Agent (单 Bot 配置 1 项，多 Bot 继续追加；每个 Bot 可绑定相同或不同聊天平台)
+bots:
+  - name: "代码助手"
+    username: "coder_bot"
+    platform: telegram            # 聊天平台: telegram | discord | slack | feishu | wecom
+    token: ${CODER_BOT_TOKEN}     # 用 ${ENV_VAR} 注入敏感信息，配置文件可安全入库
+    role: "负责代码编写、重构与 Bug 修复"
+    aliases: ["码农", "老铁"]
+    # soul_path: ~/souls/coder.md # 可选：指定单 Bot 人设文件
+    # souls_dir: ~/souls          # 可选：人设目录，按 {username}.md 自动匹配 (优先级低于 soul_path)
+    agent:
+      engine: codex               # 本地 Agent CLI: codex | claude | antigravity | opencode | teleagent
+      workspace: ~/workspace      # 本地挂载的工作目录 (支持 ~ 展开)
+      # model: gpt-5              # 可选：显式指定 Agent 模型（不配置则使用本地 CLI 自身默认模型）
 
-# 2. 本地执行 Agent (支持: codex, claude, antigravity, opencode, teleagent)
-agent:
-  engine: codex                 # 本地 Agent CLI 引擎名称
-  workspace: ~/workspace        # 本地挂载的工作目录 (支持 ~ 路径展开)
-  # model: gemini-3.8-flash     # 可选：指定模型覆盖默认值
+  # 如需同群多 Bot 协同（或跨平台托管多个 Bot），取消下方注释即可：
+  # - name: "架构评审"
+  #   username: "reviewer_bot"
+  #   platform: telegram
+  #   token: "your-second-bot-token-here"
+  #   role: "负责代码审查、安全检查与架构设计"
+  #   aliases: ["评审", "总管"]
+  #   agent:
+  #     engine: claude
+  #     workspace: ~/workspace
 
-# 3. 智能免 @ 自主插话 (Zero-@ 决策引擎)
+# 2. 群内免 @ 自主插话 (Zero-@ Routing)
 zero_at:
-  enabled: true                 # 开箱即用，默认集成 L0(噪音过滤) / L1(别名旁路与闲聊自指过滤) / L3(语义分类) 管线
-  # classifier:
-  #   engine: jev               # 支持: jev (TypeSafe 专用判别式分类) 或通用语言模型 llm / openai / gemini / anthropic
-  #   model: jev-latest         # 模型名称 (如 jev-latest, gpt-4o-mini, deepseek-chat, gemini-2.5-flash-lite)
-  #   base_url: ""              # 通用 LLM 可选自定义 OpenAI 兼容接口地址 (如 https://api.deepseek.com/v1)
-  #   api_key: ${JEV_API_KEY}   # 若已配置系统环境变量 JEV_API_KEY / OPENAI_API_KEY，此处可省略
-  # confidence_threshold: 0.60  # 分类器触发置信度阈值 (默认 0.60)
-  # parallel_threshold: 0.60    # 多 Bot 并行协同触发阈值 (默认同 confidence_threshold)
-  # silence_secs: 4.0           # 智能抢答防插话静默等待窗口 (默认 4.0 秒)
-  # immediate_secs: 1.0         # 明确指令/追问的即刻抢答延迟 (默认 1.0 秒)
-  # context_window_size: 3      # 传入分类器的最近上下文轮数 (默认 3)
-  # rules:                      # 可选：按需微调群聊背景与响应边界 (只写需要修改的项，其余自动使用内置默认值)
+  enabled: true                 # 开启群内免 @ 意图识别（默认使用 jev-latest 并自动读取系统环境变量 JEV_API_KEY）
+  # classifier:                 # 可选：仅在需要切换其他分类模型协议、自定义端点或显式指定 api_key 时配置
+  #   engine: openai            # 接口协议: jev (默认) | openai | anthropic | gemini
+  #   model: deepseek-chat      # 分类模型名称 (如 jev-latest, deepseek-chat, gpt-4o-mini, gemini-2.5-flash-lite)
+  #   base_url: ""              # 可选：自定义 API Base URL (不配置则使用所选协议的官方默认端点)
+  #   api_key: ""               # 可选：不配置则按 engine 自动读取系统环境变量 JEV_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY / GEMINI_API_KEY
+  # confidence_threshold: 0.60  # 可选：分类器触发置信度阈值 (默认 0.60)
+  # parallel_threshold: 0.60    # 可选：多 Bot 并行协同触发阈值 (默认同 confidence_threshold)
+  # silence_secs: 4.0           # 可选：防抢话静默观察窗口秒数 (默认 4.0)
+  # immediate_secs: 1.0         # 可选：明确指令/追问的即刻响应延迟秒数 (默认 1.0)
+  # context_window_size: 3      # 可选：传入分类器的最近上下文轮数 (默认 3)
+  # rules:                      # 可选：按需覆盖内置路由提示词槽位 (仅填写需修改的项，其余沿用内置默认值)
   #   group: "这是一个私密群聊，配置了不同职责的专职助手 Bot"
   #   immediate: "回复 {bot} 刚才的提问，或匹配其职责的直接指令：{role}"
   #   wait: "需要查询数据、知识或客观建议，且匹配职责：{role}"
   #   drop: "群成员之间的日常寒暄、玩笑打趣或与助手职责无关的话题"
   #   parallel: "发送者明确要求 {bot} ({role}) 与其他助手同时回答"
-  # alias_drop_regex: []        # 可选：追加自定义的第三人称/闲聊过滤正则 (支持 {alias} 与 {any_alias} 占位符)
+  # alias_drop_regex: []        # 可选：追加自定义的第三人称提及过滤正则 (支持 {alias} 与 {any_alias} 占位符)
   # noise_regex: []             # 可选：追加自定义的纯噪音过滤正则
 
 # ==============================================================================
-# [进阶配置 - 按需开启，所有字段均有健全默认值]
+# [进阶配置 - 按需开启，所有字段均有默认值]
 # ==============================================================================
 
-# 4. 安全访问控制 (默认安全拦截未知群组)
+# 3. 安全访问控制 (默认拦截未授权群组)
 security:
-  allow_open_access: false      # 是否开放给所有人 (默认 false)
-  allow_group_members_dm: true  # 是否允许群内成员直接私聊
-  # allowed_chat_ids: [-100123456789] # 允许响应的群聊 ID
-  # allowed_user_ids: [123456789]     # 允许响应的管理员 Telegram User ID
-  # allowed_usernames: ["admin_user"] # 允许响应的用户名 (不带 @)
+  allow_open_access: false      # 是否开放给所有群组/用户 (默认 false)
+  allow_group_members_dm: true  # 是否允许白名单群组成员直接私聊 Bot
+  # allowed_chat_ids: [-100123456789] # 允许响应的群聊 ID 列表
+  # allowed_user_ids: [123456789]     # 允许响应的用户 ID 列表
+  # allowed_usernames: ["admin_user"] # 允许响应的用户名列表 (不带 @)
 
-# 5. 自定义斜杠指令 (Slash Commands)
+# 4. 自定义斜杠指令 (Slash Commands)
 # custom_commands:
 #   - command: status
 #     description: "检查系统运行状态"
 #     script: "~/.local/bin/my-status-checker"
 #     ack_message: "正在检查系统状态..."
 
-# 5.1 正则直通指令 (Pattern Commands)
-# 自然语言快车道：短句命中正则后直接执行脚本，完全绕过 LLM 路由，响应 3-5 秒。
-# 适用于高频、格式固定的指令（如智能家居控制）。未命中的消息照常走智能路由，快慢两轨互不干扰。
+# 4.1 正则直通指令 (Pattern Commands)
+# 命中正则的纯文本短消息直接执行本地脚本，绕过分类器与 Agent，毫秒级响应。
 # pattern_commands:
-#   - pattern: "^(开|关)(灯|空调)(开|关|\\d{1,2})?$"   # Python 正则；建议 ^...$ 全句锚定，防止误触
-#     script: "~/.local/bin/my-device-control"         # 命中后执行的脚本（独立注册，无需 custom_commands 条目）
-#     max_length: 20                                   # 剥标点后超过此长度不进快车道 (默认 20)
-# 说明：消息需同时满足以下条件才进入快车道——纯文本 (非斜杠/非@提及/非回复 bot)、
-#       剥离句尾标点后长度不超过 max_length、正则全句匹配。
-# 独立 pattern 的安全默认值（无需配置）：pass_args: true (命中文本透传给脚本)、lock: true (并发触发串行化)。
+#   - pattern: "^(开|关)(灯|空调)(开|关|\\d{1,2})?$"
+#     script: "~/.local/bin/my-device-control"
+#     max_length: 20            # 剥离句尾标点后超过此长度不进入正则直通 (默认 20)
 
-# 6. 系统底层微调 (Tuning)
+# 5. 运行参数微调 (Tuning)
 # tuning:
-#   silence_window_secs: 4.0    # 智能抢答防插话静默窗口 (默认 4.0 秒，等同于 zero_at.silence_secs)
-#   ipc_dir: /tmp/groupconnect_ipc # 多 Bot 跨进程中继管道目录
-#   max_history_len: 30         # 上下文滑动窗口保留轮数
-#   resume_unanswered_secs: 300  # 重启后回灌：最近 N 秒内未获回复的人类消息自动重新处理 (默认 300，0 关闭)
-
-# ==============================================================================
-# [多 Bot 协同集群配置 - 同一配置文件管理多个 Bot]
-# ==============================================================================
-# 如果需要在同一个群聊中运行多个 Bot 协同，取消下方 bots 列表注释即可：
-# (顶层 agent / security / tuning / custom_commands 配置会自动被所有 Bot 继承)
-#
-# bots:
-#   - name: "代码助手"
-#     username: "coder_bot"
-#     token: ${CODER_BOT_TOKEN}
-#     agent: codex
-#     role: "负责代码编写、重构与 Bug 修复"
-#     aliases: ["码农", "老铁"]
-#
-#   - name: "架构评审"
-#     username: "reviewer_bot"
-#     token: ${REVIEWER_BOT_TOKEN}
-#     agent: claude
-#     role: "负责代码审查、安全检查与架构设计"
-#     aliases: ["评审", "总管"]
+#   ipc_dir: /tmp/groupconnect_ipc # 多 Bot 跨进程状态同步目录
+#   max_history_len: 30            # 内存上下文滑动窗口保留轮数 (默认 30)
+#   resume_unanswered_secs: 300    # 重启补偿：自动重发最近 N 秒内未获回复的人类消息 (默认 300，0 关闭)
