@@ -116,7 +116,7 @@ groupconnect run       # 运行（Ctrl+C 停止）
 
 ## ⚙️ 配置文件：`groupconnect.yaml`
 
-每条 Bot 直接绑定自身所属的聊天平台（`platform`）、凭证（`token`）与本地执行 Agent（`agent`）。单 Bot 写 1 项，多 Bot 协同或跨平台部署直接往下追加即可（同平台首项默认作为主裁决官 Arbiter 负责调度）：
+每条 Bot 直接绑定自身所属的聊天平台（`platform`）、凭证（`token`）与本地执行 Agent（`agent`）。单 Bot 写 1 项，多 Bot 协同或跨平台部署直接往下追加即可（同平台首项默认作为主裁决官 Arbiter 负责调度）。密钥用 `${ENV_VAR}` 引用，所有变量见 [`.env.example`](.env.example)：
 
 ```yaml
 bots:

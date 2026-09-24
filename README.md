@@ -116,7 +116,7 @@ groupconnect run       # Start (Ctrl+C to stop)
 
 ## ⚙️ Configuration: `groupconnect.yaml`
 
-Each bot entry binds its own chat `platform`, credentials (`token`), and local execution `agent`. Write 1 entry for a single bot, or append more entries for multi-bot collaboration or multi-platform hosting (the first bot on each platform acts as the Arbiter):
+Each bot entry binds its own chat `platform`, credentials (`token`), and local execution `agent`. Write 1 entry for a single bot, or append more entries for multi-bot collaboration or multi-platform hosting (the first bot on each platform acts as the Arbiter). Secrets use `${ENV_VAR}` — see [`.env.example`](.env.example) for all variables:
 
 ```yaml
 bots:
