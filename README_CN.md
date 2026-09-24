@@ -114,97 +114,17 @@ groupconnect run       # 运行（Ctrl+C 停止）
 
 ---
 
-## ⚙️ 配置文件：`groupconnect.yaml`
+## ⚙️ 配置说明
 
-顶层定义共享工作空间（`workspace`），每条 Bot 绑定自身所属的聊天平台（`platform`）、凭证（`token`）与本地执行 Agent（`agent`）。单 Bot 写 1 项，多 Bot 协同或跨平台部署直接往下追加（同平台首项默认作为主裁决官 Arbiter 负责调度）。密钥用 `${ENV_VAR}` 引用，所有变量见 [`.env.example`](.env.example)：
+运行 `groupconnect init` 可交互式生成配置，或直接复制参考模板：
 
-```yaml
-workspace: ~/workspace
-
-bots:
-  - name: "代码助手"              # 展示昵称（用于群内自称、日志及命令提示）
-    username: "coder_bot"         # 平台唯一账号名（不带 @，用于识别 @提及、加载 souls/{username}.md 人设及免 @ 路由目标）
-    platform: telegram
-    token: "${CODER_BOT_TOKEN}"   # 用 ${ENV_VAR} 注入敏感信息，配置文件可安全入库
-    role: "负责代码编写与 Bug 修复" # 职责描述（注入免 @ 分类器，决定什么话题分流给该 Bot）
-    aliases: ["码农", "coder"]    # 免 @ 呼唤词/别名（群内说话带这些词时直接唤醒该 Bot）
-    agent:
-      engine: codex               # codex | claude | antigravity | opencode | teleagent
-      bin: /usr/local/bin/codex   # 可选：指定二进制路径（不填则从 PATH 查找）
-      # model: gpt-5              # 可选：指定模型覆盖 CLI 默认值
-      timeout_secs: 1800          # 可选：单次执行超时秒数
-      session_idle_timeout_mins: 120
-
-  # 如需同群多 Bot 协同（或跨平台托管其他 Bot），直接追加：
-  # - name: "架构评审"
-  #   username: "reviewer_bot"
-  #   platform: telegram
-  #   token: "${REVIEWER_BOT_TOKEN}"
-  #   role: "负责架构审查与代码审计"
-  #   aliases: ["评审", "reviewer"]
-  #   agent:
-  #     engine: claude
-
-zero_at:
-  enabled: true                 # 默认使用 Jev 分类器（100~200ms），自动读取环境变量 JEV_API_KEY
+```bash
+cp groupconnect.example.yaml groupconnect.yaml
+cp .env.example .env
 ```
 
-### 分类器配置（可选）
-
-默认无需配置 `classifier`（自动使用 **Jev** 并从环境变量读取 `JEV_API_KEY`）。仅在需要切换为其他大模型协议或自定义接口地址时按需添加：
-
-```yaml
-zero_at:
-  enabled: true
-  classifier:
-    engine: openai                        # 协议类型: jev (默认) | openai | anthropic | gemini
-    model: deepseek-chat                  # 分类模型名称
-    base_url: https://api.deepseek.com/v1 # 可选：自定义 API Base URL（不填则使用对应协议官方默认端点）
-    # api_key: ""                         # 可选：不填则按 engine 自动读取环境变量 JEV_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY / GEMINI_API_KEY
-```
-
-### 自定义斜杠指令与快车道（挂载于对应 Bot 下）
-
-在 `bots` 列表中对应 Bot 下声明：`custom_commands` 注册后即为该 Bot 的斜杠指令（如 `/backup`），支持互斥锁、健康预检与定时调度；`pattern_commands` 则是自然语言正则直通，无需 `/` 前缀，完全绕过 LLM：
-
-```yaml
-bots:
-  - name: "代码助手"
-    # ...
-    custom_commands:
-      - command: backup
-        description: "备份工作区"
-        script: "~/.local/bin/my-backup"
-        ack_message: "📦 正在执行备份..."
-        success_message: "✅ 备份完成（耗时 {duration}s）"
-        lock: true
-        arbiter_only_on_broadcast: true
-        schedule:
-          weekday: 6
-          hour: 4
-
-    pattern_commands:
-      - pattern: '^(开|关)(灯|空调)(\d{1,2})?$'
-        script: "~/.local/bin/device.py"
-```
-
-### 安全与崩溃恢复
-
-默认即开即用（默认拦截、默认 5 分钟恢复窗口），按需微调：
-
-```yaml
-security:
-  allow_open_access: false       # 默认：拦截所有未授权群组与用户
-  allow_group_members_dm: true   # 允许白名单群成员私聊 Bot
-  # allowed_chat_ids: [-100123456789]
-  # allowed_user_ids: [123456789]
-
-tuning:
-  resume_unanswered_secs: 300   # 重启时补发 N 秒内未获回复的消息（0 关闭）
-  max_history_len: 30           # 内存上下文滑动窗口轮数
-```
-
-完整字段见 [`groupconnect.example.yaml`](groupconnect.example.yaml)。
+- **完整配置与全参数注释**：详见 [`groupconnect.example.yaml`](groupconnect.example.yaml)（涵盖多 Bot 协同、本地 Agent 绑定、自定义斜杠命令、正则快车道、Zero-@ 分类器与安全白名单）。
+- **环境变量与密钥列表**：详见 [`.env.example`](.env.example)。
 
 ---
 

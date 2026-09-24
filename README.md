@@ -114,97 +114,17 @@ groupconnect run       # Start (Ctrl+C to stop)
 
 ---
 
-## ⚙️ Configuration: `groupconnect.yaml`
+## ⚙️ Configuration
 
-Define the shared `workspace` at the top level; each bot entry binds its own chat `platform`, credentials (`token`), and local execution `agent`. Write 1 entry for a single bot, or append more entries for multi-bot collaboration or multi-platform hosting (the first bot on each platform acts as the Arbiter). Secrets use `${ENV_VAR}` — see [`.env.example`](.env.example) for all variables:
+Run `groupconnect init` to generate a configuration interactively, or copy the reference templates:
 
-```yaml
-workspace: ~/workspace
-
-bots:
-  - name: "Code Assistant"        # Display name (used in replies, logs, and agent identity prompt)
-    username: "coder_bot"         # Platform handle without '@' (matches @mentions, loads souls/{username}.md, and targets Zero-@ routing)
-    platform: telegram
-    token: "${CODER_BOT_TOKEN}"   # Use ${ENV_VAR} for secrets — keeps config file safe for Git
-    role: "Code authoring and bug fixes"  # Responsibility summary (tells the Zero-@ classifier which topics to route here)
-    aliases: ["coder", "dev"]     # Wake words / nicknames (calling these in group chat without '@' wakes this bot directly)
-    agent:
-      engine: codex               # codex | claude | antigravity | opencode | teleagent
-      bin: /usr/local/bin/codex   # Optional: explicit binary path (defaults to PATH lookup)
-      # model: gpt-5              # Optional: model override
-      timeout_secs: 1800          # Optional: per-turn execution timeout in seconds
-      session_idle_timeout_mins: 120
-
-  # Append another entry for same-group collaboration or cross-platform bots:
-  # - name: "Arch Reviewer"
-  #   username: "reviewer_bot"
-  #   platform: telegram
-  #   token: "${REVIEWER_BOT_TOKEN}"
-  #   role: "Architecture review and code auditing"
-  #   aliases: ["reviewer", "lead"]
-  #   agent:
-  #     engine: claude
-
-zero_at:
-  enabled: true                 # Uses Jev classifier (100–200ms) by default and auto-reads JEV_API_KEY
+```bash
+cp groupconnect.example.yaml groupconnect.yaml
+cp .env.example .env
 ```
 
-### Classifier Configuration (Optional)
-
-`classifier` is optional (defaults to **Jev** and automatically reads `JEV_API_KEY` from your environment). Configure it only when switching to another LLM protocol or a custom endpoint:
-
-```yaml
-zero_at:
-  enabled: true
-  classifier:
-    engine: openai                        # Protocol: jev (default) | openai | anthropic | gemini
-    model: deepseek-chat                  # Classifier model ID
-    base_url: https://api.deepseek.com/v1 # Optional: custom API Base URL (defaults to official protocol endpoint)
-    # api_key: ""                         # Optional: if omitted, auto-reads JEV_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY / GEMINI_API_KEY
-```
-
-### Custom Slash Commands & Pattern Fast Lane (Per-Bot)
-
-Declare `custom_commands` and `pattern_commands` directly under the target bot in `bots:`. `custom_commands` register as slash commands (e.g. `/backup`) with mutex locks, health pre-checks, and cron schedules; `pattern_commands` match natural language phrases without a `/` prefix, bypassing the LLM entirely:
-
-```yaml
-bots:
-  - name: "Code Assistant"
-    # ...
-    custom_commands:
-      - command: backup
-        description: "Backup workspace"
-        script: "~/.local/bin/my-backup"
-        ack_message: "📦 Running backup..."
-        success_message: "✅ Backup finished in {duration}s"
-        lock: true
-        arbiter_only_on_broadcast: true
-        schedule:
-          weekday: 6
-          hour: 4
-
-    pattern_commands:
-      - pattern: '^(turn on|turn off)\s+(lights|ac)(\s+\d{1,2})?$'
-        script: "~/.local/bin/device.py"
-```
-
-### Security & Crash Recovery
-
-Default-deny security and crash recovery require no configuration to work, but can be tuned:
-
-```yaml
-security:
-  allow_open_access: false       # Default: reject all unknown chats and users
-  allow_group_members_dm: true   # Allow whitelisted group members to DM the bot
-  # allowed_chat_ids: [-100123456789]
-  # allowed_user_ids: [123456789]
-
-tuning:
-  resume_unanswered_secs: 300   # Re-dispatch unanswered messages within this window on restart (0 to disable)
-  max_history_len: 30           # Sliding context buffer size
-```
-
-See [`groupconnect.example.yaml`](groupconnect.example.yaml) for all options.
+- **Full Configuration Reference (with inline comments for every parameter)**: see [`groupconnect.example.yaml`](groupconnect.example.yaml) (multi-bot routing, local agent harnesses, custom slash commands, regex fast lanes, Zero-@ classifier, and security allowlists).
+- **Environment Variables & Secrets**: see [`.env.example`](.env.example).
 
 ---
 
