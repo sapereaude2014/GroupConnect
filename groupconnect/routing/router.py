@@ -195,17 +195,18 @@ class AutonomousConfig:
             for b in same_platform_bots:
                 if not isinstance(b, dict):
                     continue
-                uname = (b.get("username") or b.get("name") or "").lower().lstrip("@")
+                uname = (b.get("username") or b.get("id") or b.get("name") or "").lower().lstrip("@")
+                role_val = b.get("role") or b.get("role_summary")
                 if uname:
-                    if uname not in roles and "role" in b:
-                        roles[uname] = b["role"]
+                    if uname not in roles and role_val:
+                        roles[uname] = role_val
                     if uname not in aliases and "aliases" in b:
                         aliases[uname] = list(b["aliases"])
             cfg["roles"] = roles
             cfg["aliases"] = aliases
             if same_platform_bots and not cfg.get("arbiter_bot"):
                 first = same_platform_bots[0] if isinstance(same_platform_bots[0], dict) else {}
-                cfg["arbiter_bot"] = (first.get("username") or first.get("name") or "").lower().lstrip("@")
+                cfg["arbiter_bot"] = (first.get("username") or first.get("id") or first.get("name") or "").lower().lstrip("@")
 
         if "tuning" in raw and isinstance(raw["tuning"], dict):
             if not cfg.get("ipc_dir") and "ipc_dir" in raw["tuning"]:
