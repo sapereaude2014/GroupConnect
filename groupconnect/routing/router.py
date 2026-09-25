@@ -260,9 +260,15 @@ class AutonomousConfig:
 
         # ---- Classifier provider registry (self-describing) ----
         clf = cfg.get("classifier", {})
-        self.confidence_threshold: float = float(
+        _raw_ct = float(
             clf.get("confidence_threshold", cfg.get("confidence_threshold", 0.60))
         )
+        if not (0.0 < _raw_ct <= 1.0):
+            logger.warning(
+                "[ROUTING] confidence_threshold %s out of (0, 1]; falling back to 0.60.", _raw_ct,
+            )
+            _raw_ct = 0.60
+        self.confidence_threshold: float = _raw_ct
         self.daily_budget: int = int(
             clf.get("daily_budget", cfg.get("daily_budget", 800))
         )
@@ -718,6 +724,11 @@ class AutonomousArbiter:
                 # --- Final decision (layered arbitration) ---
                 if not candidate_bots:
                     # No bot claims this message → true silence
+                    logger.info(
+                        f"[ROUTING] No bot claimed message "
+                        f"(noul_threshold={noul_threshold:.2f}, "
+                        f"scores={{{', '.join(f'{b}:{p:.2f}' for b, p in noul_results)}}})."
+                    )
                     target_bot = "none"
                     target_bots = []
                     urgency = "drop"

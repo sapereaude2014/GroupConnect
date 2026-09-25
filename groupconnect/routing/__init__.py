@@ -22,6 +22,9 @@ Jev Classifier: Orthogonal Choice (timing) + Noul (assignment).
 - Layered arbitration: no candidate bots -> true drop; Choice=drop with
   high-confidence Noul claims -> rescue with wait_silence (4s grace for
   humans to speak first); Choice!=drop -> adopt Choice's urgency directly.
+- Threshold note: the Jev path uses the dynamic dual threshold above; the
+  LLM path (single JSON output) applies a flat confidence_threshold with
+  no relaxation, since it judges bot assignment and timing in one pass.
 
 Semantic content (aliases, roles, windows, budget, classifier engine, and
 optional rule overrides) is configured in groupconnect.yaml on top of built-in
