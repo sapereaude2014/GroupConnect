@@ -9,16 +9,19 @@ Architecture: Single-Arbiter + Symmetric Observers.
   countdown window; any other human message during the window cancels it;
   otherwise dispatch with reply anchoring.
 
-Jev Classifier: Choice + Noul Two-Stage Pipeline.
-- Choice (single-select): determines the primary responder and urgency
-  (immediate / wait_silence / none_drop) from structured option criteria.
-- Noul (per-bot yes/no): independently evaluates whether each bot should
-  participate in parallel collaboration alongside the primary responder.
-- Rescue: if Choice drops (probabilities split across bots, e.g. "you two
-  both look at this"), but Noul detects explicit parallel intent for any bot
-  above parallel_threshold, the drop is rescued — all qualifying bots are
-  activated with immediate urgency. Only when BOTH Choice and Noul fail to
-  reach threshold does the message fail-closed to drop.
+Jev Classifier: Orthogonal Choice (timing) + Noul (assignment).
+- Choice (single-select, fixed 3 options): judges ONLY the interaction
+  timing / social context (immediate / wait / drop) — independent of bot
+  identity, so probabilities never split across bots.
+- Noul (per-bot yes/no): each bot independently evaluates "does this
+  message need me to handle it?" — the assignment dimension.
+- Dynamic dual threshold (one knob): when Choice says respond, the Noul
+  gate relaxes to confidence_threshold × 2/3 (e.g. 0.40) to prevent
+  false silences; when Choice says drop, the strict confidence_threshold
+  (e.g. 0.60) guards against chitchat false rescues.
+- Layered arbitration: no candidate bots -> true drop; Choice=drop with
+  high-confidence Noul claims -> rescue with wait_silence (4s grace for
+  humans to speak first); Choice!=drop -> adopt Choice's urgency directly.
 
 Semantic content (aliases, roles, windows, budget, classifier engine, and
 optional rule overrides) is configured in groupconnect.yaml on top of built-in

@@ -69,7 +69,7 @@ from groupconnect.routing.defaults import (
     DEFAULT_WAIT_CRITERIA,
     DEFAULT_DROP_CRITERIA,
     DEFAULT_GROUP_DESCRIPTION,
-    DEFAULT_PARALLEL_CRITERIA,
+    DEFAULT_ASSIGNMENT_CRITERIA,
 )
 
 _ENV_VAR_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
@@ -332,10 +332,13 @@ class AutonomousConfig:
             for bot, role in cfg.get("roles", {}).items()
         }
 
-        # Classifier wording (immediate/wait/drop/group/parallel):
+        # Classifier wording (immediate/wait/drop/group/assignment):
         # Built-in DEFAULT_RULE_TEMPLATES overlaid by optional zero_at.rules in YAML
         self.rule_templates: Dict[str, str] = dict(DEFAULT_RULE_TEMPLATES)
         raw_rules = cfg.get("rules")
+        # Backward compat: migrate legacy 'parallel' slot to 'assignment'
+        if isinstance(raw_rules, dict) and "parallel" in raw_rules and "assignment" not in raw_rules:
+            raw_rules["assignment"] = raw_rules.pop("parallel")
         self.custom_rules: Dict[str, str] = (
             {str(k): str(v) for k, v in raw_rules.items() if v}
             if isinstance(raw_rules, dict)
@@ -511,7 +514,7 @@ class AutonomousArbiter:
         )
 
     def _load_rules_instructions(self) -> str:
-        """Renders decision instructions by substituting active rule_templates (with zero_at.rules already replaced in-place)."""
+        """Renders decision instructions by substituting active rule_templates."""
         t = self.cfg.rule_templates
         return (
             DEFAULT_ROUTING_RULES_MD.strip()
@@ -519,7 +522,6 @@ class AutonomousArbiter:
             .replace("{immediate}", t.get("immediate", DEFAULT_IMMEDIATE_CRITERIA))
             .replace("{wait}", t.get("wait", DEFAULT_WAIT_CRITERIA))
             .replace("{drop}", t.get("drop", DEFAULT_DROP_CRITERIA))
-            .replace("{parallel}", t.get("parallel", DEFAULT_PARALLEL_CRITERIA))
         )
 
 
@@ -576,9 +578,9 @@ class AutonomousArbiter:
         logger.warning(f"[ROUTING] Unknown classifier engine '{engine}'; fail-closed drop.")
         return drop
 
-    def _jev_parallel_templates(self) -> Dict[str, str]:
+    def _jev_assignment_templates(self) -> Dict[str, str]:
         t = self.cfg.rule_templates
-        assignment = t.get("parallel", DEFAULT_PARALLEL_CRITERIA)
+        assignment = t.get("assignment", DEFAULT_ASSIGNMENT_CRITERIA)
         templates = {}
         for bot, role in self.cfg.roles.items():
             templates[bot] = assignment.replace("{bot}", bot).replace("{role}", role)
@@ -618,7 +620,7 @@ class AutonomousArbiter:
         5. Choice not drop + candidates exist → use Choice's urgency directly.
         """
         criteria, jev_map, group_description = self._jev_criteria()
-        assignment_templates = self._jev_parallel_templates()
+        assignment_templates = self._jev_assignment_templates()
 
         state = {
             "group": group_description,
@@ -638,7 +640,7 @@ class AutonomousArbiter:
         for bot in self.cfg.roles:
             p_inst = assignment_templates.get(bot)
             if p_inst:
-                questions[f"parallel_{bot}"] = {
+                questions[f"assignment_{bot}"] = {
                     "type": "noul",
                     "instructions": p_inst,
                 }
@@ -687,7 +689,7 @@ class AutonomousArbiter:
             # --- Noul: per-bot assignment (domain experts) ---
             noul_results: list = []  # (bot, prob) pairs
             for b in self.cfg.roles:
-                noul_ans = answers.get(f"parallel_{b}", {})
+                noul_ans = answers.get(f"assignment_{b}", {})
                 noul_prob = float(noul_ans.get("noul", 0.0) or 0.0)
                 noul_results.append((b, noul_prob))
 

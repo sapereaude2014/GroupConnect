@@ -40,7 +40,7 @@ DEFAULT_DROP_CRITERIA = (
     "pure emotional venting without action requests, or 3rd-person banter about bots). "
     "NOT drop-worthy: referring to another member in 3rd-person to record/query tasks, or administrative requests toward the shared assistant."
 )
-DEFAULT_PARALLEL_CRITERIA = (
+DEFAULT_ASSIGNMENT_CRITERIA = (
     "Whether the current message falls within {bot}'s responsibility or requires {bot} ({role}) to handle it. "
     "Return a high score if the message is a direct question, command, or request that matches {bot}'s domain; "
     "return a low score if it is casual conversation between humans with no action request toward {bot}."
@@ -51,7 +51,7 @@ DEFAULT_RULE_TEMPLATES: Dict[str, str] = {
     "immediate": DEFAULT_IMMEDIATE_CRITERIA,
     "wait": DEFAULT_WAIT_CRITERIA,
     "drop": DEFAULT_DROP_CRITERIA,
-    "parallel": DEFAULT_PARALLEL_CRITERIA,
+    "assignment": DEFAULT_ASSIGNMENT_CRITERIA,
 }
 
 DEFAULT_ROUTING_RULES_MD = """# Autonomous Routing Decision Rules

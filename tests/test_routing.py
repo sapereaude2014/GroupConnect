@@ -245,26 +245,35 @@ class TestAutonomousRouting(unittest.TestCase):
         self.assertEqual(criteria["drop"], DEFAULT_DROP_CRITERIA)
         self.assertEqual(criteria["immediate"], DEFAULT_IMMEDIATE_CRITERIA)
 
-    def test_jev_parallel_templates(self):
+    def test_jev_assignment_templates(self):
         from groupconnect.routing.router import AutonomousArbiter
 
         # Fallback to default
         arb = AutonomousArbiter(self.cfg)
-        pt = arb._jev_parallel_templates()
+        pt = arb._jev_assignment_templates()
         self.assertIn("primary_bot", pt)
         self.assertIn("Home automation", pt["primary_bot"])
 
-        # Custom from inline zero_at.rules
+        # Custom from inline zero_at.rules (new 'assignment' slot)
         cfg = AutonomousConfig({
             "roles": {"bot_a": "RoleA", "bot_b": "RoleB"},
-            "rules": {"parallel": "PARALLEL {bot} as {role}"},
+            "rules": {"assignment": "NEEDS {bot} as {role}"},
         })
         arb2 = AutonomousArbiter(cfg)
-        pt2 = arb2._jev_parallel_templates()
-        self.assertEqual(pt2["bot_a"], "PARALLEL bot_a as RoleA")
-        self.assertEqual(pt2["bot_b"], "PARALLEL bot_b as RoleB")
+        pt2 = arb2._jev_assignment_templates()
+        self.assertEqual(pt2["bot_a"], "NEEDS bot_a as RoleA")
+        self.assertEqual(pt2["bot_b"], "NEEDS bot_b as RoleB")
 
-    def test_jev_classify_choice_and_noul_parallel(self):
+        # Backward compat: legacy 'parallel' slot migrates to 'assignment'
+        cfg_legacy = AutonomousConfig({
+            "roles": {"bot_a": "RoleA"},
+            "rules": {"parallel": "LEGACY {bot}"},
+        })
+        arb3 = AutonomousArbiter(cfg_legacy)
+        pt3 = arb3._jev_assignment_templates()
+        self.assertEqual(pt3["bot_a"], "LEGACY bot_a")
+
+    def test_jev_classify_choice_and_noul_multi_bot(self):
         import asyncio
         from unittest.mock import patch, MagicMock
         import tempfile, json
@@ -300,15 +309,15 @@ class TestAutonomousRouting(unittest.TestCase):
                         "choice": "immediate",
                         "confidence": 0.95,
                     },
-                    "parallel_bot_a": {
+                    "assignment_bot_a": {
                         "type": "noul",
                         "noul": 0.88,
                     },
-                    "parallel_bot_b": {
+                    "assignment_bot_b": {
                         "type": "noul",
                         "noul": 0.85,
                     },
-                    "parallel_bot_c": {
+                    "assignment_bot_c": {
                         "type": "noul",
                         "noul": 0.12,
                     },
@@ -362,8 +371,8 @@ class TestAutonomousRouting(unittest.TestCase):
                         "choice": "drop",
                         "confidence": 0.9,
                     },
-                    "parallel_bot_a": {"type": "noul", "noul": 0.10},
-                    "parallel_bot_b": {"type": "noul", "noul": 0.99},
+                    "assignment_bot_a": {"type": "noul", "noul": 0.10},
+                    "assignment_bot_b": {"type": "noul", "noul": 0.99},
                 }
             }
 
@@ -415,8 +424,8 @@ class TestAutonomousRouting(unittest.TestCase):
                         "choice": "drop",
                         "confidence": 0.9,
                     },
-                    "parallel_bot_a": {"type": "noul", "noul": 0.2},
-                    "parallel_bot_b": {"type": "noul", "noul": 0.3},
+                    "assignment_bot_a": {"type": "noul", "noul": 0.2},
+                    "assignment_bot_b": {"type": "noul", "noul": 0.3},
                 }
             }
 
@@ -543,8 +552,8 @@ class TestAutonomousRouting(unittest.TestCase):
                     "choice": "immediate",
                     "confidence": 0.85,
                 },
-                "parallel_bot": {"type": "noul", "noul": 0.10},
-                "parallel_bot_helper": {"type": "noul", "noul": 0.90},
+                "assignment_bot": {"type": "noul", "noul": 0.10},
+                "assignment_bot_helper": {"type": "noul", "noul": 0.90},
             }
         }
 
