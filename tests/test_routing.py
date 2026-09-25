@@ -926,6 +926,78 @@ class TestAutonomousRouting(unittest.TestCase):
         asyncio.run(run())
 
 
+class TestUncertainDropInterpolation(unittest.TestCase):
+    """An uncertain drop (low Choice confidence) must not strand a strong
+    Noul claim: the Noul bar interpolates from strict toward relaxed as the
+    drop's own certainty falls. A fully confident drop keeps the chitchat
+    firewall at the strict bar. Live case (2026-09-25 21:28): third-person
+    correction + rhetorical health question -> drop conf=0.28, top Noul 0.53,
+    stranded between the strict bar and the fallback-dispatch path."""
+
+    def _arb(self):
+        from groupconnect.routing.router import AutonomousArbiter
+        cfg = AutonomousConfig({
+            "enabled": True,
+            "roles": {"bot_a": "Domain A", "bot_b": "Domain B"},
+            "classifier": {
+                "engine": "jev",
+                "confidence_threshold": 0.6,
+                "providers": {"typesafe": {"api_key": "dummy_key", "engine": "jev"}},
+            }
+        })
+        return AutonomousArbiter(cfg)
+
+    def _run(self, arb, choice_conf, noul_a, noul_b, with_conf=True):
+        import asyncio
+        from unittest.mock import patch, MagicMock
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        routing_ans = {"choice": "drop"}
+        if with_conf:
+            routing_ans["confidence"] = choice_conf
+        mock_resp.json.return_value = {"answers": {
+            "routing": routing_ans,
+            "assignment_bot_a": {"noul": noul_a},
+            "assignment_bot_b": {"noul": noul_b},
+        }}
+
+        async def go():
+            with patch("httpx.AsyncClient.post", return_value=mock_resp):
+                return await arb.classify("msg", "Alice", "")
+        return asyncio.run(go())
+
+    def test_uncertain_drop_moderate_claim_rescues(self):
+        # Live case: conf=0.30 -> bar = 0.40 + 0.20*0.30 = 0.46; claim 0.53 clears
+        res = self._run(self._arb(), 0.30, 0.20, 0.53)
+        self.assertEqual(res["target_bot"], "bot_b")
+        self.assertEqual(res["target_bots"], ["bot_b"])
+        self.assertEqual(res["urgency"], "wait_silence")  # 4s grace, not immediate
+
+    def test_certain_drop_moderate_claim_stays_silent(self):
+        # Same claim strength, confident drop: bar = 0.40 + 0.20*0.95 = 0.59
+        res = self._run(self._arb(), 0.95, 0.10, 0.55)
+        self.assertEqual(res["target_bot"], "none")
+        self.assertEqual(res["urgency"], "drop")
+
+    def test_full_confidence_drop_keeps_strict_bar(self):
+        # conf=1.0 -> bar == strict (0.60): pre-existing firewall unchanged
+        res = self._run(self._arb(), 1.0, 0.10, 0.59)
+        self.assertEqual(res["urgency"], "drop")
+        res = self._run(self._arb(), 1.0, 0.10, 0.61)
+        self.assertEqual(res["urgency"], "wait_silence")  # existing rescue path
+
+    def test_out_of_range_confidence_is_clamped(self):
+        # conf=1.5 must clamp to 1.0 -> strict bar, no accidental loosening
+        res = self._run(self._arb(), 1.5, 0.10, 0.59)
+        self.assertEqual(res["urgency"], "drop")
+
+    def test_missing_confidence_uses_relaxed_floor(self):
+        # No confidence field: maximum uncertainty -> relaxed bar (0.40)
+        res = self._run(self._arb(), 0.0, 0.10, 0.45, with_conf=False)
+        self.assertEqual(res["target_bot"], "bot_b")
+        self.assertEqual(res["urgency"], "wait_silence")
+
+
 class TestInflightTaskMarker(unittest.IsolatedAsyncioTestCase):
     """Immediate dispatches must surface an in-flight marker in the routing
     context until the bot's reply lands — otherwise same-sender follow-ups
@@ -1024,6 +1096,45 @@ class TestInflightTaskMarker(unittest.IsolatedAsyncioTestCase):
             self.assertIn("[Alice]: 帮我算一下热量", lines[0])
             self.assertIn("@primary_bot", lines[1])
             self.assertIn("not been posted yet", lines[1])
+
+    async def test_engine_context_flattens_and_widens_bot_lines(self):
+        """Bot replies with newlines must render as ONE context line, and bot
+        content must survive far past 120 chars (questions/advice in long
+        replies are the anchors follow-up detection needs). Human entries
+        keep the 120-char form."""
+        import tempfile
+        from groupconnect.core.config import GatewayConfig
+        from groupconnect.core.context import ContextManager
+        from groupconnect.engine import GroupConnectEngine
+
+        engine = GroupConnectEngine(GatewayConfig({
+            "platform": "telegram", "bot_token": "mock_token",
+            "bot_username": "guaguahome_bot", "bot_name": "guaguahome",
+            "allow_open_access": True,
+        }))
+        long_reply = (
+            "开头寒暄。\n\n" + "分析段落，油泼面重油封胃。" * 100 + "\n\n末尾建议：严禁夜宵，多喝温水。"
+        )
+        self.assertGreater(len(long_reply), 1300)  # deep past the old 120-char cliff
+        self.assertLess(len(long_reply), 2000)     # ...but inside the new cap
+        with tempfile.TemporaryDirectory() as tmp:
+            engine.context_mgr = ContextManager(chat_logs_dir=tmp)
+            engine.context_mgr.record_message(
+                -1001234567890, "Alice", "我不是有结石的征兆吗", msg_id=200)
+            engine.context_mgr.record_message(
+                -1001234567890, "Assistant Bot", long_reply, msg_id=201, is_bot_reply=True)
+            ctx = engine._build_routing_context(-1001234567890, 0, 5)
+            lines = ctx.split("\n")
+            # Flattened: exactly one line per entry (no multi-line spill)
+            self.assertEqual(len(lines), 2)
+            self.assertIn("[Alice]: 我不是有结石的征兆吗", lines[0])
+            bot_line = lines[1]
+            self.assertTrue(bot_line.startswith("[Bot Assistant Bot]:"))
+            # Content deep inside a long bot reply is visible to the classifier
+            self.assertIn("末尾建议", bot_line)
+            # Bot entries cap at 2000 chars (plus prefix), not 120
+            self.assertLessEqual(len(bot_line), len("[Bot Assistant Bot]: ") + 2000)
+            self.assertGreater(len(bot_line), len("[Bot Assistant Bot]: ") + 120)
 
 
 if __name__ == "__main__":

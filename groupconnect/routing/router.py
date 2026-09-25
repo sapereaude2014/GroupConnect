@@ -718,12 +718,23 @@ class AutonomousArbiter:
                     noul_prob = float(noul_ans.get("noul", 0.0) or 0.0)
                     noul_results.append((b, noul_prob))
 
-                # --- Dynamic dual threshold (one knob, derived) ---
-                # Choice says drop → strict (prevent false rescue from chitchat)
-                # Choice says respond → relaxed (prevent false silence / '装死')
+                # --- Dynamic threshold (one knob, derived) ---
+                # Choice says respond -> relaxed bar (prevent false silence).
+                # Choice says drop -> the bar scales with the drop's own
+                # certainty: conf=1 keeps the strict bar (chitchat firewall
+                # unchanged), while a low-confidence drop slides toward the
+                # relaxed bar so a strong Noul claim can still rescue it
+                # through the 4s grace window. Tonight's live case: a
+                # third-person correction + rhetorical health question was
+                # dropped at conf=0.28 while Noul scored 0.53 — stranded
+                # between the strict bar and the fallback-dispatch path.
                 strict = self.cfg.confidence_threshold
                 relaxed = self.cfg.confidence_threshold * 2 / 3
-                noul_threshold = strict if choice_urgency == "drop" else relaxed
+                if choice_urgency == "drop":
+                    conf_c = min(max(confidence, 0.0), 1.0)
+                    noul_threshold = relaxed + (strict - relaxed) * conf_c
+                else:
+                    noul_threshold = relaxed
 
                 # Sort descending by score first so candidate_bots preserves score order
                 noul_results.sort(key=lambda x: x[1], reverse=True)

@@ -557,6 +557,14 @@ class GroupConnectEngine:
         can see the full conversation flow — essential for detecting
         replies to bot questions (e.g. '方案一吧' answering a bot's proposal).
 
+        Entries are flattened to single lines (bot replies often contain
+        newlines; multi-line entries would blur who-said-what boundaries),
+        and bot entries keep up to 2000 chars: a bot's questions, advice
+        and options usually live deep inside long replies, and truncating
+        them at 120 chars hides the very anchors follow-up detection needs.
+        Human entries keep the short 120-char form (chitchat is short and
+        cheap; long human instructions are rare).
+
         If an immediate task is still in flight (dispatched, reply not yet
         landed), a synthetic [Bot ...] marker line is appended so the
         classifier knows the sender's task is being processed.
@@ -572,11 +580,15 @@ class GroupConnectEngine:
                 text = (entry.get("text") or "").strip()
                 if not text:
                     continue
+                # Flatten: one entry = one context line (newlines -> spaces)
+                text = text.replace("\r", " ").replace("\n", " ")
+                limit = 2000 if entry.get("is_bot") else 120
+                text = text[:limit]
                 sender = entry.get("sender", "?")
                 if entry.get("is_bot"):
-                    lines.append(f"[Bot {sender}]: {text[:120]}")
+                    lines.append(f"[Bot {sender}]: {text}")
                 else:
-                    lines.append(f"[{sender}]: {text[:120]}")
+                    lines.append(f"[{sender}]: {text}")
             ordered = list(reversed(lines))
             au = getattr(self, "autonomous", None)
             if au is not None:

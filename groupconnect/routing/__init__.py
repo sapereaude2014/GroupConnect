@@ -15,14 +15,16 @@ Jev Classifier: Orthogonal Choice (timing) + Noul (assignment).
   identity, so probabilities never split across bots.
 - Noul (per-bot yes/no): each bot independently evaluates "does this
   message need me to handle it?" — the assignment dimension.
-- Dynamic dual threshold (one knob): when Choice says respond, the Noul
-  gate relaxes to confidence_threshold × 2/3 (e.g. 0.40) to prevent
-  false silences; when Choice says drop, the strict confidence_threshold
-  (e.g. 0.60) guards against chitchat false rescues.
+- Dynamic threshold (one knob): when Choice says respond, the Noul gate
+  relaxes to confidence_threshold × 2/3 (e.g. 0.40) to prevent false
+  silences; when Choice says drop, the bar interpolates by the drop's own
+  certainty — a fully confident drop keeps the strict confidence_threshold
+  (e.g. 0.60, chitchat firewall unchanged), while an uncertain drop slides
+  toward the relaxed bar so strong Noul claims can still rescue it.
 - Layered arbitration: no candidate bots -> true drop; Choice=drop with
   high-confidence Noul claims -> rescue with wait_silence (4s grace for
   humans to speak first); Choice!=drop -> adopt Choice's urgency directly.
-- Threshold note: the Jev path uses the dynamic dual threshold above; the
+- Threshold note: the Jev path uses the dynamic threshold above; the
   LLM path (single JSON output) applies a flat confidence_threshold with
   no relaxation, since it judges bot assignment and timing in one pass.
 
