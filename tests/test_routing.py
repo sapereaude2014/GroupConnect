@@ -578,8 +578,10 @@ class TestAutonomousRouting(unittest.TestCase):
 
             asyncio.run(run())
 
-    def test_jev_classify_choice_immediate_noul_fails_all_drops(self):
-        """When Choice says immediate (e.g. human urgency) but no bot matches Noul, drops safely."""
+    def test_jev_classify_choice_immediate_noul_fails_all_fallback_dispatch(self):
+        """Choice says immediate (human urgency) but no bot matches Noul ->
+        fallback dispatch to the highest-scoring bot with wait_silence grace.
+        (Behavior change vs. pre-fallback: was a silent drop.)"""
         import asyncio
         from unittest.mock import patch, MagicMock
         import tempfile, json
@@ -620,10 +622,11 @@ class TestAutonomousRouting(unittest.TestCase):
             async def run():
                 with patch("httpx.AsyncClient.post", return_value=mock_resp):
                     res = await arb.classify("Hurry up, the taxi is waiting downstairs!", "Alice", "")
-                    self.assertEqual(res["target_bot"], "none")
-                    self.assertEqual(res["target_bots"], [])
-                    self.assertEqual(res["urgency"], "drop")
-                    self.assertEqual(res["confidence"], 0.0)
+                    # Fallback: highest scorer bot_b (0.22) takes it with wait_silence
+                    self.assertEqual(res["target_bot"], "bot_b")
+                    self.assertEqual(res["target_bots"], ["bot_b"])
+                    self.assertEqual(res["urgency"], "wait_silence")
+                    self.assertAlmostEqual(res["confidence"], 0.22)
 
             asyncio.run(run())
 
@@ -803,6 +806,122 @@ class TestAutonomousRouting(unittest.TestCase):
                 self.assertEqual(res["target_bot"], "bot_helper")
                 self.assertEqual(res["urgency"], "immediate")
                 self.assertAlmostEqual(res["confidence"], 0.9)
+
+        asyncio.run(run())
+
+    def test_fallback_dispatch_when_choice_responds_but_nobody_claims(self):
+        """Choice says respond but no bot passes the relaxed Noul threshold ->
+        fallback dispatch to the highest-scoring bot with wait_silence grace.
+        Roles stay naturally scoped; the mechanism closes the coverage."""
+        import asyncio
+        from unittest.mock import patch, MagicMock
+        from groupconnect.routing.router import AutonomousArbiter
+
+        cfg = AutonomousConfig({
+            "enabled": True,
+            "roles": {"bot_a": "Domain A", "bot_b": "Domain B"},
+            "classifier": {
+                "engine": "jev",
+                "confidence_threshold": 0.8,
+                "providers": {"typesafe": {"api_key": "dummy_key", "engine": "jev"}},
+            }
+        })
+        arb = AutonomousArbiter(cfg)
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "answers": {
+                "routing": {"choice": "immediate", "confidence": 0.85},
+                "assignment_bot_a": {"noul": 0.31},
+                "assignment_bot_b": {"noul": 0.05},
+            }
+        }
+
+        async def run():
+            with patch("httpx.AsyncClient.post", return_value=mock_resp):
+                res = await arb.classify("聊聊架构", "Alice", "")
+                # relaxed threshold = 0.8 * 2/3 ≈ 0.53; nobody claims
+                # fallback: highest scorer bot_a (0.31) with wait_silence grace
+                self.assertEqual(res["target_bot"], "bot_a")
+                self.assertEqual(res["target_bots"], ["bot_a"])
+                self.assertEqual(res["urgency"], "wait_silence")
+                self.assertAlmostEqual(res["confidence"], 0.31)
+
+        asyncio.run(run())
+
+    def test_fallback_picks_highest_scorer_not_config_order(self):
+        """Fallback dispatch must pick the highest-scoring bot by score order,
+        not the first bot in the roles dict."""
+        import asyncio
+        from unittest.mock import patch, MagicMock
+        from groupconnect.routing.router import AutonomousArbiter
+
+        cfg = AutonomousConfig({
+            "enabled": True,
+            "roles": {"bot_a": "Domain A", "bot_b": "Domain B"},
+            "classifier": {
+                "engine": "jev",
+                "confidence_threshold": 0.8,
+                "providers": {"typesafe": {"api_key": "dummy_key", "engine": "jev"}},
+            }
+        })
+        arb = AutonomousArbiter(cfg)
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "answers": {
+                "routing": {"choice": "wait", "confidence": 0.7},
+                "assignment_bot_a": {"noul": 0.05},
+                "assignment_bot_b": {"noul": 0.20},
+            }
+        }
+
+        async def run():
+            with patch("httpx.AsyncClient.post", return_value=mock_resp):
+                res = await arb.classify("随便聊聊", "Alice", "")
+                self.assertEqual(res["target_bot"], "bot_b")
+                self.assertEqual(res["urgency"], "wait_silence")
+                self.assertAlmostEqual(res["confidence"], 0.2)
+
+        asyncio.run(run())
+
+    def test_choice_drop_with_no_claim_stays_silent_no_fallback(self):
+        """Couple-chat firewall: Choice says drop AND nobody claims -> true
+        silence. Fallback must NEVER fire when Choice says drop."""
+        import asyncio
+        from unittest.mock import patch, MagicMock
+        from groupconnect.routing.router import AutonomousArbiter
+
+        cfg = AutonomousConfig({
+            "enabled": True,
+            "roles": {"bot_a": "Domain A", "bot_b": "Domain B"},
+            "classifier": {
+                "engine": "jev",
+                "confidence_threshold": 0.8,
+                "providers": {"typesafe": {"api_key": "dummy_key", "engine": "jev"}},
+            }
+        })
+        arb = AutonomousArbiter(cfg)
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "answers": {
+                "routing": {"choice": "drop", "confidence": 0.9},
+                "assignment_bot_a": {"noul": 0.50},
+                "assignment_bot_b": {"noul": 0.10},
+            }
+        }
+
+        async def run():
+            with patch("httpx.AsyncClient.post", return_value=mock_resp):
+                res = await arb.classify("晚上咱吃啥", "Alice", "")
+                # strict threshold 0.8 -> nobody claims; Choice drop -> silence
+                self.assertEqual(res["target_bot"], "none")
+                self.assertEqual(res["target_bots"], [])
+                self.assertEqual(res["urgency"], "drop")
 
         asyncio.run(run())
 

@@ -632,9 +632,15 @@ class AutonomousArbiter:
         1. Extract Noul scores for all bots.
         2. Dynamic threshold: Choice says drop → strict (confidence_threshold);
            Choice says respond → relaxed (confidence_threshold × 2/3).
-        3. No candidate bots → drop (true silence or human-only urgency).
+        3. No candidate bots + Choice says drop (or no bots configured) → true silence.
         4. Choice drop + candidates exist → rescue with wait_silence (4s grace).
         5. Choice not drop + candidates exist → use Choice's urgency directly.
+        6. Choice not drop + no candidates → fallback dispatch: the highest-scoring
+           bot takes it with wait_silence (4s grace). Roles stay naturally scoped;
+           the arbiter mechanism — not the role text — closes the coverage, so a
+           Choice 'someone should answer' verdict is never silently lost. The
+           grace window gives humans 4s to reply first, which is the anti-misfire
+           safety for these edge messages.
         """
         criteria, jev_map, group_description = self._jev_criteria()
         assignment_templates = self._jev_assignment_templates()
@@ -725,16 +731,31 @@ class AutonomousArbiter:
 
                 # --- Final decision (layered arbitration) ---
                 if not candidate_bots:
-                    # No bot claims this message → true silence
-                    logger.info(
-                        f"[ROUTING] No bot claimed message "
-                        f"(noul_threshold={noul_threshold:.2f}, "
-                        f"scores={{{', '.join(f'{b}:{p:.2f}' for b, p in noul_results)}}})."
-                    )
-                    target_bot = "none"
-                    target_bots = []
-                    urgency = "drop"
-                    confidence = 0.0
+                    if choice_urgency == "drop" or not noul_results:
+                        # Both gates say silence (or no bots configured) → true silence
+                        logger.info(
+                            f"[ROUTING] No bot claimed message "
+                            f"(noul_threshold={noul_threshold:.2f}, "
+                            f"scores={{{', '.join(f'{b}:{p:.2f}' for b, p in noul_results)}}})."
+                        )
+                        target_bot = "none"
+                        target_bots = []
+                        urgency = "drop"
+                        confidence = 0.0
+                    else:
+                        # Choice says respond but nobody claimed → fallback dispatch:
+                        # the highest-scoring bot takes it with a wait_silence grace
+                        # window (4s social buffer; a human reply cancels the dispatch).
+                        target_bot = noul_results[0][0]
+                        target_bots = [target_bot]
+                        urgency = "wait_silence"
+                        confidence = noul_results[0][1]
+                        logger.info(
+                            f"[ROUTING] No bot claimed message but Choice said "
+                            f"'{choice_urgency}'; fallback dispatch to {target_bot} "
+                            f"with wait_silence grace (top score {confidence:.2f} "
+                            f"below threshold {noul_threshold:.2f})."
+                        )
                 elif choice_urgency == "drop":
                     # Domain expert overrides the global screen: rescue with 4s grace
                     target_bots = candidate_bots
