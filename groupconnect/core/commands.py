@@ -75,7 +75,8 @@ class CustomCommandDispatcher:
                 text=text,
                 msg_id=sent_id or 0,
                 is_bot_reply=True,
-                bot_username=self.bot_username
+                bot_username=self.bot_username,
+                reply_to_msg_id=reply_to_msg_id or 0
             )
         except Exception as e:
             logger.warning(f"[CUSTOM_CMD] Failed to record command reply in history: {e}")

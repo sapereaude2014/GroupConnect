@@ -162,7 +162,8 @@ class ContextManager:
         is_bot_reply: bool = False,
         reply_preview: str = "",
         attachments: Optional[List[Dict[str, Any]]] = None,
-        bot_username: str = ""
+        bot_username: str = "",
+        reply_to_msg_id: Union[int, str] = 0
     ) -> Dict[str, Any]:
         buf = self.get_buffer(chat_id)
         now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -174,6 +175,7 @@ class ContextManager:
             "sender": sender_name,
             "text": text,
             "reply_info": reply_info,
+            "reply_to_msg_id": reply_to_msg_id or 0,
             "is_bot": is_bot_reply,
             "bot_username": bot_username,
             "attachments": attachments or []

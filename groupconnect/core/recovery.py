@@ -105,9 +105,98 @@ class ResumeManager:
                 if allowed and (chat_id not in allowed and str(chat_id) not in {str(x) for x in allowed}):
                     continue
 
-                # Backward-scan with seen_bot tracking:
-                # When we encounter a human message with seen_bot=True, it was answered;
-                # reset seen_bot and continue looking for an older unanswered human message.
+                # Watermark scan: locate the newest bot reply that records which human
+                # message it answered (reply_to_msg_id). That quoted message is the
+                # watermark — everything the conversation has already covered up to and
+                # including it is settled. Human messages AFTER the watermark (and
+                # inside the freshness window) are unanswered resume candidates.
+                # Bot replies without reply_to_msg_id (pre-linkage data / fast-lane
+                # receipts) are skipped: the newest LINKED reply wins. If the buffer
+                # has no linked replies at all, fall back to the legacy positional
+                # backward scan so old deployments keep their previous behavior.
+                watermark_idx = None
+                for i in range(len(buf) - 1, -1, -1):
+                    entry = buf[i]
+                    if not entry.get("is_bot"):
+                        continue
+                    reply_target = str(entry.get("reply_to_msg_id") or "")
+                    if reply_target and reply_target != "0":
+                        for j in range(len(buf)):
+                            if (str(buf[j].get("msg_id", "")) == reply_target
+                                    and not buf[j].get("is_bot")):
+                                watermark_idx = j
+                                break
+                        break  # newest linked reply found — stop scanning
+
+                if watermark_idx is not None:
+                    # New path: collect every human message after the watermark
+                    # (oldest first, so the coalescer puts the LATEST message into
+                    # Current Query downstream).
+                    scan_start = watermark_idx + 1
+                    candidates = []
+                    for i in range(scan_start, len(buf)):
+                        entry = buf[i]
+                        if entry.get("is_bot"):
+                            continue
+                        if not str(entry.get("text", "")).strip():
+                            continue
+                        try:
+                            msg_time = datetime.strptime(str(entry.get("time", "")), "%Y-%m-%d %H:%M:%S")
+                        except ValueError:
+                            continue
+                        if not (0 <= time.time() - msg_time.timestamp() <= window):
+                            continue
+                        candidates.append(entry)
+
+                    if not candidates:
+                        continue
+
+                    for last in candidates:
+                        raw = str(last.get("text", ""))
+                        msg_id = last.get("msg_id", 0)
+                        msg_key = f"{chat_id}:{msg_id}:{raw[:40]}"
+
+                        # Poison message quarantine check
+                        retries = self._retry_counts.get(msg_key, 0)
+                        if retries >= self.max_retries:
+                            if msg_key not in self._poison_quarantine:
+                                logger.error(
+                                    f"[RESUME] Poison message quarantined in chat {chat_id} "
+                                    f"(retried {retries} times without completion): '{raw[:40]}'. Skipping."
+                                )
+                                self._poison_quarantine.add(msg_key)
+                                self._save_state()
+                            continue
+
+                        self._retry_counts[msg_key] = retries + 1
+                        self._save_state()
+
+                        try:
+                            chat_type = "private" if int(chat_id) > 0 else "group"
+                        except (TypeError, ValueError):
+                            chat_type = "group"
+
+                        is_trig = chat_type == "private" or f"@{self.bot_username}".lower() in raw.lower()
+                        if not is_trig and raw.startswith("/"):
+                            cmd, target_bot, _ = parse_bot_command(raw, self.bot_username)
+                            is_trig = bool(cmd and (target_bot is None or target_bot.lower() == self.bot_username.lower()))
+
+                        inbound = InboundMessage(
+                            chat_id=chat_id,
+                            chat_type=chat_type,
+                            msg_id=msg_id,
+                            sender_name=str(last.get("sender", "")),
+                            from_user={},
+                            text=raw,
+                            is_triggered=is_trig
+                        )
+                        resumable.append((chat_id, inbound))
+                        logger.info(
+                            f"[RESUME] Re-dispatching unanswered message in chat {chat_id}: '{raw[:30]}'"
+                        )
+                    continue
+
+                # Legacy fallback: positional backward scan (pre-linkage data).
                 last_human_idx = None
                 seen_bot = False
                 for i in range(len(buf) - 1, -1, -1):

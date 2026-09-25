@@ -117,7 +117,8 @@ class OutboundDelivery:
             text=clean_reply_text,
             msg_id=sent_msg_id,
             is_bot_reply=True,
-            bot_username=self.bot_username
+            bot_username=self.bot_username,
+            reply_to_msg_id=reply_to_msg_id or 0
         )
 
         # Broadcast via relay
