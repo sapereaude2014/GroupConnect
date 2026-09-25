@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import re
+import time
 from typing import Any, Awaitable, Callable, Dict, Optional, Tuple, Union
 
 import httpx
@@ -905,6 +906,13 @@ class AutonomousController:
         self.relay = relay
         self.observer = AutonomousObserver(self.my_bot, cfg, dispatch) if dispatch else None
         self.is_arbiter = (self.my_bot == cfg.arbiter_bot)
+        # In-flight immediate tasks: chat_id -> {sender, msg_id, bot, ts}.
+        # Feeds a synthetic context line so the classifier knows a dispatched
+        # task is still being processed (its reply has not landed in the
+        # buffer yet) — otherwise follow-ups from the same sender read like
+        # human small talk and get dropped.
+        self._inflight: Dict[Any, Dict[str, Any]] = {}
+        self._inflight_ttl: float = 600.0
         self._context_summary_fn = context_summary_fn
         self.arbiter = AutonomousArbiter(cfg, context_summary_fn) if self.is_arbiter else None
         if cfg.enabled:
@@ -925,6 +933,38 @@ class AutonomousController:
             return
         if self.observer is not None:
             self.observer.on_decision(event)
+
+    def inflight_marker(self, chat_id: Any, buffer: Any) -> str:
+        """Synthetic context line for a still-running immediate task, or "".
+
+        Cleared once the target bot has spoken after the dispatched msg_id
+        (reply landed) or after a TTL fallback (lost reply / crash safety).
+        """
+        rec = self._inflight.get(chat_id)
+        if rec is None:
+            return ""
+        if time.time() - rec.get("ts", 0.0) > self._inflight_ttl:
+            self._inflight.pop(chat_id, None)
+            return ""
+        try:
+            for entry in reversed(buffer):
+                if not entry.get("is_bot"):
+                    continue
+                mid, rid = entry.get("msg_id", 0), rec.get("msg_id", 0)
+                try:
+                    newer = int(mid) > int(rid)
+                except (TypeError, ValueError):
+                    newer = str(mid) != str(rid)
+                if newer:
+                    self._inflight.pop(chat_id, None)
+                    return ""
+        except Exception:
+            pass
+        return (
+            f"[Bot @{rec.get('bot', '')}]: (currently processing "
+            f"{rec.get('sender', '?')}'s last task request; the reply has "
+            f"not been posted yet)"
+        )
 
     def chat_allowed(self, chat_id: Any) -> bool:
         if self.cfg.allowed_chat_ids:
@@ -982,6 +1022,14 @@ class AutonomousController:
             "decide_at": _dt.datetime.now().isoformat(timespec="seconds"),
             **decision,
         }
+        # Track immediate dispatches as in-flight tasks for the routing context.
+        if decision.get("urgency") == "immediate" and decision.get("target_bots"):
+            self._inflight[msg.chat_id] = {
+                "sender": msg.sender_name,
+                "msg_id": msg.msg_id,
+                "bot": decision["target_bots"][0],
+                "ts": time.time(),
+            }
         # Publish once: IPC broadcast to peers + local symmetric execution.
         if self.relay is not None:
             try:

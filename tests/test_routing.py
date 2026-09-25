@@ -807,6 +807,106 @@ class TestAutonomousRouting(unittest.TestCase):
         asyncio.run(run())
 
 
+class TestInflightTaskMarker(unittest.IsolatedAsyncioTestCase):
+    """Immediate dispatches must surface an in-flight marker in the routing
+    context until the bot's reply lands — otherwise same-sender follow-ups
+    ('再加上两个鸡蛋') read like human small talk and get dropped."""
+
+    def setUp(self):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+        self.SimpleNamespace = SimpleNamespace
+        self.cfg = AutonomousConfig({
+            "enabled": True,
+            "arbiter_bot": "primary_bot",
+            "ipc_dir": "/tmp/test_ipc",
+            "aliases": {"primary_bot": ["assistant"]},
+            "classifier": {
+                "confidence_threshold": 0.8,
+                "providers": {"typesafe": {"engine": "jev", "api_key": "dummy"}},
+            },
+            "roles": {"primary_bot": "Home automation and data lookup."},
+            "allowed_chat_ids": [-1001234567890],
+        })
+        self.ctrl = AutonomousController(
+            bot_username="primary_bot",
+            cfg=self.cfg,
+            relay=MagicMock(),
+            dispatch=lambda d: None,
+            context_summary_fn=lambda c, m, w: "",
+        )
+
+    def _msg(self, text, msg_id=200, sender="Alice"):
+        return self.SimpleNamespace(
+            chat_id=-1001234567890, chat_type="group", msg_id=msg_id,
+            sender_name=sender, from_user={"is_bot": False}, text=text,
+            is_bot_relay=False, attachments=None,
+        )
+
+    async def test_immediate_dispatch_records_inflight_marker(self):
+        # Alias bypass -> immediate decision, zero classifier calls
+        await self.ctrl.evaluate_and_publish(self._msg("assistant 帮我算一下热量"))
+        marker = self.ctrl.inflight_marker(-1001234567890, [])
+        self.assertIn("@primary_bot", marker)
+        self.assertIn("Alice", marker)
+        self.assertIn("not been posted yet", marker)
+
+    async def test_drop_and_wait_do_not_record_inflight(self):
+        from unittest.mock import AsyncMock, patch
+        # Noise text -> L0 drop, early return before any recording
+        await self.ctrl.evaluate_and_publish(self._msg("好的"))
+        self.assertEqual(self.ctrl._inflight, {})
+        # Classifier wait_silence decision -> not recorded
+        with patch.object(self.ctrl.arbiter, "classify", AsyncMock(return_value={
+            "target_bot": "primary_bot", "target_bots": ["primary_bot"],
+            "urgency": "wait_silence", "confidence": 0.7, "source": "classifier",
+        })):
+            await self.ctrl.evaluate_and_publish(self._msg("帮我看看周末天气"))
+        self.assertEqual(self.ctrl._inflight, {})
+
+    async def test_bot_reply_lands_clears_marker(self):
+        await self.ctrl.evaluate_and_publish(self._msg("assistant 查天气", msg_id=100))
+        self.assertTrue(self.ctrl.inflight_marker(-1001234567890, []))
+        # A bot message after the dispatched msg_id -> task answered
+        buffer = [{"is_bot": True, "msg_id": 101, "sender": "Bot", "text": "done"}]
+        self.assertEqual(self.ctrl.inflight_marker(-1001234567890, buffer), "")
+        # Cleared permanently (record popped)
+        self.assertEqual(self.ctrl.inflight_marker(-1001234567890, []), "")
+
+    async def test_inflight_marker_expires_after_ttl(self):
+        import time as _time
+        await self.ctrl.evaluate_and_publish(self._msg("assistant 查天气", msg_id=100))
+        self.ctrl._inflight[-1001234567890]["ts"] = _time.time() - 601
+        self.assertEqual(self.ctrl.inflight_marker(-1001234567890, []), "")
+        self.assertNotIn(-1001234567890, self.ctrl._inflight)
+
+    async def test_engine_context_appends_marker(self):
+        import tempfile
+        import time as _time
+        from groupconnect.core.config import GatewayConfig
+        from groupconnect.core.context import ContextManager
+        from groupconnect.engine import GroupConnectEngine
+
+        engine = GroupConnectEngine(GatewayConfig({
+            "platform": "telegram", "bot_token": "mock_token",
+            "bot_username": "guaguahome_bot", "bot_name": "guaguahome",
+            "allow_open_access": True,
+        }))
+        with tempfile.TemporaryDirectory() as tmp:
+            engine.context_mgr = ContextManager(chat_logs_dir=tmp)
+            engine.context_mgr.record_message(-1001234567890, "Alice", "帮我算一下热量", msg_id=200)
+            engine.autonomous = self.ctrl
+            self.ctrl._inflight[-1001234567890] = {
+                "sender": "Alice", "msg_id": 200, "bot": "primary_bot", "ts": _time.time(),
+            }
+            ctx = engine._build_routing_context(-1001234567890, 0, 5)
+            lines = ctx.split("\n")
+            self.assertEqual(len(lines), 2)
+            self.assertIn("[Alice]: 帮我算一下热量", lines[0])
+            self.assertIn("@primary_bot", lines[1])
+            self.assertIn("not been posted yet", lines[1])
+
+
 if __name__ == "__main__":
     unittest.main()
 

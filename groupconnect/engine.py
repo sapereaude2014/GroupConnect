@@ -556,6 +556,10 @@ class GroupConnectEngine:
         Bot messages are included with a [Bot <name>] prefix so the model
         can see the full conversation flow — essential for detecting
         replies to bot questions (e.g. '方案一吧' answering a bot's proposal).
+
+        If an immediate task is still in flight (dispatched, reply not yet
+        landed), a synthetic [Bot ...] marker line is appended so the
+        classifier knows the sender's task is being processed.
         """
         try:
             buf = self.context_mgr.get_buffer(chat_id)
@@ -573,7 +577,13 @@ class GroupConnectEngine:
                     lines.append(f"[Bot {sender}]: {text[:120]}")
                 else:
                     lines.append(f"[{sender}]: {text[:120]}")
-            return "\n".join(reversed(lines))
+            ordered = list(reversed(lines))
+            au = getattr(self, "autonomous", None)
+            if au is not None:
+                marker = au.inflight_marker(chat_id, buf)
+                if marker:
+                    ordered.append(marker)
+            return "\n".join(ordered)
         except Exception as e:
             logger.warning(f"[ROUTING] context build error: {e}")
             return ""
