@@ -29,10 +29,12 @@ DEFAULT_GROUP_DESCRIPTION = (
     "Private group chat. Configured assistant bots handle different specialized tasks."
 )
 DEFAULT_IMMEDIATE_CRITERIA = (
-    "Reply to {bot}'s earlier question/offer, or an imperative instruction matching: {role}"
+    "A direct command, explicit task request, or a reply answering a bot's earlier "
+    "question/offer — the sender expects an immediate bot response."
 )
 DEFAULT_WAIT_CRITERIA = (
-    "A question needing data, information, or recommendations matching: {role}"
+    "An open question, data lookup, or recommendation request directed at the "
+    "assistant bots — humans should get a chance to reply first."
 )
 DEFAULT_DROP_CRITERIA = (
     "Interpersonal conversation between group members not directed at any bot "
@@ -57,20 +59,24 @@ DEFAULT_RULE_TEMPLATES: Dict[str, str] = {
 DEFAULT_ROUTING_RULES_MD = """# Autonomous Routing Decision Rules
 Group Context: {group}
 
+YOUR SCOPE — You judge ONLY the response TIMING for this message (immediate / wait /
+drop). You do NOT decide which bot responds: each bot's eligibility is evaluated
+independently by separate responsibility questions. Focus purely on social
+context and urgency.
+
 Decision Rules (Evaluate in order, first match wins):
 1. BOT DIALOGUE CONTINUATION & DIRECT COMMAND (urgency = "immediate"):
-   - If recent context shows a Bot asked a question, offered options, or proposed a plan, and the current message is an acknowledgment, confirmation, decision (e.g. "option A", "okay", "yes", "confirmed"), or a follow-up question/feedback directed to that bot -> Assign to THAT bot immediately.
+   - If recent context shows a bot asked a question, offered options, or proposed a
+     plan, and the current message is an acknowledgment, confirmation, decision
+     (e.g. "option A", "okay", "yes", "confirmed"), or a follow-up directed to
+     that bot -> immediate.
    - Direct instruction criteria: {immediate}
 
-2. INTERPERSONAL CHITCHAT / SILENCE (urgency = "drop", target_bot = "none"):
+2. INTERPERSONAL CHITCHAT / SILENCE (urgency = "drop"):
    - {drop}
 
 3. OBJECTIVE INQUIRY & RECOMMENDATION (urgency = "wait_silence"):
-   - {wait} (leaves social space for humans to reply first).
-
-4. MULTI-BOT DISPATCH vs PARALLEL:
-   - DISPATCH: One bot is asked to handle a task involving another bot -> Assign to the DISPATCHER only.
-   - PARALLEL: Multiple bots should respond simultaneously -> Each bot's Noul independently determines if it should participate.
+   - {wait}
 """
 
 DEFAULT_LLM_PROMPT_TEMPLATE = """You are the single arbiter of a private group chat.
