@@ -262,9 +262,6 @@ class AutonomousConfig:
         self.confidence_threshold: float = float(
             clf.get("confidence_threshold", cfg.get("confidence_threshold", 0.60))
         )
-        self.parallel_threshold: float = float(
-            clf.get("parallel_threshold", cfg.get("parallel_threshold", self.confidence_threshold))
-        )
         self.daily_budget: int = int(
             clf.get("daily_budget", cfg.get("daily_budget", 800))
         )
@@ -581,35 +578,47 @@ class AutonomousArbiter:
 
     def _jev_parallel_templates(self) -> Dict[str, str]:
         t = self.cfg.rule_templates
-        parallel = t.get("parallel", DEFAULT_PARALLEL_CRITERIA)
+        assignment = t.get("parallel", DEFAULT_PARALLEL_CRITERIA)
         templates = {}
         for bot, role in self.cfg.roles.items():
-            templates[bot] = parallel.replace("{bot}", bot).replace("{role}", role)
+            templates[bot] = assignment.replace("{bot}", bot).replace("{role}", role)
         return templates
 
     def _jev_criteria(self) -> Tuple[dict, dict, str]:
-        """Builds Jev choice criteria + map + group description from the
-        rules-file templates (single source of truth); falls back to module
-        defaults when a template is missing. Code only assembles, never words."""
+        """Builds Jev Choice criteria (3-option: immediate/wait/drop) + map + group.
+        Choice is now orthogonal to bot identity — it only judges timing/social context.
+        Bot assignment is fully delegated to per-bot Noul questions."""
         t = self.cfg.rule_templates
-        imm = t.get("immediate", DEFAULT_IMMEDIATE_CRITERIA)
-        wait = t.get("wait", DEFAULT_WAIT_CRITERIA)
-        drop = t.get("drop", DEFAULT_DROP_CRITERIA)
         group = t.get("group", DEFAULT_GROUP_DESCRIPTION)
-        criteria, jev_map = {}, {}
-        for bot, role in self.cfg.roles.items():
-            criteria[f"{bot}_immediate"] = imm.replace("{bot}", bot).replace("{role}", role)
-            criteria[f"{bot}_wait"] = wait.replace("{bot}", bot).replace("{role}", role)
-            jev_map[f"{bot}_immediate"] = (bot, "immediate")
-            jev_map[f"{bot}_wait"] = (bot, "wait_silence")
-        criteria["none_drop"] = drop
-        jev_map["none_drop"] = ("none", "drop")
+        criteria = {
+            "immediate": t.get("immediate", DEFAULT_IMMEDIATE_CRITERIA),
+            "wait": t.get("wait", DEFAULT_WAIT_CRITERIA),
+            "drop": t.get("drop", DEFAULT_DROP_CRITERIA),
+        }
+        jev_map = {
+            "immediate": ("none", "immediate"),
+            "wait": ("none", "wait_silence"),
+            "drop": ("none", "drop"),
+        }
         return criteria, jev_map, group
 
     async def _classify_jev(self, text: str, sender: str, context: str, alias_hint: str, drop: dict) -> Dict[str, Any]:
-        """Jev (TypeSafe) classifier: structured Choice + per-bot Noul questions."""
+        """Jev (TypeSafe) classifier: orthogonal Choice (timing) + Noul×N (assignment).
+
+        Choice is a fixed 3-option question (immediate/wait/drop) that only
+        evaluates social context and urgency — independent of bot identity.
+        Each bot gets an independent Noul question: 'does this message need {bot}?'
+
+        Decision logic (layered arbitration, ~15 lines, zero hacks):
+        1. Extract Noul scores for all bots.
+        2. Dynamic threshold: Choice says drop → strict (confidence_threshold);
+           Choice says respond → relaxed (confidence_threshold × 2/3).
+        3. No candidate bots → drop (true silence or human-only urgency).
+        4. Choice drop + candidates exist → rescue with wait_silence (4s grace).
+        5. Choice not drop + candidates exist → use Choice's urgency directly.
+        """
         criteria, jev_map, group_description = self._jev_criteria()
-        parallel_templates = self._jev_parallel_templates()
+        assignment_templates = self._jev_parallel_templates()
 
         state = {
             "group": group_description,
@@ -625,15 +634,14 @@ class AutonomousArbiter:
                 "criteria": criteria,
             }
         }
-        # Multi-bot perception: add per-bot Noul questions for parallel collaboration detection
-        if len(self.cfg.roles) > 1:
-            for bot in self.cfg.roles:
-                p_inst = parallel_templates.get(bot)
-                if p_inst:
-                    questions[f"parallel_{bot}"] = {
-                        "type": "noul",
-                        "instructions": p_inst,
-                    }
+        # Per-bot Noul: 'does this message need {bot} to handle it?'
+        for bot in self.cfg.roles:
+            p_inst = assignment_templates.get(bot)
+            if p_inst:
+                questions[f"parallel_{bot}"] = {
+                    "type": "noul",
+                    "instructions": p_inst,
+                }
 
         api_root = getattr(self.cfg, "base_url", "") or "https://api.typesafe.ai/v1"
         url = api_root if api_root.endswith("/systemone") else f"{api_root}/systemone"
@@ -669,71 +677,49 @@ class AutonomousArbiter:
                 logger.warning(f"[ROUTING] Jev exhausted retries; fail-closed drop.")
                 return drop
             answers = res.json().get("answers", {})
+
+            # --- Choice: timing/social context (orthogonal to bot identity) ---
             routing_ans = answers.get("routing", {})
-            choice = routing_ans.get("choice", "none_drop")
+            choice_key = routing_ans.get("choice", "drop")
             confidence = float(routing_ans.get("confidence", 0.0) or 0.0)
-            target_bot, urgency = jev_map.get(choice, ("none", "drop"))
-            probs = routing_ans.get("probabilities", {})
+            _, choice_urgency = jev_map.get(choice_key, ("none", "drop"))
 
-            # Marginal probability aggregation across immediate & wait per bot:
-            # Prevents probability split between immediate/wait from causing false drops.
-            if probs:
-                bot_probs = {b: 0.0 for b in self.cfg.roles.keys()}
-                none_prob = float(probs.get("none_drop", 0.0) or 0.0)
-                for k, p in probs.items():
-                    if k in jev_map:
-                        mapped_bot, _ = jev_map[k]
-                        if mapped_bot in bot_probs:
-                            bot_probs[mapped_bot] += float(p or 0.0)
-
-                best_bot, best_bot_prob = max(bot_probs.items(), key=lambda x: x[1])
-                if best_bot_prob >= self.cfg.confidence_threshold and best_bot_prob > none_prob:
-                    target_bot = best_bot
-                    confidence = best_bot_prob
-                    p_imm = float(probs.get(f"{best_bot}_immediate", 0.0) or 0.0)
-                    p_wait = float(probs.get(f"{best_bot}_wait", 0.0) or 0.0)
-                    urgency = "immediate" if p_imm >= p_wait else "wait_silence"
-                elif none_prob >= self.cfg.confidence_threshold or best_bot_prob < self.cfg.confidence_threshold:
-                    target_bot = "none"
-                    urgency = "drop"
-                    confidence = max(none_prob, 1.0 - best_bot_prob)
-
-            # Step 1: Extract Noul parallel results for ALL bots BEFORE drop check.
-            # This allows Noul to rescue a Choice drop when the sender explicitly
-            # wants multiple bots to respond together (e.g. "you two both look at this").
-            noul_results: list = []  # (bot, noul_prob) pairs, threshold-filtered
+            # --- Noul: per-bot assignment (domain experts) ---
+            noul_results: list = []  # (bot, prob) pairs
             for b in self.cfg.roles:
                 noul_ans = answers.get(f"parallel_{b}", {})
                 noul_prob = float(noul_ans.get("noul", 0.0) or 0.0)
-                if noul_prob >= self.cfg.parallel_threshold:
-                    noul_results.append((b, noul_prob))
-            noul_bots = [b for b, _ in noul_results]
+                noul_results.append((b, noul_prob))
 
-            # Step 2: Determine primary bot and urgency via combined Choice + Noul
-            choice_ok = (
-                urgency != "drop"
-                and confidence >= self.cfg.confidence_threshold
-                and target_bot != "none"
-            )
+            # --- Dynamic dual threshold (one knob, derived) ---
+            # Choice says drop → strict (prevent false rescue from chitchat)
+            # Choice says respond → relaxed (prevent false silence / '装死')
+            strict = self.cfg.confidence_threshold
+            relaxed = self.cfg.confidence_threshold * 2 / 3
+            noul_threshold = strict if choice_urgency == "drop" else relaxed
 
-            if choice_ok:
-                # Choice succeeded: use Choice's primary, Noul adds parallel co-respondents
-                target_bots = [target_bot]
-                for b in noul_bots:
-                    if b != target_bot:
-                        target_bots.append(b)
-            elif noul_bots:
-                # Choice dropped but Noul detected explicit parallel intent -> rescue
-                target_bots = list(noul_bots)
-                noul_results.sort(key=lambda x: x[1], reverse=True)
-                target_bot = noul_results[0][0]
-                urgency = "immediate"
-                confidence = noul_results[0][1]
-            else:
-                # Neither Choice nor Noul found anything -> fail-closed drop
+            candidate_bots = [b for b, p in noul_results if p >= noul_threshold]
+
+            # --- Final decision (layered arbitration, zero special-case hacks) ---
+            if not candidate_bots:
+                # No bot claims this message → true silence
                 target_bot = "none"
                 target_bots = []
                 urgency = "drop"
+            elif choice_urgency == "drop":
+                # Domain expert overrides global粗筛: rescue with 4s grace
+                target_bots = candidate_bots
+                noul_results.sort(key=lambda x: x[1], reverse=True)
+                target_bot = noul_results[0][0]
+                urgency = "wait_silence"
+                confidence = noul_results[0][1]
+            else:
+                # Both gates passed: use Choice's timing directly
+                target_bots = candidate_bots
+                noul_results.sort(key=lambda x: x[1], reverse=True)
+                target_bot = noul_results[0][0]
+                urgency = choice_urgency
+                confidence = noul_results[0][1]
 
             decision = {
                 "target_bot": target_bot,

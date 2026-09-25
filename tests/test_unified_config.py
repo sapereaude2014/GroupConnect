@@ -122,7 +122,6 @@ class TestUnifiedConfig(unittest.TestCase):
                 "zero_at": {
                     "enabled": True,
                     "confidence_threshold": 0.6,
-                    "parallel_threshold": 0.65,
                     "classifier": {
                         "api_key": "${GC_CLF_KEY}",
                     },
@@ -136,13 +135,11 @@ class TestUnifiedConfig(unittest.TestCase):
                 # 1. Load via GatewayConfig
                 gcfg = GatewayConfig.from_file(tmp_path, bot_name="bot_a")
                 self.assertAlmostEqual(gcfg.autonomous_config.confidence_threshold, 0.6)
-                self.assertAlmostEqual(gcfg.autonomous_config.parallel_threshold, 0.65)
                 self.assertEqual(gcfg.autonomous_config.api_key, "test_clf_secret")
 
                 # 2. Load directly via AutonomousConfig(tmp_path)
                 acfg = AutonomousConfig(tmp_path)
                 self.assertAlmostEqual(acfg.confidence_threshold, 0.6)
-                self.assertAlmostEqual(acfg.parallel_threshold, 0.65)
                 self.assertEqual(acfg.api_key, "test_clf_secret")
                 self.assertIn("bot_a_user", acfg.roles)
                 self.assertIn("小A", acfg.aliases["bot_a_user"])

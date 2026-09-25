@@ -26,7 +26,6 @@ class TestAutonomousRouting(unittest.TestCase):
             "classifier": {
                 "active": "typesafe",
                 "confidence_threshold": 0.8,
-                "parallel_threshold": 0.6,
                 "daily_budget": 800,
                 "providers": {
                     "typesafe": {
@@ -223,11 +222,11 @@ class TestAutonomousRouting(unittest.TestCase):
         })
         arb = AutonomousArbiter(cfg)
         criteria, jev_map, group = arb._jev_criteria()
-        self.assertEqual(criteria["bot_a_immediate"], "IMM bot_a|RoleA")
-        self.assertEqual(criteria["bot_a_wait"], "WAIT bot_a")
-        self.assertEqual(criteria["none_drop"], "DROP_CUSTOM")
+        self.assertEqual(criteria["immediate"], "IMM {bot}|{role}")
+        self.assertEqual(criteria["wait"], "WAIT {bot}")
+        self.assertEqual(criteria["drop"], "DROP_CUSTOM")
         self.assertEqual(group, "GRP_CUSTOM")
-        self.assertEqual(jev_map["none_drop"], ("none", "drop"))
+        self.assertEqual(jev_map["drop"], ("none", "drop"))
         # LLM & Jev instructions must perform true in-place replacement (default wording gone)
         instructions = arb._load_rules_instructions()
         self.assertIn("DROP_CUSTOM", instructions)
@@ -243,12 +242,8 @@ class TestAutonomousRouting(unittest.TestCase):
         # Config with no custom rules -> built-in defaults kick in
         arb = AutonomousArbiter(self.cfg)
         criteria, _, _ = arb._jev_criteria()
-        self.assertEqual(criteria["none_drop"], DEFAULT_DROP_CRITERIA)
-        bot = next(iter(self.cfg.roles))
-        self.assertEqual(
-            criteria[f"{bot}_immediate"],
-            DEFAULT_IMMEDIATE_CRITERIA.replace("{bot}", bot).replace("{role}", self.cfg.roles[bot]),
-        )
+        self.assertEqual(criteria["drop"], DEFAULT_DROP_CRITERIA)
+        self.assertEqual(criteria["immediate"], DEFAULT_IMMEDIATE_CRITERIA)
 
     def test_jev_parallel_templates(self):
         from groupconnect.routing.router import AutonomousArbiter
@@ -288,7 +283,6 @@ class TestAutonomousRouting(unittest.TestCase):
                 }
             },
             "confidence_threshold": 0.6,
-            "parallel_threshold": 0.6,
         }}
         with tempfile.TemporaryDirectory() as d:
             cfg_path = os.path.join(d, "groupconnect.yaml")
@@ -303,13 +297,16 @@ class TestAutonomousRouting(unittest.TestCase):
                 "answers": {
                     "routing": {
                         "type": "choice",
-                        "choice": "bot_a_immediate",
+                        "choice": "immediate",
                         "confidence": 0.95,
-                        "probabilities": {"bot_a_immediate": 0.95, "none_drop": 0.05},
+                    },
+                    "parallel_bot_a": {
+                        "type": "noul",
+                        "noul": 0.88,
                     },
                     "parallel_bot_b": {
                         "type": "noul",
-                        "noul": 0.88,
+                        "noul": 0.85,
                     },
                     "parallel_bot_c": {
                         "type": "noul",
@@ -321,14 +318,15 @@ class TestAutonomousRouting(unittest.TestCase):
             async def run():
                 with patch("httpx.AsyncClient.post", return_value=mock_resp):
                     res = await arb.classify("Bot A and Bot B look at this", "Alice", "")
+                    # Choice=immediate, Noul A=0.88>=0.40, Noul B=0.85>=0.40, C=0.12<0.40
                     self.assertEqual(res["target_bot"], "bot_a")
-                    self.assertEqual(res["target_bots"], ["bot_a", "bot_b"])
+                    self.assertEqual(set(res["target_bots"]), {"bot_a", "bot_b"})
                     self.assertEqual(res["urgency"], "immediate")
 
             asyncio.run(run())
 
     def test_jev_classify_noul_rescues_choice_drop(self):
-        """When Choice drops but Noul detects explicit parallel intent, rescue the drop."""
+        """When Choice drops but Noul detects a bot's domain, rescue with wait_silence."""
         import asyncio
         from unittest.mock import patch, MagicMock
         import tempfile, json
@@ -347,7 +345,6 @@ class TestAutonomousRouting(unittest.TestCase):
                 }
             },
             "confidence_threshold": 0.6,
-            "parallel_threshold": 0.6,
         }}
         with tempfile.TemporaryDirectory() as d:
             cfg_path = os.path.join(d, "groupconnect.yaml")
@@ -362,24 +359,22 @@ class TestAutonomousRouting(unittest.TestCase):
                 "answers": {
                     "routing": {
                         "type": "choice",
-                        "choice": "none_drop",
+                        "choice": "drop",
                         "confidence": 0.9,
-                        "probabilities": {"none_drop": 0.9, "bot_a_immediate": 0.1},
                     },
-                    "parallel_bot_b": {
-                        "type": "noul",
-                        "noul": 0.99,
-                    },
+                    "parallel_bot_a": {"type": "noul", "noul": 0.10},
+                    "parallel_bot_b": {"type": "noul", "noul": 0.99},
                 }
             }
 
             async def run():
                 with patch("httpx.AsyncClient.post", return_value=mock_resp):
                     res = await arb.classify("Spouse talk", "Alice", "")
-                    # Noul rescues: bot_b should be activated with immediate urgency
+                    # Noul rescues: bot_b 0.99 >= 0.60 (strict threshold when Choice=drop)
                     self.assertEqual(res["target_bot"], "bot_b")
                     self.assertEqual(res["target_bots"], ["bot_b"])
-                    self.assertEqual(res["urgency"], "immediate")
+                    # Rescue uses wait_silence (4s grace), NOT immediate
+                    self.assertEqual(res["urgency"], "wait_silence")
 
             asyncio.run(run())
 
@@ -403,7 +398,6 @@ class TestAutonomousRouting(unittest.TestCase):
                 }
             },
             "confidence_threshold": 0.6,
-            "parallel_threshold": 0.6,
         }}
         with tempfile.TemporaryDirectory() as d:
             cfg_path = os.path.join(d, "groupconnect.yaml")
@@ -418,9 +412,8 @@ class TestAutonomousRouting(unittest.TestCase):
                 "answers": {
                     "routing": {
                         "type": "choice",
-                        "choice": "none_drop",
+                        "choice": "drop",
                         "confidence": 0.9,
-                        "probabilities": {"none_drop": 0.9, "bot_a_immediate": 0.1},
                     },
                     "parallel_bot_a": {"type": "noul", "noul": 0.2},
                     "parallel_bot_b": {"type": "noul", "noul": 0.3},
@@ -517,7 +510,9 @@ class TestAutonomousRouting(unittest.TestCase):
             asyncio.run(run())
 
     def test_jev_prefix_collision_prevention(self):
-        """Bots sharing name prefix (e.g. 'bot' and 'bot_helper') must not bleed probabilities."""
+        """Bots sharing name prefix (e.g. 'bot' and 'bot_helper') must not bleed probabilities.
+        With orthogonal Choice (3-option, no bot identity), prefix collision is moot
+        for Choice. Noul handles per-bot assignment independently."""
         from unittest.mock import MagicMock, patch
         from groupconnect.routing.router import AutonomousArbiter
 
@@ -545,23 +540,22 @@ class TestAutonomousRouting(unittest.TestCase):
         mock_resp.json.return_value = {
             "answers": {
                 "routing": {
-                    "choice": "bot_helper_immediate",
-                    "probabilities": {
-                        "bot_helper_immediate": 0.85,
-                        "bot_immediate": 0.10,
-                        "none_drop": 0.05
-                    }
-                }
+                    "choice": "immediate",
+                    "confidence": 0.85,
+                },
+                "parallel_bot": {"type": "noul", "noul": 0.10},
+                "parallel_bot_helper": {"type": "noul", "noul": 0.90},
             }
         }
 
         async def run():
             with patch("httpx.AsyncClient.post", return_value=mock_resp):
                 res = await arb.classify("Ask helper for assistance", "Alice", "")
-                # Must select bot_helper, NOT bot
+                # Choice=immediate, threshold=0.80*2/3=0.53
+                # bot_helper Noul=0.90 >= 0.53, bot Noul=0.10 < 0.53
                 self.assertEqual(res["target_bot"], "bot_helper")
                 self.assertEqual(res["urgency"], "immediate")
-                self.assertAlmostEqual(res["confidence"], 0.85)
+                self.assertAlmostEqual(res["confidence"], 0.9)
 
         asyncio.run(run())
 

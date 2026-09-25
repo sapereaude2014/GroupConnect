@@ -41,9 +41,9 @@ DEFAULT_DROP_CRITERIA = (
     "NOT drop-worthy: referring to another member in 3rd-person to record/query tasks, or administrative requests toward the shared assistant."
 )
 DEFAULT_PARALLEL_CRITERIA = (
-    "The sender explicitly wants {bot} ({role}) to participate, respond, or collaborate "
-    "simultaneously alongside other assistants (e.g. coordinative phrases: 'A and B both', 'together'). "
-    "Not causative dispatch ('A ask B to do X')."
+    "Whether the current message falls within {bot}'s responsibility or requires {bot} ({role}) to handle it. "
+    "Return a high score if the message is a direct question, command, or request that matches {bot}'s domain; "
+    "return a low score if it is casual conversation between humans with no action request toward {bot}."
 )
 
 DEFAULT_RULE_TEMPLATES: Dict[str, str] = {
@@ -70,7 +70,7 @@ Decision Rules (Evaluate in order, first match wins):
 
 4. MULTI-BOT DISPATCH vs PARALLEL:
    - DISPATCH: One bot is asked to handle a task involving another bot -> Assign to the DISPATCHER only.
-   - PARALLEL: {parallel} -> Assign all addressed bots in target_bots with immediate urgency.
+   - PARALLEL: Multiple bots should respond simultaneously -> Each bot's Noul independently determines if it should participate.
 """
 
 DEFAULT_LLM_PROMPT_TEMPLATE = """You are the single arbiter of a private group chat.
