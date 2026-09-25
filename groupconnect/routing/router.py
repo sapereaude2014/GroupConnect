@@ -336,9 +336,6 @@ class AutonomousConfig:
         # Built-in DEFAULT_RULE_TEMPLATES overlaid by optional zero_at.rules in YAML
         self.rule_templates: Dict[str, str] = dict(DEFAULT_RULE_TEMPLATES)
         raw_rules = cfg.get("rules")
-        # Backward compat: migrate legacy 'parallel' slot to 'assignment'
-        if isinstance(raw_rules, dict) and "parallel" in raw_rules and "assignment" not in raw_rules:
-            raw_rules["assignment"] = raw_rules.pop("parallel")
         self.custom_rules: Dict[str, str] = (
             {str(k): str(v) for k, v in raw_rules.items() if v}
             if isinstance(raw_rules, dict)

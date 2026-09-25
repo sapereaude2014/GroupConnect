@@ -264,15 +264,6 @@ class TestAutonomousRouting(unittest.TestCase):
         self.assertEqual(pt2["bot_a"], "NEEDS bot_a as RoleA")
         self.assertEqual(pt2["bot_b"], "NEEDS bot_b as RoleB")
 
-        # Backward compat: legacy 'parallel' slot migrates to 'assignment'
-        cfg_legacy = AutonomousConfig({
-            "roles": {"bot_a": "RoleA"},
-            "rules": {"parallel": "LEGACY {bot}"},
-        })
-        arb3 = AutonomousArbiter(cfg_legacy)
-        pt3 = arb3._jev_assignment_templates()
-        self.assertEqual(pt3["bot_a"], "LEGACY bot_a")
-
     def test_jev_classify_choice_and_noul_multi_bot(self):
         import asyncio
         from unittest.mock import patch, MagicMock
