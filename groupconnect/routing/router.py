@@ -730,8 +730,8 @@ class AutonomousArbiter:
                 # between the strict bar and the fallback-dispatch path.
                 strict = self.cfg.confidence_threshold
                 relaxed = self.cfg.confidence_threshold * 2 / 3
+                conf_c = min(max(confidence, 0.0), 1.0)
                 if choice_urgency == "drop":
-                    conf_c = min(max(confidence, 0.0), 1.0)
                     noul_threshold = relaxed + (strict - relaxed) * conf_c
                 else:
                     noul_threshold = relaxed
@@ -739,6 +739,14 @@ class AutonomousArbiter:
                 # Sort descending by score first so candidate_bots preserves score order
                 noul_results.sort(key=lambda x: x[1], reverse=True)
                 candidate_bots = [b for b, p in noul_results if p >= noul_threshold]
+
+                # Full decision-input audit line: makes every arbitration branch
+                # (silence / rescue / normal / fallback) reconstructible from logs.
+                logger.info(
+                    f"[ROUTING] Choice={choice_key} (conf={conf_c:.2f}); "
+                    f"Noul={{{', '.join(f'{b}:{p:.2f}' for b, p in noul_results)}}}; "
+                    f"line={noul_threshold:.2f}."
+                )
 
                 # --- Final decision (layered arbitration) ---
                 if not candidate_bots:
@@ -769,6 +777,11 @@ class AutonomousArbiter:
                         )
                 elif choice_urgency == "drop":
                     # Domain expert overrides the global screen: rescue with 4s grace
+                    logger.info(
+                        f"[ROUTING] Rescue: Choice=drop (conf={conf_c:.2f}) "
+                        f"overridden by top claim {noul_results[0][1]:.2f} "
+                        f">= line {noul_threshold:.2f}."
+                    )
                     target_bots = candidate_bots
                     target_bot = candidate_bots[0]
                     urgency = "wait_silence"
