@@ -470,7 +470,7 @@ class AutonomousObserver:
         secs = self.cfg.immediate_secs if urgency == "immediate" else self.cfg.silence_secs
         self._cancel(chat_id)  # always cancel stale pending first: no orphan tasks
         task = asyncio.create_task(self._countdown(decision, secs))
-        self.pending[chat_id] = {"task": task, "sender": decision.get("sender", "")}
+        self.pending[chat_id] = {"task": task, "sender": decision.get("sender", ""), "decision": decision}
         logger.info(
             f"[ROUTING] Armed {urgency} window ({secs}s) for chat {chat_id}, "
             f"target {self.my_bot} (targets={sorted(target_set)})."
@@ -480,6 +480,25 @@ class AutonomousObserver:
         p = self.pending.pop(chat_id, None)
         if p and p.get("task") and not p["task"].done():
             p["task"].cancel()
+
+    def flush_pending(self, chat_id: Any) -> None:
+        """Bot finished replying; immediately dispatch any pending wait_silence
+        instead of waiting for the countdown to elapse.
+
+        Called from the engine after a bot reply lands. If a wait_silence
+        countdown is still running for this chat, cancel it and dispatch
+        right away — the accumulated messages are visible in the sliding
+        window and the bot is now free to process them."""
+        p = self.pending.pop(chat_id, None)
+        if p and p.get("task") and not p["task"].done():
+            p["task"].cancel()
+            decision = p.get("decision")
+            if decision:
+                logger.info(
+                    f"[ROUTING] Flushed pending wait_silence for chat {chat_id} "
+                    f"after bot reply landed (skipping remaining countdown)."
+                )
+                asyncio.create_task(self.dispatch(decision))
 
     async def _countdown(self, decision: Dict[str, Any], secs: float) -> None:
         chat_id = decision.get("chat_id")
@@ -991,6 +1010,11 @@ class AutonomousController:
         if self.observer is not None:
             self.observer.on_decision(event)
 
+    def flush_pending(self, chat_id: Any) -> None:
+        """Delegate to observer: flush any pending wait_silence after bot reply."""
+        if self.observer is not None:
+            self.observer.flush_pending(chat_id)
+
     def inflight_marker(self, chat_id: Any, buffer: Any) -> str:
         """Synthetic context line for a still-running immediate task, or "".
 
@@ -1068,6 +1092,17 @@ class AutonomousController:
             return  # physical noise: silently skip, no broadcast
         if decision.get("target_bot", "none") == "none":
             return  # semantic drop: silently skip, no broadcast
+
+        # Resume messages: timing already settled (confirmed unanswered by the
+        # watermark scan).  Override any wait/drop from Choice to immediate so
+        # the candidate is dispatched without a grace window or timeout delay,
+        # while keeping the Noul-based bot assignment intact.
+        if getattr(msg, "is_resume", False) and decision.get("urgency") != "immediate":
+            logger.info(
+                f"[ROUTING] Resume override: {decision.get('urgency')}→immediate "
+                f"for chat {msg.chat_id} (target={decision.get('target_bot')})."
+            )
+            decision["urgency"] = "immediate"
 
         payload = {
             "event": "autonomous_decision",

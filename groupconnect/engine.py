@@ -899,17 +899,29 @@ class GroupConnectEngine:
             if active_attachments:
                 user_query = "Please inspect and analyze the attached media file(s) and provide a detailed structured response."
 
+        # Coalesced items: in group chats they already appear in the sliding
+        # window context — mark them inline with ⏳ instead of duplicating in a
+        # separate section.  In private chats (no sliding window) list them
+        # explicitly as before.
         coalesce_section = ""
+        pending_msg_ids = None
         if coalesced_items:
-            coalesce_lines = []
-            for c_msg, c_query, _ in coalesced_items:
-                c_text = c_query if c_query else c_msg.text
-                coalesce_lines.append(f"- [{c_msg.sender_name}]: {c_text}")
-            coalesce_section = (
-                "\n【Coalesced Pending Instructions / 排队期间接收到的连续补充要求】\n"
-                "（重要提示：在处理上一任务期间，用户在群内连续发送了以下指令。请结合这些补充要求，以最新的【Current Query】为最终准则一并综合响应）：\n"
-                + "\n".join(coalesce_lines) + "\n"
-            )
+            if is_group:
+                pending_msg_ids = {c_msg.msg_id for c_msg, _, _ in coalesced_items}
+                coalesce_section = (
+                    "\n（标注 ⏳ 的消息为排队期间接收到的连续补充要求，"
+                    "请一并综合响应，以最新【Current Query】为最终准则）\n"
+                )
+            else:
+                coalesce_lines = []
+                for c_msg, c_query, _ in coalesced_items:
+                    c_text = c_query if c_query else c_msg.text
+                    coalesce_lines.append(f"- [{c_msg.sender_name}]: {c_text}")
+                coalesce_section = (
+                    "\n【Coalesced Pending Instructions / 排队期间接收到的连续补充要求】\n"
+                    "（重要提示：在处理上一任务期间，用户在群内连续发送了以下指令。请结合这些补充要求，以最新的【Current Query】为最终准则一并综合响应）：\n"
+                    + "\n".join(coalesce_lines) + "\n"
+                )
 
         # Soul prompt (session initialization only)
         soul_section = ""
@@ -944,7 +956,8 @@ class GroupConnectEngine:
                 context_str = self.context_mgr.build_group_context(
                     chat_id,
                     since_msg_id=0,
-                    exclude_msg_id=msg.msg_id
+                    exclude_msg_id=msg.msg_id,
+                    pending_msg_ids=pending_msg_ids
                 ) or "(No prior history)"
                 full_prompt = (
                     f"【Role Context】\n"
@@ -965,7 +978,8 @@ class GroupConnectEngine:
                     chat_id,
                     since_msg_id=last_input_id,
                     exclude_msg_id=msg.msg_id,
-                    skip_bot_username=self.config.bot_username
+                    skip_bot_username=self.config.bot_username,
+                    pending_msg_ids=pending_msg_ids
                 )
                 inc_section = f"\n【New Group Messages Since Last Response】\n{inc_context}\n" if inc_context else ""
                 full_prompt = (
@@ -1047,6 +1061,13 @@ class GroupConnectEngine:
                 self.resume_manager.mark_completed(msg.chat_id, msg.msg_id, msg.text or "")
             except Exception:
                 pass
+
+        # Bot reply landed: proactively flush any pending wait_silence for this
+        # chat so accumulated messages are processed immediately, without
+        # waiting for the countdown to elapse.
+        au = getattr(self, "autonomous", None)
+        if au is not None:
+            au.flush_pending(chat_id)
 
     async def _run_slash_command(
         self,

@@ -145,3 +145,69 @@ class TestQueueCoalescing(unittest.IsolatedAsyncioTestCase):
         })
         await asyncio.sleep(0.05)
         self.assertEqual(self.engine._handle_triggered_message.call_count, 1)
+
+    async def test_group_coalesced_marked_inline_not_duplicated(self):
+        """In group chats, coalesced messages are marked with ⏳ in the sliding
+        window context, NOT listed in a separate Coalesced Pending Instructions
+        section (eliminates duplication)."""
+        chat_id = 6666
+        # Pre-populate buffer with the coalesced messages
+        self.engine.context_mgr.record_message(chat_id, "Zheng Ma", "帮我看下闹钟", msg_id=501)
+        self.engine.context_mgr.record_message(chat_id, "Zheng Ma", "后天去杭州", msg_id=502)
+
+        msg_latest = InboundMessage(
+            chat_id=chat_id, chat_type="group", msg_id=503,
+            sender_name="Zheng Ma", from_user={"id": 1, "first_name": "Zheng Ma"},
+            text="@test_bot 还有高铁票帮我查一下", is_triggered=True
+        )
+        msg_1 = InboundMessage(
+            chat_id=chat_id, chat_type="group", msg_id=501,
+            sender_name="Zheng Ma", from_user={"id": 1, "first_name": "Zheng Ma"},
+            text="帮我看下闹钟", is_triggered=True
+        )
+        msg_2 = InboundMessage(
+            chat_id=chat_id, chat_type="group", msg_id=502,
+            sender_name="Zheng Ma", from_user={"id": 1, "first_name": "Zheng Ma"},
+            text="后天去杭州", is_triggered=True
+        )
+
+        full_prompt, _, _ = self.engine._build_agent_prompt(
+            msg_latest, "还有高铁票帮我查一下", True,
+            {"conversation_id": None}, None,
+            coalesced_items=[(msg_1, "帮我看下闹钟", None), (msg_2, "后天去杭州", None)]
+        )
+
+        # The coalesced messages should appear with ⏳ marker in the sliding window
+        self.assertIn("⏳", full_prompt)
+        self.assertIn("帮我看下闹钟", full_prompt)
+        self.assertIn("后天去杭州", full_prompt)
+
+        # The separate Coalesced Pending Instructions section should NOT exist
+        self.assertNotIn("Coalesced Pending Instructions", full_prompt)
+
+    async def test_private_chat_coalesced_still_listed_separately(self):
+        """In private chats (no sliding window), coalesced messages are still
+        listed in a separate section as before."""
+        chat_id = 7777
+        msg_latest = InboundMessage(
+            chat_id=chat_id, chat_type="private", msg_id=603,
+            sender_name="Zheng Ma", from_user={"id": 1, "first_name": "Zheng Ma"},
+            text="还有高铁票", is_triggered=True
+        )
+        msg_1 = InboundMessage(
+            chat_id=chat_id, chat_type="private", msg_id=601,
+            sender_name="Zheng Ma", from_user={"id": 1, "first_name": "Zheng Ma"},
+            text="帮我看下闹钟", is_triggered=True
+        )
+
+        full_prompt, _, _ = self.engine._build_agent_prompt(
+            msg_latest, "还有高铁票", False,
+            {"conversation_id": None}, None,
+            coalesced_items=[(msg_1, "帮我看下闹钟", None)]
+        )
+
+        # Private chat: separate section is used
+        self.assertIn("Coalesced Pending Instructions", full_prompt)
+        self.assertIn("帮我看下闹钟", full_prompt)
+        # No ⏳ markers in private chat
+        self.assertNotIn("⏳", full_prompt)

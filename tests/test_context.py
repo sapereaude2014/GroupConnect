@@ -161,6 +161,51 @@ class TestContextManager(unittest.TestCase):
         self.assertEqual(format_sender({"first_name": "John", "username": "johndoe"}), "John (@johndoe)")
         self.assertEqual(format_sender({}), "Unknown User")
 
+    def test_pending_msg_ids_marked_inline(self):
+        """Coalesced pending messages are marked with ⏳ inline in the context
+        instead of being duplicated in a separate prompt section."""
+        chat_id = 2001
+        self.mgr.record_message(chat_id, "Alice", "第一条", msg_id=10)
+        self.mgr.record_message(chat_id, "Bob", "第二条", msg_id=11)
+        self.mgr.record_message(chat_id, "Alice", "第三条", msg_id=12)
+
+        # Mark msg 10 and 12 as pending (coalesced), 11 is not
+        ctx = self.mgr.build_group_context(chat_id, pending_msg_ids={10, 12})
+        lines = ctx.split("\n")
+        self.assertEqual(len(lines), 3)
+        self.assertTrue(lines[0].startswith("⏳ "))
+        self.assertIn("第一条", lines[0])
+        self.assertFalse(lines[1].startswith("⏳ "))
+        self.assertIn("第二条", lines[1])
+        self.assertTrue(lines[2].startswith("⏳ "))
+        self.assertIn("第三条", lines[2])
+
+    def test_no_pending_ids_no_markers(self):
+        """Without pending_msg_ids, no entries are marked."""
+        chat_id = 2002
+        self.mgr.record_message(chat_id, "Alice", "hello", msg_id=20)
+        ctx = self.mgr.build_group_context(chat_id)
+        self.assertFalse("⏳" in ctx)
+
+    def test_pending_with_exclude_and_since(self):
+        """Pending markers work alongside exclude_msg_id and since_msg_id."""
+        chat_id = 2003
+        self.mgr.record_message(chat_id, "Alice", "old", msg_id=30)
+        self.mgr.record_message(chat_id, "Bob", "mid", msg_id=31)
+        self.mgr.record_message(chat_id, "Alice", "new1", msg_id=32)
+        self.mgr.record_message(chat_id, "Bob", "new2", msg_id=33)
+
+        # since=30, exclude=33, pending={32}
+        ctx = self.mgr.build_group_context(
+            chat_id, since_msg_id=30, exclude_msg_id=33, pending_msg_ids={32}
+        )
+        lines = ctx.split("\n")
+        self.assertEqual(len(lines), 2)
+        self.assertIn("mid", lines[0])
+        self.assertFalse(lines[0].startswith("⏳ "))
+        self.assertTrue(lines[1].startswith("⏳ "))
+        self.assertIn("new1", lines[1])
+
 
 if __name__ == "__main__":
     unittest.main()

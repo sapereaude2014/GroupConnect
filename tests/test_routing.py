@@ -1,6 +1,7 @@
 import asyncio
 import os
 import unittest
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from groupconnect.core.relay import CrossBotRelay
 from groupconnect.routing import AutonomousConfig, AutonomousController
@@ -1166,7 +1167,195 @@ class TestInflightTaskMarker(unittest.IsolatedAsyncioTestCase):
             self.assertGreater(len(bot_line), len("[Bot Assistant Bot]: ") + 120)
 
 
+class TestResumeForceImmediate(unittest.IsolatedAsyncioTestCase):
+    """Resume (startup recovery) messages must force urgency=immediate,
+    skipping the timing judgment — they're already confirmed unanswered."""
+
+    def setUp(self):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+        self.SimpleNamespace = SimpleNamespace
+        self.cfg = AutonomousConfig({
+            "enabled": True,
+            "arbiter_bot": "primary_bot",
+            "ipc_dir": "/tmp/test_ipc",
+            "classifier": {
+                "confidence_threshold": 0.8,
+                "providers": {"typesafe": {"engine": "jev", "api_key": "dummy"}},
+            },
+            "roles": {"primary_bot": "Home automation.", "ops_bot": "Life assistance."},
+            "allowed_chat_ids": [-1001234567890],
+        })
+        self.ctrl = AutonomousController(
+            bot_username="primary_bot",
+            cfg=self.cfg,
+            relay=MagicMock(),
+            dispatch=AsyncMock(return_value=None),
+            context_summary_fn=lambda c, m, w: "",
+        )
+        self.ctrl.relay.broadcast_event = AsyncMock()
+
+    def _msg(self, text, msg_id=200, sender="Alice", is_resume=False):
+        return self.SimpleNamespace(
+            chat_id=-1001234567890, chat_type="group", msg_id=msg_id,
+            sender_name=sender, from_user={"is_bot": False}, text=text,
+            is_bot_relay=False, attachments=None, is_resume=is_resume,
+        )
+
+    async def test_resume_wait_silence_overridden_to_immediate(self):
+        """Classifier says wait_silence, but resume flag forces immediate."""
+        with patch.object(self.ctrl.arbiter, "classify", AsyncMock(return_value={
+            "target_bot": "primary_bot", "target_bots": ["primary_bot"],
+            "urgency": "wait_silence", "confidence": 0.7, "source": "classifier",
+        })):
+            await self.ctrl.evaluate_and_publish(
+                self._msg("查天气", is_resume=True)
+            )
+        # The payload published should have urgency=immediate
+        self.ctrl.relay.broadcast_event.assert_awaited_once()
+        payload = self.ctrl.relay.broadcast_event.await_args[0][0]
+        self.assertEqual(payload["urgency"], "immediate")
+
+    async def test_resume_drop_with_candidate_overridden_to_immediate(self):
+        """Classifier says drop but Noul has a candidate — rescue path + resume
+        flag should still force immediate."""
+        with patch.object(self.ctrl.arbiter, "classify", AsyncMock(return_value={
+            "target_bot": "primary_bot", "target_bots": ["primary_bot"],
+            "urgency": "drop", "confidence": 0.5, "source": "classifier",
+        })):
+            await self.ctrl.evaluate_and_publish(
+                self._msg("帮我查一下", is_resume=True)
+            )
+        self.ctrl.relay.broadcast_event.assert_awaited_once()
+        payload = self.ctrl.relay.broadcast_event.await_args[0][0]
+        self.assertEqual(payload["urgency"], "immediate")
+
+    async def test_resume_true_drop_still_silent_when_no_candidate(self):
+        """Resume with no bot claiming it (true chitchat) stays silent."""
+        with patch.object(self.ctrl.arbiter, "classify", AsyncMock(return_value={
+            "target_bot": "none", "target_bots": [],
+            "urgency": "drop", "confidence": 0.9, "source": "classifier",
+        })):
+            await self.ctrl.evaluate_and_publish(
+                self._msg("哈哈闲聊", is_resume=True)
+            )
+        # No broadcast for true silence
+        self.ctrl.relay.broadcast_event.assert_not_awaited()
+
+    async def test_non_resume_wait_silence_not_overridden(self):
+        """Normal (non-resume) wait_silence is NOT overridden — stays wait_silence."""
+        with patch.object(self.ctrl.arbiter, "classify", AsyncMock(return_value={
+            "target_bot": "primary_bot", "target_bots": ["primary_bot"],
+            "urgency": "wait_silence", "confidence": 0.7, "source": "classifier",
+        })):
+            await self.ctrl.evaluate_and_publish(
+                self._msg("查天气", is_resume=False)
+            )
+        self.ctrl.relay.broadcast_event.assert_awaited_once()
+        payload = self.ctrl.relay.broadcast_event.await_args[0][0]
+        self.assertEqual(payload["urgency"], "wait_silence")
+
+
+class TestFlushPending(unittest.IsolatedAsyncioTestCase):
+    """After a bot reply lands, flush_pending immediately dispatches any
+    pending wait_silence message instead of waiting for the countdown."""
+
+    def setUp(self):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+        self.SimpleNamespace = SimpleNamespace
+        self.cfg = AutonomousConfig({
+            "enabled": True,
+            "arbiter_bot": "primary_bot",
+            "ipc_dir": "/tmp/test_ipc",
+            "windows": {"immediate_secs": 1.0, "silence_secs": 4.0},
+            "classifier": {
+                "confidence_threshold": 0.8,
+                "providers": {"typesafe": {"engine": "jev", "api_key": "dummy"}},
+            },
+            "roles": {"primary_bot": "Home automation."},
+            "allowed_chat_ids": [-1001234567890],
+        })
+        self.dispatch_calls = []
+        self.ctrl = AutonomousController(
+            bot_username="primary_bot",
+            cfg=self.cfg,
+            relay=MagicMock(),
+            dispatch=self._mock_dispatch,
+            context_summary_fn=lambda c, m, w: "",
+        )
+        self.ctrl.relay.broadcast_event = AsyncMock()
+
+    async def _mock_dispatch(self, decision):
+        self.dispatch_calls.append(decision)
+
+    def _msg(self, text, msg_id=200, sender="Alice"):
+        return self.SimpleNamespace(
+            chat_id=-1001234567890, chat_type="group", msg_id=msg_id,
+            sender_name=sender, from_user={"is_bot": False}, text=text,
+            is_bot_relay=False, attachments=None,
+        )
+
+    async def test_flush_pending_dispatches_immediately(self):
+        """A pending wait_silence countdown is flushed and dispatched when
+        flush_pending is called (simulating bot reply landing)."""
+        from unittest.mock import AsyncMock, patch
+        with patch.object(self.ctrl.arbiter, "classify", AsyncMock(return_value={
+            "target_bot": "primary_bot", "target_bots": ["primary_bot"],
+            "urgency": "wait_silence", "confidence": 0.7, "source": "classifier",
+        })):
+            with patch.object(self.ctrl.relay, "broadcast_event", AsyncMock()):
+                await self.ctrl.evaluate_and_publish(self._msg("查天气"))
+
+        # Pending should be armed (countdown running)
+        self.assertIn(-1001234567890, self.ctrl.observer.pending)
+
+        # Flush: bot reply landed
+        self.ctrl.flush_pending(-1001234567890)
+
+        # Pending is cleared
+        self.assertNotIn(-1001234567890, self.ctrl.observer.pending)
+
+        # Dispatch was called (via asyncio.create_task, allow it to run)
+        await asyncio.sleep(0.05)
+        self.assertEqual(len(self.dispatch_calls), 1)
+        self.assertEqual(self.dispatch_calls[0]["urgency"], "wait_silence")
+
+    async def test_flush_pending_noop_when_nothing_pending(self):
+        """flush_pending is a no-op when there's no pending wait_silence."""
+        self.ctrl.flush_pending(-1001234567890)
+        await asyncio.sleep(0.05)
+        self.assertEqual(len(self.dispatch_calls), 0)
+
+    async def test_flush_pending_noop_after_countdown_fired(self):
+        """If the countdown already fired (task done), flush_pending does nothing."""
+        from unittest.mock import AsyncMock, patch
+        with patch.object(self.ctrl.arbiter, "classify", AsyncMock(return_value={
+            "target_bot": "primary_bot", "target_bots": ["primary_bot"],
+            "urgency": "wait_silence", "confidence": 0.7, "source": "classifier",
+        })):
+            with patch.object(self.ctrl.relay, "broadcast_event", AsyncMock()):
+                await self.ctrl.evaluate_and_publish(self._msg("查天气"))
+
+        # Let the countdown fire (silence_secs=4.0, but we mock-sleep)
+        # Instead, manually fire by waiting for the task
+        p = self.ctrl.observer.pending.get(-1001234567890)
+        self.assertIsNotNone(p)
+        # Cancel the countdown task to simulate it already dispatching
+        p["task"].cancel()
+        try:
+            await p["task"]
+        except asyncio.CancelledError:
+            pass
+        self.ctrl.observer.pending.pop(-1001234567890, None)
+
+        # Now flush should be a no-op
+        self.ctrl.flush_pending(-1001234567890)
+        await asyncio.sleep(0.05)
+        # Only the manual cancel, no extra dispatch from flush
+        self.assertEqual(len(self.dispatch_calls), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
-
 

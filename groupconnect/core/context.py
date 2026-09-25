@@ -198,7 +198,8 @@ class ContextManager:
         chat_id: Union[int, str],
         since_msg_id: Union[int, str] = 0,
         exclude_msg_id: Union[int, str] = 0,
-        skip_bot_username: str = ""
+        skip_bot_username: str = "",
+        pending_msg_ids: Optional[set] = None
     ) -> str:
         """
         Builds the context string from buffer.
@@ -206,10 +207,15 @@ class ContextManager:
         If exclude_msg_id > 0, excludes that specific message ID from the output.
         If skip_bot_username is set, excludes only that bot's own reply messages
         from the output (partner bot messages are preserved).
+        If pending_msg_ids is provided, those entries are prefixed with ⏳ so
+        the agent can identify coalesced pending instructions inline, without
+        duplicating them in a separate prompt section.
         """
         buf = self.get_buffer(chat_id)
         if not buf:
             return ""
+
+        pending_set = {str(x) for x in pending_msg_ids} if pending_msg_ids else set()
 
         lines = []
         for item in buf:
@@ -225,6 +231,8 @@ class ContextManager:
                     continue
 
             line = f"[{item['time']}] {item['sender']}{item['reply_info']}: {item['text']}"
+            if str(msg_id) in pending_set:
+                line = f"⏳ {line}"
             lines.append(line)
 
         return "\n".join(lines)
