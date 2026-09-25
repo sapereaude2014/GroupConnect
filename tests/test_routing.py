@@ -575,6 +575,101 @@ class TestAutonomousRouting(unittest.TestCase):
 
             asyncio.run(run())
 
+    def test_jev_classify_choice_immediate_noul_fails_all_drops(self):
+        """When Choice says immediate (e.g. human urgency) but no bot matches Noul, drops safely."""
+        import asyncio
+        from unittest.mock import patch, MagicMock
+        import tempfile, json
+        from groupconnect.routing.router import AutonomousArbiter
+
+        cfg_json = {"autonomous": {
+            "roles": {"bot_a": "RoleA", "bot_b": "RoleB"},
+            "classifier": {
+                "active": "typesafe",
+                "providers": {
+                    "typesafe": {
+                        "engine": "jev",
+                        "model": "jev-latest",
+                        "api_key": "test_key"
+                    }
+                }
+            },
+            "confidence_threshold": 0.6,
+        }}
+        with tempfile.TemporaryDirectory() as d:
+            cfg_path = os.path.join(d, "groupconnect.yaml")
+            with open(cfg_path, "w") as f:
+                f.write(json.dumps(cfg_json))
+            cfg = AutonomousConfig(cfg_path)
+            arb = AutonomousArbiter(cfg)
+
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            # Choice is high immediate (0.95), but both bots fail relaxed threshold (0.40)
+            mock_resp.json.return_value = {
+                "answers": {
+                    "routing": {"type": "choice", "choice": "immediate", "confidence": 0.95},
+                    "assignment_bot_a": {"type": "noul", "noul": 0.15},
+                    "assignment_bot_b": {"type": "noul", "noul": 0.22},
+                }
+            }
+
+            async def run():
+                with patch("httpx.AsyncClient.post", return_value=mock_resp):
+                    res = await arb.classify("Hurry up, the taxi is waiting downstairs!", "Alice", "")
+                    self.assertEqual(res["target_bot"], "none")
+                    self.assertEqual(res["target_bots"], [])
+                    self.assertEqual(res["urgency"], "drop")
+                    self.assertEqual(res["confidence"], 0.0)
+
+            asyncio.run(run())
+
+    def test_jev_classify_explicit_null_answers_drop(self):
+        """Answers containing explicit null for keys are handled gracefully."""
+        import asyncio
+        from unittest.mock import patch, MagicMock
+        import tempfile, json
+        from groupconnect.routing.router import AutonomousArbiter
+
+        cfg_json = {"autonomous": {
+            "roles": {"bot_a": "RoleA"},
+            "classifier": {
+                "active": "typesafe",
+                "providers": {
+                    "typesafe": {
+                        "engine": "jev",
+                        "model": "jev-latest",
+                        "api_key": "test_key"
+                    }
+                }
+            },
+            "confidence_threshold": 0.6,
+        }}
+        with tempfile.TemporaryDirectory() as d:
+            cfg_path = os.path.join(d, "groupconnect.yaml")
+            with open(cfg_path, "w") as f:
+                f.write(json.dumps(cfg_json))
+            cfg = AutonomousConfig(cfg_path)
+            arb = AutonomousArbiter(cfg)
+
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = {
+                "answers": {
+                    "routing": None,
+                    "assignment_bot_a": None,
+                }
+            }
+
+            async def run():
+                with patch("httpx.AsyncClient.post", return_value=mock_resp):
+                    res = await arb.classify("Hello", "Alice", "")
+                    self.assertEqual(res["target_bot"], "none")
+                    self.assertEqual(res["target_bots"], [])
+                    self.assertEqual(res["urgency"], "drop")
+
+            asyncio.run(run())
+
     def test_observer_target_bots_subset(self):
         import asyncio
         from groupconnect.routing.router import AutonomousObserver

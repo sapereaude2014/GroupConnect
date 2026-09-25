@@ -59,10 +59,8 @@ DEFAULT_RULE_TEMPLATES: Dict[str, str] = {
 DEFAULT_JEV_CHOICE_INSTRUCTIONS = """# Autonomous Routing Timing Rules
 Group Context: {group}
 
-YOUR SCOPE — You judge ONLY the response TIMING for this message (immediate / wait /
-drop). You do NOT decide which bot responds: each bot's eligibility is evaluated
-independently by separate responsibility questions. Focus purely on social
-context and urgency.
+Evaluate the conversational urgency and response timing (immediate / wait / drop)
+based on social context and conversational rhythm.
 
 Decision Rules (Evaluate in order, first match wins):
 1. BOT DIALOGUE CONTINUATION & DIRECT COMMAND (urgency = "immediate"):

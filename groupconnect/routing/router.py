@@ -688,10 +688,10 @@ class AutonomousArbiter:
                 logger.warning(f"[ROUTING] Jev exhausted retries; fail-closed drop.")
                 return drop
             try:
-                answers = res.json().get("answers", {})
+                answers = res.json().get("answers", {}) or {}
 
                 # --- Choice: timing/social context (orthogonal to bot identity) ---
-                routing_ans = answers.get("routing", {})
+                routing_ans = answers.get("routing") or {}
                 choice_key = routing_ans.get("choice", "drop")
                 confidence = float(routing_ans.get("confidence", 0.0) or 0.0)
                 _, choice_urgency = jev_map.get(choice_key, ("none", "drop"))
@@ -699,7 +699,7 @@ class AutonomousArbiter:
                 # --- Noul: per-bot assignment (domain experts) ---
                 noul_results: list = []  # (bot, prob) pairs
                 for b in self.cfg.roles:
-                    noul_ans = answers.get(f"assignment_{b}", {})
+                    noul_ans = answers.get(f"assignment_{b}") or {}
                     noul_prob = float(noul_ans.get("noul", 0.0) or 0.0)
                     noul_results.append((b, noul_prob))
 
