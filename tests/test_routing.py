@@ -234,6 +234,12 @@ class TestAutonomousRouting(unittest.TestCase):
         self.assertNotIn(DEFAULT_DROP_CRITERIA, instructions)
         self.assertNotIn(DEFAULT_GROUP_DESCRIPTION, instructions)
 
+        choice_inst = arb._load_choice_instructions()
+        self.assertIn("DROP_CUSTOM", choice_inst)
+        self.assertIn("GRP_CUSTOM", choice_inst)
+        self.assertNotIn(DEFAULT_DROP_CRITERIA, choice_inst)
+        self.assertNotIn(DEFAULT_GROUP_DESCRIPTION, choice_inst)
+
     def test_jev_criteria_falls_back_to_defaults(self):
         from groupconnect.routing.router import (
             AutonomousArbiter, DEFAULT_IMMEDIATE_CRITERIA, DEFAULT_DROP_CRITERIA,
@@ -426,6 +432,146 @@ class TestAutonomousRouting(unittest.TestCase):
                     self.assertEqual(res["target_bot"], "none")
                     self.assertEqual(res["target_bots"], [])
                     self.assertEqual(res["urgency"], "drop")
+                    self.assertEqual(res["confidence"], 0.0)
+
+            asyncio.run(run())
+
+    def test_jev_classify_choice_wait_yields_wait_silence(self):
+        """Choice 'wait' produces urgency 'wait_silence' with candidate bots."""
+        import asyncio
+        from unittest.mock import patch, MagicMock
+        import tempfile, json
+        from groupconnect.routing.router import AutonomousArbiter
+
+        cfg_json = {"autonomous": {
+            "roles": {"bot_a": "RoleA", "bot_b": "RoleB"},
+            "classifier": {
+                "active": "typesafe",
+                "providers": {
+                    "typesafe": {
+                        "engine": "jev",
+                        "model": "jev-latest",
+                        "api_key": "test_key"
+                    }
+                }
+            },
+            "confidence_threshold": 0.6,
+        }}
+        with tempfile.TemporaryDirectory() as d:
+            cfg_path = os.path.join(d, "groupconnect.yaml")
+            with open(cfg_path, "w") as f:
+                f.write(json.dumps(cfg_json))
+            cfg = AutonomousConfig(cfg_path)
+            arb = AutonomousArbiter(cfg)
+
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = {
+                "answers": {
+                    "routing": {"type": "choice", "choice": "wait", "confidence": 0.88},
+                    "assignment_bot_a": {"type": "noul", "noul": 0.75},
+                    "assignment_bot_b": {"type": "noul", "noul": 0.10},
+                }
+            }
+
+            async def run():
+                with patch("httpx.AsyncClient.post", return_value=mock_resp):
+                    res = await arb.classify("Any book recommendations?", "Alice", "")
+                    self.assertEqual(res["target_bot"], "bot_a")
+                    self.assertEqual(res["target_bots"], ["bot_a"])
+                    self.assertEqual(res["urgency"], "wait_silence")
+                    self.assertEqual(res["confidence"], 0.75)
+
+            asyncio.run(run())
+
+    def test_jev_classify_candidate_sorting_preserves_score_order(self):
+        """target_bots must be ordered by Noul score descending, not config dict order."""
+        import asyncio
+        from unittest.mock import patch, MagicMock
+        import tempfile, json
+        from groupconnect.routing.router import AutonomousArbiter
+
+        # bot_a defined before bot_b in roles
+        cfg_json = {"autonomous": {
+            "roles": {"bot_a": "RoleA", "bot_b": "RoleB"},
+            "classifier": {
+                "active": "typesafe",
+                "providers": {
+                    "typesafe": {
+                        "engine": "jev",
+                        "model": "jev-latest",
+                        "api_key": "test_key"
+                    }
+                }
+            },
+            "confidence_threshold": 0.6,
+        }}
+        with tempfile.TemporaryDirectory() as d:
+            cfg_path = os.path.join(d, "groupconnect.yaml")
+            with open(cfg_path, "w") as f:
+                f.write(json.dumps(cfg_json))
+            cfg = AutonomousConfig(cfg_path)
+            arb = AutonomousArbiter(cfg)
+
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = {
+                "answers": {
+                    "routing": {"type": "choice", "choice": "immediate", "confidence": 0.90},
+                    "assignment_bot_a": {"type": "noul", "noul": 0.70},
+                    "assignment_bot_b": {"type": "noul", "noul": 0.95},
+                }
+            }
+
+            async def run():
+                with patch("httpx.AsyncClient.post", return_value=mock_resp):
+                    res = await arb.classify("Both check this", "Alice", "")
+                    # bot_b has higher score (0.95 > 0.70), must be first
+                    self.assertEqual(res["target_bot"], "bot_b")
+                    self.assertEqual(res["target_bots"], ["bot_b", "bot_a"])
+                    self.assertEqual(res["urgency"], "immediate")
+                    self.assertEqual(res["confidence"], 0.95)
+
+            asyncio.run(run())
+
+    def test_jev_classify_malformed_json_fails_closed_drop(self):
+        """Malformed answers structure safely fails closed to drop."""
+        import asyncio
+        from unittest.mock import patch, MagicMock
+        import tempfile, json
+        from groupconnect.routing.router import AutonomousArbiter
+
+        cfg_json = {"autonomous": {
+            "roles": {"bot_a": "RoleA"},
+            "classifier": {
+                "active": "typesafe",
+                "providers": {
+                    "typesafe": {
+                        "engine": "jev",
+                        "model": "jev-latest",
+                        "api_key": "test_key"
+                    }
+                }
+            },
+            "confidence_threshold": 0.6,
+        }}
+        with tempfile.TemporaryDirectory() as d:
+            cfg_path = os.path.join(d, "groupconnect.yaml")
+            with open(cfg_path, "w") as f:
+                f.write(json.dumps(cfg_json))
+            cfg = AutonomousConfig(cfg_path)
+            arb = AutonomousArbiter(cfg)
+
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.json.side_effect = ValueError("Invalid JSON")
+
+            async def run():
+                with patch("httpx.AsyncClient.post", return_value=mock_resp):
+                    res = await arb.classify("Hello", "Alice", "")
+                    self.assertEqual(res["target_bot"], "none")
+                    self.assertEqual(res["target_bots"], [])
+                    self.assertEqual(res["urgency"], "drop")
 
             asyncio.run(run())
 
@@ -506,6 +652,9 @@ class TestAutonomousRouting(unittest.TestCase):
                     self.assertEqual(res["target_bots"], ["bot_a", "bot_b"])
                     self.assertEqual(res["urgency"], "immediate")
                     self.assertEqual(mock_post.call_args[0][0], "https://api.deepseek.com/v1/chat/completions")
+                    sent_prompt = mock_post.call_args[1]["json"]["messages"][0]["content"]
+                    self.assertIn("MULTI-BOT ASSIGNMENT & DISPATCH", sent_prompt)
+                    self.assertNotIn("YOUR SCOPE — You judge ONLY the response TIMING", sent_prompt)
 
             asyncio.run(run())
 

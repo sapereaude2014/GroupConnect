@@ -65,6 +65,7 @@ from groupconnect.routing.defaults import (
     DEFAULT_RULE_TEMPLATES,
     DEFAULT_LLM_PROMPT_TEMPLATE,
     DEFAULT_ROUTING_RULES_MD,
+    DEFAULT_JEV_CHOICE_INSTRUCTIONS,
     DEFAULT_IMMEDIATE_CRITERIA,
     DEFAULT_WAIT_CRITERIA,
     DEFAULT_DROP_CRITERIA,
@@ -510,6 +511,17 @@ class AutonomousArbiter:
                .replace("{ALIAS_HINT}", alias_hint)
         )
 
+    def _load_choice_instructions(self) -> str:
+        """Renders Jev Choice timing instructions by substituting active rule_templates."""
+        t = self.cfg.rule_templates
+        return (
+            DEFAULT_JEV_CHOICE_INSTRUCTIONS.strip()
+            .replace("{group}", t.get("group", DEFAULT_GROUP_DESCRIPTION))
+            .replace("{immediate}", t.get("immediate", DEFAULT_IMMEDIATE_CRITERIA))
+            .replace("{wait}", t.get("wait", DEFAULT_WAIT_CRITERIA))
+            .replace("{drop}", t.get("drop", DEFAULT_DROP_CRITERIA))
+        )
+
     def _load_rules_instructions(self) -> str:
         """Renders decision instructions by substituting active rule_templates."""
         t = self.cfg.rule_templates
@@ -629,7 +641,7 @@ class AutonomousArbiter:
         questions = {
             "routing": {
                 "type": "choice",
-                "instructions": self._load_rules_instructions(),
+                "instructions": self._load_choice_instructions(),
                 "criteria": criteria,
             }
         }
@@ -675,50 +687,55 @@ class AutonomousArbiter:
             if res is None or res.status_code != 200:
                 logger.warning(f"[ROUTING] Jev exhausted retries; fail-closed drop.")
                 return drop
-            answers = res.json().get("answers", {})
+            try:
+                answers = res.json().get("answers", {})
 
-            # --- Choice: timing/social context (orthogonal to bot identity) ---
-            routing_ans = answers.get("routing", {})
-            choice_key = routing_ans.get("choice", "drop")
-            confidence = float(routing_ans.get("confidence", 0.0) or 0.0)
-            _, choice_urgency = jev_map.get(choice_key, ("none", "drop"))
+                # --- Choice: timing/social context (orthogonal to bot identity) ---
+                routing_ans = answers.get("routing", {})
+                choice_key = routing_ans.get("choice", "drop")
+                confidence = float(routing_ans.get("confidence", 0.0) or 0.0)
+                _, choice_urgency = jev_map.get(choice_key, ("none", "drop"))
 
-            # --- Noul: per-bot assignment (domain experts) ---
-            noul_results: list = []  # (bot, prob) pairs
-            for b in self.cfg.roles:
-                noul_ans = answers.get(f"assignment_{b}", {})
-                noul_prob = float(noul_ans.get("noul", 0.0) or 0.0)
-                noul_results.append((b, noul_prob))
+                # --- Noul: per-bot assignment (domain experts) ---
+                noul_results: list = []  # (bot, prob) pairs
+                for b in self.cfg.roles:
+                    noul_ans = answers.get(f"assignment_{b}", {})
+                    noul_prob = float(noul_ans.get("noul", 0.0) or 0.0)
+                    noul_results.append((b, noul_prob))
 
-            # --- Dynamic dual threshold (one knob, derived) ---
-            # Choice says drop → strict (prevent false rescue from chitchat)
-            # Choice says respond → relaxed (prevent false silence / '装死')
-            strict = self.cfg.confidence_threshold
-            relaxed = self.cfg.confidence_threshold * 2 / 3
-            noul_threshold = strict if choice_urgency == "drop" else relaxed
+                # --- Dynamic dual threshold (one knob, derived) ---
+                # Choice says drop → strict (prevent false rescue from chitchat)
+                # Choice says respond → relaxed (prevent false silence / '装死')
+                strict = self.cfg.confidence_threshold
+                relaxed = self.cfg.confidence_threshold * 2 / 3
+                noul_threshold = strict if choice_urgency == "drop" else relaxed
 
-            candidate_bots = [b for b, p in noul_results if p >= noul_threshold]
-
-            # --- Final decision (layered arbitration, zero special-case hacks) ---
-            if not candidate_bots:
-                # No bot claims this message → true silence
-                target_bot = "none"
-                target_bots = []
-                urgency = "drop"
-            elif choice_urgency == "drop":
-                # Domain expert overrides global粗筛: rescue with 4s grace
-                target_bots = candidate_bots
+                # Sort descending by score first so candidate_bots preserves score order
                 noul_results.sort(key=lambda x: x[1], reverse=True)
-                target_bot = noul_results[0][0]
-                urgency = "wait_silence"
-                confidence = noul_results[0][1]
-            else:
-                # Both gates passed: use Choice's timing directly
-                target_bots = candidate_bots
-                noul_results.sort(key=lambda x: x[1], reverse=True)
-                target_bot = noul_results[0][0]
-                urgency = choice_urgency
-                confidence = noul_results[0][1]
+                candidate_bots = [b for b, p in noul_results if p >= noul_threshold]
+
+                # --- Final decision (layered arbitration, zero special-case hacks) ---
+                if not candidate_bots:
+                    # No bot claims this message → true silence
+                    target_bot = "none"
+                    target_bots = []
+                    urgency = "drop"
+                    confidence = 0.0
+                elif choice_urgency == "drop":
+                    # Domain expert overrides global粗筛: rescue with 4s grace
+                    target_bots = candidate_bots
+                    target_bot = candidate_bots[0]
+                    urgency = "wait_silence"
+                    confidence = noul_results[0][1]
+                else:
+                    # Both gates passed: use Choice's timing directly
+                    target_bots = candidate_bots
+                    target_bot = candidate_bots[0]
+                    urgency = choice_urgency
+                    confidence = noul_results[0][1]
+            except Exception as e:
+                logger.warning(f"[ROUTING] Jev response parsing failed: {e}; fail-closed drop.")
+                return drop
 
             decision = {
                 "target_bot": target_bot,

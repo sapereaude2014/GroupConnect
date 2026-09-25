@@ -56,7 +56,7 @@ DEFAULT_RULE_TEMPLATES: Dict[str, str] = {
     "assignment": DEFAULT_ASSIGNMENT_CRITERIA,
 }
 
-DEFAULT_ROUTING_RULES_MD = """# Autonomous Routing Decision Rules
+DEFAULT_JEV_CHOICE_INSTRUCTIONS = """# Autonomous Routing Timing Rules
 Group Context: {group}
 
 YOUR SCOPE — You judge ONLY the response TIMING for this message (immediate / wait /
@@ -77,6 +77,33 @@ Decision Rules (Evaluate in order, first match wins):
 
 3. OBJECTIVE INQUIRY & RECOMMENDATION (urgency = "wait_silence"):
    - {wait}
+"""
+
+DEFAULT_ROUTING_RULES_MD = """# Autonomous Routing Decision Rules
+Group Context: {group}
+
+Decision Rules (Evaluate in order, first match wins):
+1. BOT DIALOGUE CONTINUATION & DIRECT COMMAND (urgency = "immediate"):
+   - If recent context shows a bot asked a question, offered options, or proposed a
+     plan, and the current message is an acknowledgment, confirmation, decision
+     (e.g. "option A", "okay", "yes", "confirmed"), or a follow-up directed to
+     that bot -> Assign to THAT bot in target_bots with urgency "immediate".
+   - If the message is a direct command or imperative task request matching a bot's
+     role -> Assign to the matching bot(s) in target_bots with urgency "immediate".
+   - Direct instruction criteria: {immediate}
+
+2. INTERPERSONAL CHITCHAT / SILENCE (urgency = "drop", target_bots = []):
+   - {drop}
+
+3. OBJECTIVE INQUIRY & RECOMMENDATION (urgency = "wait_silence"):
+   - If the message is an open question, data lookup, or recommendation request
+     matching a bot's role -> Assign to the matching bot(s) in target_bots with
+     urgency "wait_silence" (leaves social space for humans to reply first).
+   - Inquiry criteria: {wait}
+
+4. MULTI-BOT ASSIGNMENT & DISPATCH:
+   - DISPATCH: One bot is asked to handle a task involving another bot (e.g. "A, ask B to do X") -> Assign to the DISPATCHER bot only.
+   - PARALLEL: The sender explicitly wants multiple bots to participate or collaborate (e.g. "A and B both look at this", "everyone check this") -> Assign all addressed bots in target_bots with urgency "immediate".
 """
 
 DEFAULT_LLM_PROMPT_TEMPLATE = """You are the single arbiter of a private group chat.
