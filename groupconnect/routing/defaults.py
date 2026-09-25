@@ -68,13 +68,15 @@ Decision Rules (Evaluate in order, first match wins):
      plan, and the current message is an acknowledgment, confirmation, decision
      (e.g. "option A", "okay", "yes", "confirmed"), or a follow-up directed to
      that bot -> immediate.
-   - Direct instruction criteria: {immediate}
+   - Or the message is a direct command / imperative task request (see the
+     immediate option criteria).
 
 2. INTERPERSONAL CHITCHAT / SILENCE (urgency = "drop"):
-   - {drop}
+   - Human-to-human conversation, venting, or banter (see the drop option criteria).
 
 3. OBJECTIVE INQUIRY & RECOMMENDATION (urgency = "wait_silence"):
-   - {wait}
+   - Open questions and data lookups where humans should reply first
+     (see the wait option criteria).
 """
 
 DEFAULT_ROUTING_RULES_MD = """# Autonomous Routing Decision Rules

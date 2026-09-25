@@ -227,16 +227,19 @@ class TestAutonomousRouting(unittest.TestCase):
         self.assertEqual(criteria["drop"], "DROP_CUSTOM")
         self.assertEqual(group, "GRP_CUSTOM")
         self.assertEqual(jev_map["drop"], ("none", "drop"))
-        # LLM & Jev instructions must perform true in-place replacement (default wording gone)
+        # LLM instructions must perform true in-place replacement (default wording gone)
         instructions = arb._load_rules_instructions()
         self.assertIn("DROP_CUSTOM", instructions)
         self.assertIn("GRP_CUSTOM", instructions)
         self.assertNotIn(DEFAULT_DROP_CRITERIA, instructions)
         self.assertNotIn(DEFAULT_GROUP_DESCRIPTION, instructions)
 
+        # Jev Choice instructions: only {group} injected; criteria texts live
+        # exclusively in the criteria object (no duplicate tokens)
         choice_inst = arb._load_choice_instructions()
-        self.assertIn("DROP_CUSTOM", choice_inst)
         self.assertIn("GRP_CUSTOM", choice_inst)
+        self.assertNotIn("DROP_CUSTOM", choice_inst)
+        self.assertNotIn("IMM {bot}|{role}", choice_inst)
         self.assertNotIn(DEFAULT_DROP_CRITERIA, choice_inst)
         self.assertNotIn(DEFAULT_GROUP_DESCRIPTION, choice_inst)
 

@@ -512,14 +512,15 @@ class AutonomousArbiter:
         )
 
     def _load_choice_instructions(self) -> str:
-        """Renders Jev Choice timing instructions by substituting active rule_templates."""
+        """Renders Jev Choice timing instructions.
+
+        Only {group} is injected here — the immediate/wait/drop criteria texts
+        live exclusively in the Choice `criteria` object, avoiding duplicate
+        tokens in the same question."""
         t = self.cfg.rule_templates
         return (
             DEFAULT_JEV_CHOICE_INSTRUCTIONS.strip()
             .replace("{group}", t.get("group", DEFAULT_GROUP_DESCRIPTION))
-            .replace("{immediate}", t.get("immediate", DEFAULT_IMMEDIATE_CRITERIA))
-            .replace("{wait}", t.get("wait", DEFAULT_WAIT_CRITERIA))
-            .replace("{drop}", t.get("drop", DEFAULT_DROP_CRITERIA))
         )
 
     def _load_rules_instructions(self) -> str:
