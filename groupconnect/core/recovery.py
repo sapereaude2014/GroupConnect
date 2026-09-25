@@ -126,7 +126,8 @@ class ResumeManager:
                                     and not buf[j].get("is_bot")):
                                 watermark_idx = j
                                 break
-                        break  # newest linked reply found — stop scanning
+                        if watermark_idx is not None:
+                            break  # newest linked reply found in window — stop scanning
 
                 if watermark_idx is not None:
                     # New path: collect every human message after the watermark

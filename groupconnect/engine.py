@@ -259,6 +259,8 @@ class GroupConnectEngine:
             await self.channel.start()
         finally:
             self.is_running = False
+            if self._resume_hold_task and not self._resume_hold_task.done():
+                self._resume_hold_task.cancel()
             if scheduler_task:
                 scheduler_task.cancel()
             for task in self.chat_tasks.values():
@@ -487,6 +489,13 @@ class GroupConnectEngine:
         if not cmd and clean_query:
             cmd, target_bot, _ = parse_bot_command(clean_query, self.config.bot_username)
         if cmd == "stop" and msg.is_triggered:
+            if getattr(msg, "is_resume", False):
+                if self.resume_manager:
+                    try:
+                        self.resume_manager.mark_completed(chat_id, msg.msg_id, msg.text or "")
+                    except Exception:
+                        pass
+                return
             logger.info(f"Received preemptive /stop command for chat {chat_id}")
             self.adapter.terminate(chat_id)
             if chat_id in self.chat_queues:
@@ -497,14 +506,30 @@ class GroupConnectEngine:
                         q.task_done()
                     except (asyncio.QueueEmpty, ValueError):
                         break
-            await self.channel.send_reply(chat_id, "⏹ Task execution was stopped.", reply_to_msg_id=msg.msg_id)
-            self.context_mgr.record_message(
-                chat_id=chat_id,
-                sender_name=msg.sender_name,
-                text=msg.text,
-                msg_id=msg.msg_id,
-                attachments=[]
-            )
+            sent_id = await self.channel.send_reply(chat_id, "⏹ Task execution was stopped.", reply_to_msg_id=msg.msg_id)
+            clean_sent_id = sent_id if isinstance(sent_id, (int, str)) else 0
+            if record:
+                self.context_mgr.record_message(
+                    chat_id=chat_id,
+                    sender_name=msg.sender_name,
+                    text=msg.text,
+                    msg_id=msg.msg_id,
+                    attachments=[]
+                )
+            try:
+                self.context_mgr.record_message(
+                    chat_id=chat_id,
+                    sender_name=f"{self.config.bot_name} (@{self.config.bot_username})",
+                    text="⏹ Task execution was stopped.",
+                    msg_id=clean_sent_id,
+                    is_bot_reply=True,
+                    bot_username=self.config.bot_username,
+                    reply_to_msg_id=msg.msg_id or 0
+                )
+                if self.resume_manager:
+                    self.resume_manager.mark_completed(chat_id, msg.msg_id, msg.text or "")
+            except Exception:
+                pass
             return
 
         # 4. Immediate Real-Time Context Recording (Unblocked)
@@ -643,16 +668,17 @@ class GroupConnectEngine:
         if msg_id:
             self._triggered_msg_ids.append(str(msg_id))
 
-        q = self.chat_queues.get(chat_id)
-        if q is not None and q.qsize() >= au.cfg.max_queue_backlog:
-            logger.warning(
-                f"[ROUTING] Chat {chat_id} queue busy; autonomous task dropped (anti-starvation)."
-            )
-            return
         if decision.get("is_resume"):
             # Every landing resume candidate refreshes the settle window so the
             # whole burst drains in one coalesced batch once it goes quiet.
             self._extend_resume_hold()
+        else:
+            q = self.chat_queues.get(chat_id)
+            if q is not None and au is not None and hasattr(au, "cfg") and q.qsize() >= au.cfg.max_queue_backlog:
+                logger.warning(
+                    f"[ROUTING] Chat {chat_id} queue busy; autonomous task dropped (anti-starvation)."
+                )
+                return
         inbound = InboundMessage(
             chat_id=chat_id,
             chat_type=decision.get("chat_type", "group"),
@@ -696,31 +722,62 @@ class GroupConnectEngine:
                 break
 
             try:
-                # Handle reset/clear command if present in batch
+                # 1. Reset command takes precedence over everything in batch
                 reset_idx = next((i for i, it in enumerate(items) if it[2] in ("clear", "new", "reset")), -1)
                 if reset_idx != -1:
+                    if reset_idx > 0:
+                        logger.info(f"Discarding {reset_idx} pre-reset queued items in chat {chat_id} due to reset command")
                     reset_msg, reset_query, reset_cmd = items[reset_idx]
                     await self._handle_triggered_message(reset_msg, reset_query, reset_cmd, coalesced_items=[])
-                    remaining = items[reset_idx + 1:]
-                    for it in remaining:
+                    for it in items[reset_idx + 1:]:
                         queue.put_nowait(it)
-                elif len(items) == 1:
-                    msg, clean_query, cmd = items[0]
-                    await self._handle_triggered_message(msg, clean_query, cmd, coalesced_items=[])
                 else:
-                    # Latest-driven coalescing: latest message is the primary target
-                    latest_msg, latest_clean_query, latest_cmd = items[-1]
-                    coalesced = items[:-1]
-                    logger.info(
-                        f"Coalescing {len(items)} triggered messages in chat {chat_id}. "
-                        f"Latest query from {latest_msg.sender_name}: '{latest_clean_query[:50]}...'"
-                    )
-                    await self._handle_triggered_message(
-                        latest_msg,
-                        latest_clean_query,
-                        latest_cmd,
-                        coalesced_items=coalesced
-                    )
+                    # 2. Separate slash commands from ordinary conversational messages
+                    first_cmd_idx = next((i for i, it in enumerate(items) if it[2] is not None), -1)
+                    if first_cmd_idx == 0:
+                        # Leading item is a slash command (e.g. /backup, /status): execute standalone
+                        cmd_msg, cmd_query, cmd_name = items[0]
+                        await self._handle_triggered_message(cmd_msg, cmd_query, cmd_name, coalesced_items=[])
+                        for it in items[1:]:
+                            queue.put_nowait(it)
+                    elif first_cmd_idx > 0:
+                        # Leading items are ordinary messages, followed by a command: coalesce ordinary only
+                        normal_items = items[:first_cmd_idx]
+                        if len(normal_items) == 1:
+                            msg, clean_query, cmd = normal_items[0]
+                            await self._handle_triggered_message(msg, clean_query, cmd, coalesced_items=[])
+                        else:
+                            latest_msg, latest_clean_query, latest_cmd = normal_items[-1]
+                            coalesced = normal_items[:-1]
+                            logger.info(
+                                f"Coalescing {len(normal_items)} triggered messages in chat {chat_id}. "
+                                f"Latest query from {latest_msg.sender_name}: '{latest_clean_query[:50]}...'"
+                            )
+                            await self._handle_triggered_message(
+                                latest_msg,
+                                latest_clean_query,
+                                latest_cmd,
+                                coalesced_items=coalesced
+                            )
+                        for it in items[first_cmd_idx:]:
+                            queue.put_nowait(it)
+                    elif len(items) == 1:
+                        msg, clean_query, cmd = items[0]
+                        await self._handle_triggered_message(msg, clean_query, cmd, coalesced_items=[])
+                    else:
+                        # All items are ordinary messages: coalesce all
+                        latest_msg, latest_clean_query, latest_cmd = items[-1]
+                        coalesced = items[:-1]
+                        logger.info(
+                            f"Coalescing {len(items)} triggered messages in chat {chat_id}. "
+                            f"Latest query from {latest_msg.sender_name}: '{latest_clean_query[:50]}...'"
+                        )
+                        await self._handle_triggered_message(
+                            latest_msg,
+                            latest_clean_query,
+                            latest_cmd,
+                            coalesced_items=coalesced
+                        )
             except Exception as e:
                 logger.error(f"Error processing triggered message in chat {chat_id}: {e}", exc_info=True)
             finally:
@@ -775,10 +832,28 @@ class GroupConnectEngine:
             or (msg.chat_type == "private")
         )
 
+        async def _reply_builtin(text: str) -> None:
+            sent_id = await self.channel.send_reply(chat_id, text, reply_to_msg_id=msg.msg_id)
+            clean_sent_id = sent_id if isinstance(sent_id, (int, str)) else 0
+            try:
+                self.context_mgr.record_message(
+                    chat_id=chat_id,
+                    sender_name=f"{self.config.bot_name} (@{self.config.bot_username})",
+                    text=text,
+                    msg_id=clean_sent_id,
+                    is_bot_reply=True,
+                    bot_username=self.config.bot_username,
+                    reply_to_msg_id=msg.msg_id or 0
+                )
+                if self.resume_manager:
+                    self.resume_manager.mark_completed(chat_id, msg.msg_id, msg.text or "")
+            except Exception as e:
+                logger.warning(f"[COMMAND] Failed to record built-in command reply: {e}")
+
         if cmd in ("clear", "new", "reset"):
             self.context_mgr.reset_session(chat_id)
             self.adapter.terminate(chat_id)
-            await self.channel.send_reply(chat_id, "🧹 Session reset. Started fresh conversation context.", reply_to_msg_id=msg.msg_id)
+            await _reply_builtin("🧹 Session reset. Started fresh conversation context.")
             return True
         elif cmd == "status":
             buf = self.context_mgr.get_buffer(chat_id)
@@ -795,7 +870,7 @@ class GroupConnectEngine:
                 f"- **Workspace**: `{self.config.workspace_dir}`\n"
                 f"- **Service State**: `Active & Running`"
             )
-            await self.channel.send_reply(chat_id, status_text, reply_to_msg_id=msg.msg_id)
+            await _reply_builtin(status_text)
             return True
         elif cmd in ("help", "start"):
             custom_cmd_lines = ""
@@ -816,7 +891,7 @@ class GroupConnectEngine:
                 f"• `/new` or `/clear` - Reset context and start fresh\n"
                 f"• `/help` - Show this guide{custom_cmd_lines}"
             )
-            await self.channel.send_reply(chat_id, help_text, reply_to_msg_id=msg.msg_id)
+            await _reply_builtin(help_text)
             return True
         elif cmd in self._custom_commands_map:
             cmd_cfg = self._custom_commands_map[cmd]
@@ -840,7 +915,10 @@ class GroupConnectEngine:
             cmd_from_raw, _, raw_args = parse_bot_command(msg.text or "", self.config.bot_username)
             effective_args = raw_args if cmd_from_raw else clean_query
             asyncio.create_task(
-                self._run_slash_command(chat_id, cmd_cfg, effective_args, should_lock, clean_cmd_name, reply_to_msg_id=msg.msg_id, chat_type=msg.chat_type)
+                self._run_slash_command(
+                    chat_id, cmd_cfg, effective_args, should_lock, clean_cmd_name,
+                    reply_to_msg_id=msg.msg_id, chat_type=msg.chat_type, raw_msg_text=msg.text or ""
+                )
             )
             return True
 
@@ -1034,9 +1112,10 @@ class GroupConnectEngine:
         # Bot reply landed: proactively flush any pending wait_silence for this
         # chat so accumulated messages are processed immediately, without
         # waiting for the countdown to elapse.
-        au = getattr(self, "autonomous", None)
-        if au is not None:
-            au.flush_pending(chat_id)
+        if sent_msg_id:
+            au = getattr(self, "autonomous", None)
+            if au is not None:
+                au.flush_pending(chat_id)
 
     async def _run_slash_command(
         self,
@@ -1046,7 +1125,8 @@ class GroupConnectEngine:
         should_lock: bool,
         cmd_name: str,
         reply_to_msg_id: Any = None,
-        chat_type: str = "group"
+        chat_type: str = "group",
+        raw_msg_text: str = ""
     ) -> None:
         """Execute a slash command with lock release guaranteed by the caller."""
         try:
@@ -1056,3 +1136,8 @@ class GroupConnectEngine:
         finally:
             if should_lock:
                 self.command_dispatcher.release_lock(cmd_name)
+            if self.resume_manager and reply_to_msg_id:
+                try:
+                    self.resume_manager.mark_completed(chat_id, reply_to_msg_id, raw_msg_text)
+                except Exception:
+                    pass

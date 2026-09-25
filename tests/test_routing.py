@@ -1048,6 +1048,18 @@ class TestUncertainDropInterpolation(unittest.TestCase):
         self.assertEqual(res["target_bot"], "none")
         self.assertEqual(res["urgency"], "drop")
 
+    def test_nan_confidence_safely_sanitized(self):
+        # NaN in confidence must not crash or bypass sanity floor to fallback
+        res = self._run(self._arb(), float("nan"), 0.10, 0.15)
+        self.assertEqual(res["target_bot"], "none")
+        self.assertEqual(res["urgency"], "drop")
+
+    def test_nan_noul_sanitized_and_rescue_works(self):
+        # NaN in noul must be sanitized to 0.0, allowing valid claims to rescue properly
+        res = self._run(self._arb(), 0.30, float("nan"), 0.53)
+        self.assertEqual(res["target_bot"], "bot_b")
+        self.assertEqual(res["urgency"], "wait_silence")
+
     def test_full_confidence_drop_keeps_strict_bar(self):
         # conf=1.0 -> bar == strict (0.60): pre-existing firewall unchanged
         res = self._run(self._arb(), 1.0, 0.10, 0.59)

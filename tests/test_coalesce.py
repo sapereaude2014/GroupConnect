@@ -269,3 +269,107 @@ class TestQueueCoalescing(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("旧消息二", full_prompt)
         self.assertIn("【New Messages Since Last Response】", full_prompt)
         self.assertIn("⏳", full_prompt)  # pending coalesced marked inline
+
+    async def test_mixed_batch_ordinary_followed_by_command(self):
+        """When an ordinary conversational message is followed by a slash command
+        in the queue, ordinary message is processed first and the command is NOT
+        swallowed, executing independently in subsequent drain."""
+        chat_id = 9101
+        self.engine._handle_triggered_message = AsyncMock()
+
+        msg_normal = InboundMessage(
+            chat_id=chat_id, chat_type="group", msg_id=901,
+            sender_name="Zheng Ma", from_user={"id": 1, "first_name": "Zheng Ma"},
+            text="@test_bot 查一下杭州天气", is_triggered=True
+        )
+        msg_cmd = InboundMessage(
+            chat_id=chat_id, chat_type="group", msg_id=902,
+            sender_name="Zheng Ma", from_user={"id": 1, "first_name": "Zheng Ma"},
+            text="@test_bot /backup", is_triggered=True
+        )
+
+        self.engine.chat_queues[chat_id] = asyncio.Queue()
+        self.engine.chat_queues[chat_id].put_nowait((msg_normal, "查一下杭州天气", None))
+        self.engine.chat_queues[chat_id].put_nowait((msg_cmd, "/backup", "backup"))
+
+        await self.engine._process_chat_queue(chat_id)
+
+        # Both items must be handled across iterations:
+        # Call 1: normal message (clean_query="查一下杭州天气", cmd=None)
+        # Call 2: slash command (clean_query="/backup", cmd="backup")
+        self.assertEqual(self.engine._handle_triggered_message.call_count, 2)
+        call1 = self.engine._handle_triggered_message.call_args_list[0]
+        call2 = self.engine._handle_triggered_message.call_args_list[1]
+
+        self.assertEqual(call1[0][0].msg_id, 901)
+        self.assertIsNone(call1[0][2])
+        self.assertEqual(call2[0][0].msg_id, 902)
+        self.assertEqual(call2[0][2], "backup")
+
+    async def test_mixed_batch_command_first_not_downgraded_to_prompt(self):
+        """When a command is followed by ordinary messages, the command runs
+        alone and does NOT get coalesced into ordinary messages as prompt text."""
+        chat_id = 9102
+        self.engine._handle_triggered_message = AsyncMock()
+
+        msg_cmd = InboundMessage(
+            chat_id=chat_id, chat_type="group", msg_id=911,
+            sender_name="Zheng Ma", from_user={"id": 1, "first_name": "Zheng Ma"},
+            text="@test_bot /backup", is_triggered=True
+        )
+        msg_normal1 = InboundMessage(
+            chat_id=chat_id, chat_type="group", msg_id=912,
+            sender_name="Zheng Ma", from_user={"id": 1, "first_name": "Zheng Ma"},
+            text="@test_bot 帮我看下方案一", is_triggered=True
+        )
+        msg_normal2 = InboundMessage(
+            chat_id=chat_id, chat_type="group", msg_id=913,
+            sender_name="Zheng Ma", from_user={"id": 1, "first_name": "Zheng Ma"},
+            text="@test_bot 还要出张图", is_triggered=True
+        )
+
+        self.engine.chat_queues[chat_id] = asyncio.Queue()
+        self.engine.chat_queues[chat_id].put_nowait((msg_cmd, "/backup", "backup"))
+        self.engine.chat_queues[chat_id].put_nowait((msg_normal1, "帮我看下方案一", None))
+        self.engine.chat_queues[chat_id].put_nowait((msg_normal2, "还要出张图", None))
+
+        await self.engine._process_chat_queue(chat_id)
+
+        # Call 1: command alone
+        # Call 2: normal messages coalesced
+        self.assertEqual(self.engine._handle_triggered_message.call_count, 2)
+        call1 = self.engine._handle_triggered_message.call_args_list[0]
+        call2 = self.engine._handle_triggered_message.call_args_list[1]
+
+        self.assertEqual(call1[0][0].msg_id, 911)
+        self.assertEqual(call1[0][2], "backup")
+
+        self.assertEqual(call2[0][0].msg_id, 913)
+        self.assertIsNone(call2[0][2])
+        self.assertEqual(len(call2[1].get("coalesced_items", [])), 1)
+        self.assertEqual(call2[1]["coalesced_items"][0][0].msg_id, 912)
+
+    async def test_historical_stop_disarmed_on_resume(self):
+        """Historical /stop re-dispatched during recovery is disarmed: it does
+        NOT terminate the running adapter or wipe queue workers."""
+        chat_id = 9103
+        self.engine.chat_queues[chat_id] = asyncio.Queue()
+        active_msg = InboundMessage(
+            chat_id=chat_id, chat_type="group", msg_id=921,
+            sender_name="Zheng Ma", from_user={"id": 1, "first_name": "Zheng Ma"},
+            text="正在等待的真实任务", is_triggered=True
+        )
+        self.engine.chat_queues[chat_id].put_nowait((active_msg, "正在等待的真实任务", None))
+
+        resume_stop = InboundMessage(
+            chat_id=chat_id, chat_type="group", msg_id=922,
+            sender_name="Zheng Ma", from_user={"id": 1, "first_name": "Zheng Ma"},
+            text="/stop", is_triggered=True, is_resume=True
+        )
+
+        await self.engine.on_inbound_message(resume_stop, record=False)
+
+        # The active queue must NOT be wiped
+        self.assertFalse(self.engine.chat_queues[chat_id].empty())
+        # The adapter must NOT be terminated
+        self.engine.adapter.terminate.assert_not_called()

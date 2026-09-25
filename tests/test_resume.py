@@ -471,6 +471,55 @@ class TestResumeUnanswered(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(f"{chat_id}:102:task2", engine.resume_manager._retry_counts)
         self.assertNotIn(f"{chat_id}:103:task3", engine.resume_manager._retry_counts)
 
+    async def test_watermark_scan_skips_out_of_window_anchor_to_find_in_window_anchor(self):
+        """When the newest bot reply quotes a message that slid out of the buffer,
+        watermark scan continues searching older bot replies in the buffer instead
+        of breaking prematurely."""
+        engine = self._make_engine()
+        chat_id = -100456
+        now = datetime.now()
+        # Buffer:
+        # 1. msg 10 (human, in window)
+        # 2. bot reply 11 quoting msg 10
+        # 3. msg 12 (human, unanswered, in window)
+        # 4. bot reply 13 quoting msg 999 (999 is NOT in buffer, slid out)
+        # 5. msg 14 (human, unanswered, in window)
+        engine.context_mgr.buffers[chat_id] = [
+            {"time": (now - timedelta(seconds=60)).strftime("%Y-%m-%d %H:%M:%S"), "msg_id": 10, "sender": "User", "text": "早前问题", "is_bot": False},
+            {"time": (now - timedelta(seconds=50)).strftime("%Y-%m-%d %H:%M:%S"), "msg_id": 11, "sender": "Bot", "text": "回答早前", "is_bot": True, "reply_to_msg_id": 10},
+            {"time": (now - timedelta(seconds=40)).strftime("%Y-%m-%d %H:%M:%S"), "msg_id": 12, "sender": "User", "text": "中间未答问题", "is_bot": False},
+            {"time": (now - timedelta(seconds=30)).strftime("%Y-%m-%d %H:%M:%S"), "msg_id": 13, "sender": "Bot", "text": "外部回复", "is_bot": True, "reply_to_msg_id": 999},
+            {"time": (now - timedelta(seconds=10)).strftime("%Y-%m-%d %H:%M:%S"), "msg_id": 14, "sender": "User", "text": "最新未答问题", "is_bot": False},
+        ]
+
+        await engine._resume_unanswered_messages()
+
+        # Both msg 12 and msg 14 should be resumed because watermark fell back to msg 10 (index 0)
+        self.assertEqual(engine.on_inbound_message.call_count, 2)
+        resumed_ids = [call[0][0].msg_id for call in engine.on_inbound_message.call_args_list]
+        self.assertEqual(resumed_ids, [12, 14])
+
+    async def test_builtin_command_reply_recorded_with_watermark(self):
+        """Built-in slash commands (/status, /help) record bot replies with reply_to_msg_id
+        so subsequent resume scans do not re-dispatch them."""
+        engine = self._make_engine(mock_inbound=False)
+        chat_id = -100789
+        msg = InboundMessage(
+            chat_id=chat_id, chat_type="group", msg_id=5001,
+            sender_name="Zheng Ma", from_user={"id": 1, "first_name": "Zheng Ma"},
+            text="/status", is_triggered=True
+        )
+
+        handled = await engine._route_slash_command(msg, "", "status")
+        self.assertTrue(handled)
+
+        # Context buffer must have recorded the bot's status reply with reply_to_msg_id=5001
+        buf = engine.context_mgr.get_buffer(chat_id)
+        self.assertTrue(len(buf) >= 1)
+        last_entry = buf[-1]
+        self.assertTrue(last_entry.get("is_bot"))
+        self.assertEqual(last_entry.get("reply_to_msg_id"), 5001)
+
 
 if __name__ == "__main__":
     unittest.main()

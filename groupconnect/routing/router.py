@@ -17,6 +17,7 @@ import datetime as _dt
 import inspect
 import json
 import logging
+import math
 import os
 import re
 import time
@@ -762,11 +763,25 @@ class AutonomousArbiter:
                 # between the strict bar and the fallback-dispatch path.
                 strict = self.cfg.confidence_threshold
                 relaxed = self.cfg.confidence_threshold * 2 / 3
-                conf_c = min(max(confidence, 0.0), 1.0)
+                if not isinstance(confidence, (int, float)) or math.isnan(confidence) or confidence < 0.0:
+                    conf_c = 0.0
+                else:
+                    conf_c = min(float(confidence), 1.0)
+
                 if choice_urgency == "drop":
                     noul_threshold = relaxed + (strict - relaxed) * conf_c
                 else:
                     noul_threshold = relaxed
+
+                # Sanitize noul probabilities against NaN
+                clean_noul = []
+                for b, p in noul_results:
+                    if not isinstance(p, (int, float)) or math.isnan(p) or p < 0.0:
+                        clean_p = 0.0
+                    else:
+                        clean_p = min(float(p), 1.0)
+                    clean_noul.append((b, clean_p))
+                noul_results = clean_noul
 
                 # Sort descending by score first so candidate_bots preserves score order
                 noul_results.sort(key=lambda x: x[1], reverse=True)
@@ -947,11 +962,21 @@ class AutonomousArbiter:
 
             primary_target = target_bots[0] if target_bots else "none"
 
+            raw_conf = data.get("confidence", 0.0)
+            try:
+                conf_val = float(raw_conf or 0.0)
+                if math.isnan(conf_val) or conf_val < 0.0:
+                    conf_val = 0.0
+                else:
+                    conf_val = min(conf_val, 1.0)
+            except (ValueError, TypeError):
+                conf_val = 0.0
+
             decision = {
                 "target_bot": primary_target,
                 "target_bots": target_bots,
                 "urgency": str(data.get("urgency", "drop")).lower(),
-                "confidence": float(data.get("confidence", 0.0) or 0.0),
+                "confidence": conf_val,
                 "source": "classifier",
             }
             if decision["urgency"] not in ("immediate", "wait_silence", "drop") or not target_bots:
