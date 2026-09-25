@@ -10,6 +10,14 @@ Tri-state output:
     {"target_bot": <bot|none>, "urgency": "immediate"|"wait_silence"|"drop"}
 
 Fail-closed iron rule: no key / timeout / bad JSON / low confidence -> drop.
+
+Conversation-state stewardship lives on the CONTROLLER, keeping every layer
+context-blind and single-purpose:
+    - in-flight ledger: dispatched immediate tasks surface a synthetic
+      context line until the reply lands (engine feeds it to L2);
+    - state gate: if the bot spoke last (may be awaiting an answer), the
+      controller vetoes L0's noise drop so short acks ('对'/'好的') reach L2,
+      which already knows how to judge bot-dialogue continuations.
 """
 
 import asyncio
@@ -966,6 +974,17 @@ class AutonomousController:
             f"not been posted yet)"
         )
 
+    def _bot_awaiting_answer(self, context: str) -> bool:
+        """True if the most recent context line is a bot message.
+
+        The controller owns conversation state (see module docstring): layers
+        L0/L1 stay context-blind; this gate only answers 'did a bot speak
+        last?' so short human acks answering a bot's question are not killed
+        by the context-blind noise filter before the classifier sees them.
+        """
+        lines = [ln for ln in (context or "").split("\n") if ln.strip()]
+        return bool(lines) and lines[-1].lstrip().startswith("[Bot ")
+
     def chat_allowed(self, chat_id: Any) -> bool:
         if self.cfg.allowed_chat_ids:
             return (
@@ -998,6 +1017,14 @@ class AutonomousController:
                 logger.warning(f"[ROUTING] Context build failed: {e}")
 
         decision = self.arbiter.evaluate_sync(msg.text or "", msg.sender_name, context)
+        if (
+            decision is not None
+            and decision.get("source") == "noise"
+            and self._bot_awaiting_answer(context)
+        ):
+            # State gate: the bot spoke last and may be awaiting an answer —
+            # veto the context-blind noise drop and let the classifier decide.
+            decision = None
         if decision is None:
             alias_hint = ""
             if self.cfg.alias_mode == "hint":
