@@ -93,10 +93,15 @@ class Gatekeeper:
             uid_matched = (
                 user_id in self.allowed_user_ids
                 or str(user_id) in self.allowed_user_ids
+                or user_id in self.allowed_chat_ids
+                or str(user_id) in self.allowed_chat_ids
             )
             if not uid_matched:
                 try:
-                    uid_matched = int(user_id) in self.allowed_user_ids
+                    uid_matched = (
+                        int(user_id) in self.allowed_user_ids
+                        or int(user_id) in self.allowed_chat_ids
+                    )
                 except (ValueError, TypeError):
                     pass
             if uid_matched:

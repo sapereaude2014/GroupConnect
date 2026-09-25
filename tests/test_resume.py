@@ -1,3 +1,4 @@
+import asyncio
 import shutil
 import tempfile
 import unittest
@@ -396,6 +397,79 @@ class TestResumeUnanswered(unittest.IsolatedAsyncioTestCase):
         await engine2._resume_unanswered_messages()
         engine2.on_inbound_message.assert_awaited_once()
         self.assertTrue(engine2.on_inbound_message.await_args[0][0].is_resume)
+
+    async def test_private_chat_resume_passes_gatekeeper(self):
+        """Private chat resume messages must include from_user with user ID so
+        gatekeeper permits the re-dispatch instead of blocking as unauthorized."""
+        self.test_dir = tempfile.mkdtemp()
+        config = GatewayConfig({
+            "platform": "telegram",
+            "engine_type": "opencode",
+            "bot_username": "test_bot",
+            "bot_name": "Test Bot",
+            "workspace_dir": self.test_dir,
+            "allow_open_access": False,
+            "security": {
+                "allowed_user_ids": [12345],
+                "allowed_chat_ids": [12345],
+            },
+        })
+        mock_channel = MagicMock()
+        mock_channel.send_reply = AsyncMock()
+        with patch.object(GroupConnectEngine, "_create_adapter", return_value=MagicMock()), \
+             patch.object(GroupConnectEngine, "_create_channel", return_value=mock_channel):
+            engine = GroupConnectEngine(config)
+
+        chat_id = 12345
+        engine.context_mgr.buffers[chat_id] = [
+            make_item("私人私聊任务", when=datetime.now() - timedelta(seconds=20), msg_id=2001, sender="Alice")
+        ]
+        # Do not mock on_inbound_message: test real gatekeeper passage
+        await engine._resume_unanswered_messages()
+
+        # Channel should NOT have sent Access Restricted warning
+        mock_channel.send_reply.assert_not_awaited()
+        # Message should be successfully enqueued in chat_queues
+        self.assertIn(chat_id, engine.chat_queues)
+        self.assertFalse(engine.chat_queues[chat_id].empty())
+        queued_msg, _, _ = engine.chat_queues[chat_id].get_nowait()
+        self.assertEqual(queued_msg.msg_id, 2001)
+        self.assertEqual(queued_msg.from_user.get("id"), 12345)
+
+    async def test_coalesced_resume_messages_all_marked_completed(self):
+        """When multiple unanswered messages coalesce into a single execution turn,
+        all coalesced messages must be cleared in resume_manager (not just the latest)."""
+        engine = self._make_engine(mock_inbound=False)
+        chat_id = 99999
+        # Simulate resume manager tracking retry counts for 3 messages
+        engine.resume_manager._retry_counts = {
+            f"{chat_id}:101:task1": 1,
+            f"{chat_id}:102:task2": 1,
+            f"{chat_id}:103:task3": 1,
+        }
+
+        # Put 3 messages into queue
+        if chat_id not in engine.chat_queues:
+            engine.chat_queues[chat_id] = asyncio.Queue()
+
+        m1 = InboundMessage(chat_id=chat_id, chat_type="private", msg_id=101, sender_name="User", from_user={"id": chat_id}, text="task1", is_triggered=True)
+        m2 = InboundMessage(chat_id=chat_id, chat_type="private", msg_id=102, sender_name="User", from_user={"id": chat_id}, text="task2", is_triggered=True)
+        m3 = InboundMessage(chat_id=chat_id, chat_type="private", msg_id=103, sender_name="User", from_user={"id": chat_id}, text="task3", is_triggered=True)
+
+        engine.chat_queues[chat_id].put_nowait((m1, "task1", None))
+        engine.chat_queues[chat_id].put_nowait((m2, "task2", None))
+        engine.chat_queues[chat_id].put_nowait((m3, "task3", None))
+
+        # Mock adapter to return reply
+        engine.adapter.execute_turn = AsyncMock(return_value=("All 3 done", "sess-1"))
+        engine.outbound_delivery.deliver = AsyncMock(return_value=(888, "All 3 done"))
+
+        await engine._process_chat_queue(chat_id)
+
+        # All 3 messages must have been cleared from retry counts!
+        self.assertNotIn(f"{chat_id}:101:task1", engine.resume_manager._retry_counts)
+        self.assertNotIn(f"{chat_id}:102:task2", engine.resume_manager._retry_counts)
+        self.assertNotIn(f"{chat_id}:103:task3", engine.resume_manager._retry_counts)
 
 
 if __name__ == "__main__":

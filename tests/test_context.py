@@ -206,6 +206,21 @@ class TestContextManager(unittest.TestCase):
         self.assertTrue(lines[1].startswith("⏳ "))
         self.assertIn("new1", lines[1])
 
+    def test_since_msg_id_mixed_types(self):
+        """since_msg_id provided as a string or int filters older numeric IDs correctly."""
+        chat_id = 2004
+        self.mgr.record_message(chat_id, "Alice", "msg20", msg_id=20)
+        self.mgr.record_message(chat_id, "Bob", "msg30", msg_id=30)
+        self.mgr.record_message(chat_id, "Alice", "msg40", msg_id=40)
+
+        # Pass since_msg_id as string "30"
+        ctx = self.mgr.build_group_context(chat_id, since_msg_id="30")
+        lines = ctx.split("\n")
+        self.assertEqual(len(lines), 1)
+        self.assertIn("msg40", lines[0])
+        self.assertNotIn("msg20", ctx)
+        self.assertNotIn("msg30", ctx)
+
 
 if __name__ == "__main__":
     unittest.main()

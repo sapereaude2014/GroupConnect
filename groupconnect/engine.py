@@ -752,7 +752,9 @@ class GroupConnectEngine:
         )
 
         # 3. Invoke agent and deliver response
-        await self._invoke_agent_and_deliver(msg, full_prompt, active_attachments, session, cid)
+        await self._invoke_agent_and_deliver(
+            msg, full_prompt, active_attachments, session, cid, coalesced_items=coalesced_items
+        )
 
     async def _route_slash_command(
         self,
@@ -965,7 +967,8 @@ class GroupConnectEngine:
         full_prompt: str,
         active_attachments: List[Dict[str, Any]],
         session: Dict[str, Any],
-        cid: Optional[str]
+        cid: Optional[str],
+        coalesced_items: Optional[List[Tuple[InboundMessage, str, Optional[str]]]] = None
     ) -> None:
         """Invokes the agent with typing heartbeat, then delivers the response."""
         chat_id = msg.chat_id
@@ -1022,6 +1025,9 @@ class GroupConnectEngine:
             session["last_bot_msg_id"] = sent_msg_id
             try:
                 self.resume_manager.mark_completed(msg.chat_id, msg.msg_id, msg.text or "")
+                if coalesced_items:
+                    for c_msg, _, _ in coalesced_items:
+                        self.resume_manager.mark_completed(c_msg.chat_id, c_msg.msg_id, c_msg.text or "")
             except Exception:
                 pass
 

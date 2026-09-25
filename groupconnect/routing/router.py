@@ -14,6 +14,7 @@ Fail-closed iron rule: no key / timeout / bad JSON / low confidence -> drop.
 
 import asyncio
 import datetime as _dt
+import inspect
 import json
 import logging
 import os
@@ -781,11 +782,12 @@ class AutonomousArbiter:
 
                 # --- Final decision (layered arbitration) ---
                 if not candidate_bots:
-                    if choice_urgency == "drop" or not noul_results:
-                        # Both gates say silence (or no bots configured) → true silence
+                    fallback_floor = min(0.20, relaxed)
+                    if choice_urgency == "drop" or not noul_results or noul_results[0][1] < fallback_floor:
+                        # Both gates say silence, no bots configured, or top score is below sanity floor → true silence
                         logger.info(
                             f"[ROUTING] No bot claimed message "
-                            f"(noul_threshold={noul_threshold:.2f}, "
+                            f"(noul_threshold={noul_threshold:.2f}, floor={fallback_floor:.2f}, "
                             f"scores={{{', '.join(f'{b}:{p:.2f}' for b, p in noul_results)}}})."
                         )
                         target_bot = "none"
@@ -804,7 +806,7 @@ class AutonomousArbiter:
                             f"[ROUTING] No bot claimed message but Choice said "
                             f"'{choice_urgency}'; fallback dispatch to {target_bot} "
                             f"with wait_silence grace (top score {confidence:.2f} "
-                            f"below threshold {noul_threshold:.2f})."
+                            f"below threshold {noul_threshold:.2f}, clears floor {fallback_floor:.2f})."
                         )
                 elif choice_urgency == "drop":
                     # Domain expert overrides the global screen: rescue with 4s grace
@@ -1031,6 +1033,12 @@ class AutonomousController:
             for entry in reversed(buffer):
                 if not entry.get("is_bot"):
                     continue
+                # Only the target bot's own reply clears its in-flight task marker.
+                # Other bots speaking in the group must not prematurely erase it.
+                entry_bot = str(entry.get("bot_username") or "").lower().lstrip("@")
+                target_b = str(rec.get("bot") or "").lower().lstrip("@")
+                if entry_bot and target_b and entry_bot != target_b:
+                    continue
                 mid, rid = entry.get("msg_id", 0), rec.get("msg_id", 0)
                 try:
                     newer = int(mid) > int(rid)
@@ -1126,7 +1134,9 @@ class AutonomousController:
         # Publish once: IPC broadcast to peers + local symmetric execution.
         if self.relay is not None:
             try:
-                await self.relay.broadcast_event(payload)
+                res = self.relay.broadcast_event(payload)
+                if inspect.isawaitable(res):
+                    await res
             except Exception as e:
                 logger.warning(f"[ROUTING] Broadcast failed: {e}")
         if self.observer is not None:

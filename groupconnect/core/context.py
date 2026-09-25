@@ -219,11 +219,13 @@ class ContextManager:
                 continue
             if exclude_msg_id and str(msg_id) == str(exclude_msg_id):
                 continue
-            if since_msg_id and str(msg_id) == str(since_msg_id):
-                continue
-            if since_msg_id and isinstance(since_msg_id, int) and isinstance(msg_id, int):
-                if msg_id <= since_msg_id:
-                    continue
+            if since_msg_id:
+                try:
+                    if int(msg_id) <= int(since_msg_id):
+                        continue
+                except (ValueError, TypeError):
+                    if str(msg_id) == str(since_msg_id):
+                        continue
 
             line = f"[{item['time']}] {item['sender']}{item['reply_info']}: {item['text']}"
             if str(msg_id) in pending_set:

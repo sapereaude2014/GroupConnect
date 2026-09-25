@@ -181,12 +181,17 @@ class ResumeManager:
                             cmd, target_bot, _ = parse_bot_command(raw, self.bot_username)
                             is_trig = bool(cmd and (target_bot is None or target_bot.lower() == self.bot_username.lower()))
 
+                        from_user = (
+                            {"id": chat_id, "first_name": str(last.get("sender", ""))}
+                            if chat_type == "private"
+                            else {"first_name": str(last.get("sender", ""))}
+                        )
                         inbound = InboundMessage(
                             chat_id=chat_id,
                             chat_type=chat_type,
                             msg_id=msg_id,
                             sender_name=str(last.get("sender", "")),
-                            from_user={},
+                            from_user=from_user,
                             text=raw,
                             is_triggered=is_trig,
                             is_resume=True
@@ -254,12 +259,17 @@ class ResumeManager:
                     cmd, target_bot, _ = parse_bot_command(raw, self.bot_username)
                     is_trig = bool(cmd and (target_bot is None or target_bot.lower() == self.bot_username.lower()))
 
+                from_user = (
+                    {"id": chat_id, "first_name": str(last.get("sender", ""))}
+                    if chat_type == "private"
+                    else {"first_name": str(last.get("sender", ""))}
+                )
                 inbound = InboundMessage(
                     chat_id=chat_id,
                     chat_type=chat_type,
                     msg_id=msg_id,
                     sender_name=str(last.get("sender", "")),
-                    from_user={},
+                    from_user=from_user,
                     text=raw,
                     is_triggered=is_trig,
                     is_resume=True

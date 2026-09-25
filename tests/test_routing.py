@@ -955,6 +955,45 @@ class TestAutonomousRouting(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_fallback_dispatch_drops_when_below_floor(self):
+        """Choice says immediate/wait, but all bots are below sanity floor (min(0.20, relaxed)) ->
+        drops safely to true silence instead of dragging an irrelevant bot into the conversation."""
+        import asyncio
+        from unittest.mock import patch, MagicMock
+        from groupconnect.routing.router import AutonomousArbiter
+
+        cfg = AutonomousConfig({
+            "enabled": True,
+            "roles": {"bot_a": "Domain A", "bot_b": "Domain B"},
+            "classifier": {
+                "engine": "jev",
+                "confidence_threshold": 0.8,
+                "providers": {"typesafe": {"api_key": "dummy_key", "engine": "jev"}},
+            }
+        })
+        arb = AutonomousArbiter(cfg)
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "answers": {
+                "routing": {"choice": "immediate", "confidence": 0.60},
+                "assignment_bot_a": {"noul": 0.08},
+                "assignment_bot_b": {"noul": 0.05},
+            }
+        }
+
+        async def run():
+            with patch("httpx.AsyncClient.post", return_value=mock_resp):
+                res = await arb.classify("快点下楼车到了", "Alice", "")
+                # Top score 0.08 is below fallback_floor (0.20) -> true silence
+                self.assertEqual(res["target_bot"], "none")
+                self.assertEqual(res["target_bots"], [])
+                self.assertEqual(res["urgency"], "drop")
+                self.assertEqual(res["confidence"], 0.0)
+
+        asyncio.run(run())
+
 
 class TestUncertainDropInterpolation(unittest.TestCase):
     """An uncertain drop (low Choice confidence) must not strand a strong
@@ -1093,6 +1132,21 @@ class TestInflightTaskMarker(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.ctrl.inflight_marker(-1001234567890, buffer), "")
         # Cleared permanently (record popped)
         self.assertEqual(self.ctrl.inflight_marker(-1001234567890, []), "")
+
+    async def test_other_bot_speaking_does_not_clear_marker(self):
+        """When Bot A is in flight, Bot B speaking in the group must not clear Bot A's marker."""
+        await self.ctrl.evaluate_and_publish(self._msg("assistant 查天气", msg_id=100))
+        self.assertTrue(self.ctrl.inflight_marker(-1001234567890, []))
+
+        # Different bot (e.g. secondary_bot) replies
+        buffer_other = [{"is_bot": True, "msg_id": 101, "sender": "Secondary Bot", "bot_username": "secondary_bot", "text": "other output"}]
+        self.assertIn("@primary_bot", self.ctrl.inflight_marker(-1001234567890, buffer_other))
+        self.assertIn(-1001234567890, self.ctrl._inflight)
+
+        # Target bot (primary_bot) replies
+        buffer_target = [{"is_bot": True, "msg_id": 102, "sender": "Primary Bot", "bot_username": "primary_bot", "text": "weather is clear"}]
+        self.assertEqual(self.ctrl.inflight_marker(-1001234567890, buffer_target), "")
+        self.assertNotIn(-1001234567890, self.ctrl._inflight)
 
     async def test_inflight_marker_expires_after_ttl(self):
         import time as _time
