@@ -23,14 +23,12 @@ class AntigravityAdapter(BaseAgentAdapter):
         agy_bin: str = "agy",
         workspace_dir: str = "./workspace",
         model: str = "gemini-3.8-flash-high",
-        timeout_secs: int = 180,
-        idle_timeout_mins: int = 30
+        timeout_secs: int = 180
     ):
         self.agy_bin = agy_bin
         self.workspace_dir = os.path.abspath(workspace_dir)
         self.model = model
         self.timeout_secs = timeout_secs
-        self.idle_timeout_mins = idle_timeout_mins
 
         self.workers: Dict[int, Any] = {}
         self.worker_last_used: Dict[int, float] = {}
@@ -133,9 +131,6 @@ class AntigravityAdapter(BaseAgentAdapter):
             except Exception as e:
                 logger.warning(f"Failed to killpg for chat {chat_id}: {e}")
             self.workers.pop(chat_id, None)
-
-    def reap_idle_workers(self) -> None:
-        pass
 
     def close(self) -> None:
         for cid, proc in list(self.workers.items()):

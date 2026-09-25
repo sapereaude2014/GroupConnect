@@ -90,7 +90,6 @@ class GroupConnectEngine:
         self.context_mgr = ContextManager(
             max_history_len=config.max_history_len,
             chat_logs_dir=config.chat_logs_dir,
-            idle_timeout_mins=config.session_idle_timeout_mins,
             bot_username=config.bot_username
         )
         self.gatekeeper = Gatekeeper(
@@ -196,8 +195,7 @@ class GroupConnectEngine:
                 agy_bin=self.config.agy_bin,
                 workspace_dir=self.config.workspace_dir,
                 model=self.config.model or "gemini-3.8-flash-high",
-                timeout_secs=self.config.timeout_secs,
-                idle_timeout_mins=self.config.session_idle_timeout_mins
+                timeout_secs=self.config.timeout_secs
             )
         elif self.config.engine_type in ("claude", "claude_code"):
             return adapter_cls(
@@ -225,7 +223,6 @@ class GroupConnectEngine:
                 workspace_dir=self.config.workspace_dir,
                 model=self.config.model,
                 timeout_secs=self.config.timeout_secs,
-                idle_timeout_mins=self.config.session_idle_timeout_mins,
                 output_grace_secs=self.config.output_grace_secs
             )
         # --- End local TeleAgent adapter (optional, not in upstream) ---
@@ -254,7 +251,6 @@ class GroupConnectEngine:
         logger.info(f"Starting GroupConnect Gateway (Platform: {self.config.platform}, Engine: {self.config.engine_type})...")
 
         await self.relay.start()
-        reaper_task = asyncio.create_task(self._reaper_loop())
         has_schedules = any("schedule" in c for c in getattr(self.config, "custom_commands", []))
         is_arbiter = (self.autonomous.is_arbiter if self.autonomous else True)
         scheduler_task = asyncio.create_task(self._scheduled_tasks_loop()) if (has_schedules and is_arbiter) else None
@@ -263,7 +259,6 @@ class GroupConnectEngine:
             await self.channel.start()
         finally:
             self.is_running = False
-            reaper_task.cancel()
             if scheduler_task:
                 scheduler_task.cancel()
             for task in self.chat_tasks.values():
@@ -282,17 +277,6 @@ class GroupConnectEngine:
                 self.adapter.close()
             except Exception as e:
                 logger.warning(f"Error closing adapter during shutdown: {e}")
-
-    async def _reaper_loop(self) -> None:
-        while self.is_running:
-            try:
-                await asyncio.sleep(300)
-                if hasattr(self.adapter, "reap_idle_workers"):
-                    self.adapter.reap_idle_workers()
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.warning(f"Error in reaper loop: {e}")
 
     async def _scheduled_tasks_loop(self) -> None:
         """Generic scheduled background runner for custom_commands with 'schedule' config."""

@@ -73,14 +73,12 @@ class TeleAgentAdapter(BaseAgentAdapter):
         workspace_dir: str = "./workspace",
         model: Optional[str] = None,
         timeout_secs: int = 1800,
-        idle_timeout_mins: int = 120,
         output_grace_secs: int = 15
     ):
         self.teleworker_bin = teleworker_bin
         self.workspace_dir = os.path.abspath(workspace_dir)
         self.model = model
         self.timeout_secs = timeout_secs
-        self.idle_timeout_mins = idle_timeout_mins
         self.output_grace_secs = output_grace_secs
 
         self.workers: Dict[int, Any] = {}
@@ -303,9 +301,6 @@ class TeleAgentAdapter(BaseAgentAdapter):
             except Exception as e:
                 logger.warning(f"Failed to killpg for chat {chat_id}: {e}")
             self.workers.pop(chat_id, None)
-
-    def reap_idle_workers(self) -> None:
-        pass
 
     def close(self) -> None:
         for cid, proc in list(self.workers.items()):

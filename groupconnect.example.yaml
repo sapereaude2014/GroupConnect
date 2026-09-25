@@ -30,7 +30,6 @@ bots:
       bin: /usr/local/bin/codex         # Optional: explicit binary path (defaults to searching PATH)
       # model: gpt-5                    # Optional: model identifier passed to the CLI (omit to use CLI default)
       timeout_secs: 1800                # Maximum execution time (seconds) per agent turn before force-termination
-      session_idle_timeout_mins: 120    # Idle minutes before resetting the agent's conversation session
     custom_commands:                    # Per-bot slash commands (registered in the platform's '/' command menu)
       - command: status                 # Slash command trigger without '/' (e.g., /status)
         description: "Check service health status"      # Command menu description (default locale)
@@ -73,7 +72,6 @@ bots:
       bin: ~/.local/bin/agy
       model: gemini-3.8-flash-high
       timeout_secs: 1800
-      session_idle_timeout_mins: 120
     custom_commands:
       - command: backup
         description: "Run full workspace backup"

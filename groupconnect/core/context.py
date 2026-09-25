@@ -30,10 +30,9 @@ def format_sender(from_user: Dict[str, Any]) -> str:
 class ContextManager:
     """Manages chat buffer history, incremental delta tracking, disk logging, and warm restart rehydration."""
 
-    def __init__(self, max_history_len: int = 30, chat_logs_dir: str = "./inbox/chat_logs", idle_timeout_mins: int = 30, bot_username: str = ""):
+    def __init__(self, max_history_len: int = 30, chat_logs_dir: str = "./inbox/chat_logs", bot_username: str = ""):
         self.max_history_len = max_history_len
         self.chat_logs_dir = os.path.abspath(chat_logs_dir)
-        self.idle_timeout_mins = idle_timeout_mins
         self.bot_username = bot_username
         self._log_prefix = f"chat_{bot_username}_" if bot_username else "chat_"
 
@@ -106,10 +105,6 @@ class ContextManager:
     def get_session(self, chat_id: Union[int, str]) -> Dict[str, Any]:
         now = time.time()
         sess = self.sessions.get(chat_id)
-        if sess:
-            if self.idle_timeout_mins > 0 and (now - sess.get("last_active", 0)) > (self.idle_timeout_mins * 60):
-                logger.info(f"Session for chat {chat_id} expired after {self.idle_timeout_mins}m idle.")
-                sess = None
 
         if not sess:
             # Restore last bot reply AND last user message from rehydrated buffer.

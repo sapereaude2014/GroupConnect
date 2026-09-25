@@ -209,12 +209,6 @@ class GatewayConfig:
             agent.get("timeout_secs", tuning.get("timeout_secs", data.get("timeout_secs", 180)))
         )
         self.output_grace_secs: int = int(tuning.get("output_grace_secs", data.get("output_grace_secs", 15)))
-        self.session_idle_timeout_mins: int = int(
-            agent.get(
-                "session_idle_timeout_mins",
-                tuning.get("session_idle_timeout_mins", data.get("session_idle_timeout_mins", 30)),
-            )
-        )
         self.max_chunk_size: int = int(tuning.get("max_chunk_size", data.get("max_chunk_size", 3800)))
         self.typing_interval_secs: float = float(
             tuning.get("typing_interval_secs", data.get("typing_interval_secs", 4.0))
