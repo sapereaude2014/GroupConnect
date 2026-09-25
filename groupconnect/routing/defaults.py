@@ -45,7 +45,8 @@ DEFAULT_DROP_CRITERIA = (
 DEFAULT_ASSIGNMENT_CRITERIA = (
     "Whether the current message falls within {bot}'s responsibility or requires {bot} ({role}) to handle it. "
     "Return a high score if the message is a direct question, command, or request that matches {bot}'s domain; "
-    "return a low score if it is casual conversation between humans with no action request toward {bot}."
+    "return a low score if it is casual conversation between humans with no action request toward {bot}, "
+    "or if another bot is explicitly being instructed to coordinate or delegate to {bot} (only the dispatcher bot should respond)."
 )
 
 DEFAULT_RULE_TEMPLATES: Dict[str, str] = {

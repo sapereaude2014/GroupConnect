@@ -694,6 +694,7 @@ class AutonomousArbiter:
             if res is None or res.status_code != 200:
                 logger.warning(f"[ROUTING] Jev exhausted retries; fail-closed drop.")
                 return drop
+            self._budget_used += 1
             try:
                 answers = res.json().get("answers", {}) or {}
 
@@ -756,7 +757,6 @@ class AutonomousArbiter:
                 "confidence": round(confidence, 2),
                 "source": "classifier",
             }
-            self._budget_used += 1
             return decision
 
     @staticmethod
@@ -843,6 +843,7 @@ class AutonomousArbiter:
                 if res.status_code != 200:
                     logger.warning(f"[ROUTING] Classifier HTTP {res.status_code}; fail-closed drop.")
                     return drop
+                self._budget_used += 1
                 resp_json = res.json()
                 if use_gemini_native:
                     raw_text = resp_json["candidates"][0]["content"]["parts"][0]["text"]
@@ -881,7 +882,6 @@ class AutonomousArbiter:
                 decision["urgency"] = "drop"
             if decision["urgency"] == "drop":
                 decision.update(target_bot="none", target_bots=[])
-            self._budget_used += 1
             return decision
 
 
