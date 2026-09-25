@@ -538,7 +538,7 @@ class AutonomousArbiter:
     # ---------- pipeline ----------
     def evaluate_sync(self, text: str, sender: str, context: str = "") -> Optional[Dict[str, Any]]:
         """L0 (physical noise) + L1 (alias bypass). Returns a decision or None.
-        Synchronous & 0-token. A None result means "proceed to L3 classifier".
+        Synchronous & 0-token. A None result means "proceed to L2 classifier".
         """
         self.cfg.reload_if_modified()
         if self.cfg.is_noise(text):
@@ -558,10 +558,10 @@ class AutonomousArbiter:
             elif self.cfg.alias_self_reference(text):
                 return {"target_bot": "none", "target_bots": [], "urgency": "drop",
                         "confidence": 1.0, "source": "alias_self_reference"}
-        return None  # -> L3
+        return None  # -> L2
 
     async def classify(self, text: str, sender: str, context: str, alias_hint: str = "") -> Dict[str, Any]:
-        """L3: single classifier tri-state call. Fail-closed -> drop.
+        """L2: single classifier tri-state call. Fail-closed -> drop.
         Dispatches on the ACTIVE provider's engine (jev | gemini)."""
         self.cfg.reload_if_modified()
         drop = {"target_bot": "none", "target_bots": [], "urgency": "drop", "confidence": 0.0, "source": "classifier"}
@@ -621,7 +621,7 @@ class AutonomousArbiter:
         evaluates social context and urgency — independent of bot identity.
         Each bot gets an independent Noul question: 'does this message need {bot}?'
 
-        Decision logic (layered arbitration, ~15 lines, zero hacks):
+        Decision logic (layered arbitration):
         1. Extract Noul scores for all bots.
         2. Dynamic threshold: Choice says drop → strict (confidence_threshold);
            Choice says respond → relaxed (confidence_threshold × 2/3).
@@ -715,7 +715,7 @@ class AutonomousArbiter:
                 noul_results.sort(key=lambda x: x[1], reverse=True)
                 candidate_bots = [b for b, p in noul_results if p >= noul_threshold]
 
-                # --- Final decision (layered arbitration, zero special-case hacks) ---
+                # --- Final decision (layered arbitration) ---
                 if not candidate_bots:
                     # No bot claims this message → true silence
                     target_bot = "none"
@@ -723,7 +723,7 @@ class AutonomousArbiter:
                     urgency = "drop"
                     confidence = 0.0
                 elif choice_urgency == "drop":
-                    # Domain expert overrides global粗筛: rescue with 4s grace
+                    # Domain expert overrides the global screen: rescue with 4s grace
                     target_bots = candidate_bots
                     target_bot = candidate_bots[0]
                     urgency = "wait_silence"

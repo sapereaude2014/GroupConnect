@@ -69,7 +69,7 @@ async def run_group_simulator(config: GatewayConfig) -> None:
                     history.append(f"{sender}: {text}")
                 continue
 
-            # 2. Classifier Evaluation (L3 LLM)
+            # 2. Classifier Evaluation (L2 LLM)
             print("  🧠 正在调用 Zero-@ 分类器进行语义分析...")
 
             try:
