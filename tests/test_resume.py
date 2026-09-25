@@ -373,6 +373,30 @@ class TestResumeUnanswered(unittest.IsolatedAsyncioTestCase):
         msg = engine.on_inbound_message.await_args[0][0]
         self.assertEqual(msg.text, "新鲜的问题")
 
+    async def test_watermark_candidates_marked_is_resume(self):
+        """Both scan paths mark candidates is_resume so downstream skips live
+        grace windows (no sibling-cancel eating) and batches the burst."""
+        # Watermark path (linked reply quotes a real anchor message)
+        engine = self._make_engine()
+        now = datetime.now()
+        engine.context_mgr.buffers[-100123] = [
+            make_item("已答的锚点", when=now - timedelta(seconds=80), msg_id=1199),
+            self._bot_item("✅ 已答", now - timedelta(seconds=70), 1200, reply_to=1199),
+            make_item("水位线后的新任务", when=now - timedelta(seconds=40), msg_id=1201),
+        ]
+        await engine._resume_unanswered_messages()
+        engine.on_inbound_message.assert_awaited_once()
+        self.assertTrue(engine.on_inbound_message.await_args[0][0].is_resume)
+
+        # Legacy path (no linked reply anywhere in buffer)
+        engine2 = self._make_engine()
+        engine2.context_mgr.buffers[-100123] = [
+            make_item("旧数据时代的任务", when=datetime.now() - timedelta(seconds=30), msg_id=1301),
+        ]
+        await engine2._resume_unanswered_messages()
+        engine2.on_inbound_message.assert_awaited_once()
+        self.assertTrue(engine2.on_inbound_message.await_args[0][0].is_resume)
+
 
 if __name__ == "__main__":
     unittest.main()

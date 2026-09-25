@@ -40,6 +40,11 @@ from groupconnect.routing import AutonomousController, AutonomousConfig
 
 logger = logging.getLogger("groupconnect.engine")
 
+# Resume-burst settle window: a re-dispatched candidate refreshes it on every
+# dispatch; when no new one arrives for this long, the burst is declared
+# complete and parked queue workers are released (single coalesced drain).
+RESUME_BURST_SETTLE_SECS = 8.0
+
 
 def _load_soul(config: GatewayConfig) -> str:
     """Load specific bot soul from config.soul_path, config.souls_dir, or default workspace .agents/souls/{bot_username}.md."""
@@ -114,6 +119,10 @@ class GroupConnectEngine:
         self.chat_locks: Dict[Any, asyncio.Lock] = {}
         self.chat_queues: Dict[Any, asyncio.Queue] = {}
         self.chat_tasks: Dict[Any, asyncio.Task] = {}
+        # Resume-burst batching: while re-dispatched candidates are still landing,
+        # queue workers stay parked so the whole burst coalesces into ONE reply.
+        self._resume_hold_until = 0.0
+        self._resume_hold_task: Optional[asyncio.Task] = None
         self._triggered_msg_ids: collections.deque = collections.deque(maxlen=200)
 
         # 5. Modular Subsystems: Commands, Pattern Fast Lane, Delivery, Recovery
@@ -411,8 +420,37 @@ class GroupConnectEngine:
             window_seconds=window,
             allowed_chat_ids=self.config.allowed_chat_ids
         )
+        if resumable:
+            # Park queue workers until the burst finishes landing so every
+            # re-dispatched candidate drains in ONE coalesced batch (a single
+            # summarized reply) instead of fragmenting per-dispatch.
+            self._extend_resume_hold()
         for chat_id, inbound in resumable:
             await self.on_inbound_message(inbound, record=False)
+
+    def _resume_workers_held(self) -> bool:
+        """True while a resume burst is still landing (workers stay parked)."""
+        return time.time() < self._resume_hold_until
+
+    def _extend_resume_hold(self) -> None:
+        """(Re)arms the resume-burst settle window and ensures a release task."""
+        self._resume_hold_until = time.time() + RESUME_BURST_SETTLE_SECS
+        task = self._resume_hold_task
+        if task is None or task.done():
+            self._resume_hold_task = asyncio.create_task(self._release_resume_workers())
+
+    async def _release_resume_workers(self) -> None:
+        while True:
+            remain = self._resume_hold_until - time.time()
+            if remain <= 0:
+                break
+            await asyncio.sleep(min(remain, 1.0))
+        for chat_id, queue in list(self.chat_queues.items()):
+            if queue.empty():
+                continue
+            worker = self.chat_tasks.get(chat_id)
+            if worker is None or worker.done():
+                self.chat_tasks[chat_id] = asyncio.create_task(self._process_chat_queue(chat_id))
 
     async def on_inbound_message(self, msg: InboundMessage, record: bool = True) -> None:
         chat_id = msg.chat_id
@@ -547,7 +585,7 @@ class GroupConnectEngine:
         self.chat_queues[chat_id].put_nowait((msg, clean_query, cmd))
 
         worker_task = self.chat_tasks.get(chat_id)
-        if worker_task is None or worker_task.done():
+        if (worker_task is None or worker_task.done()) and not self._resume_workers_held():
             self.chat_tasks[chat_id] = asyncio.create_task(self._process_chat_queue(chat_id))
 
     def _build_routing_context(self, chat_id: Any, exclude_msg_id: Any, window: int) -> str:
@@ -627,6 +665,10 @@ class GroupConnectEngine:
                 f"[ROUTING] Chat {chat_id} queue busy; autonomous task dropped (anti-starvation)."
             )
             return
+        if decision.get("is_resume"):
+            # Every landing resume candidate refreshes the settle window so the
+            # whole burst drains in one coalesced batch once it goes quiet.
+            self._extend_resume_hold()
         inbound = InboundMessage(
             chat_id=chat_id,
             chat_type=decision.get("chat_type", "group"),
@@ -647,7 +689,7 @@ class GroupConnectEngine:
         cmd, _, _ = parse_bot_command(inbound.text, self.config.bot_username)
         self.chat_queues[chat_id].put_nowait((inbound, inbound.text, cmd))
         worker_task = self.chat_tasks.get(chat_id)
-        if worker_task is None or worker_task.done():
+        if (worker_task is None or worker_task.done()) and not self._resume_workers_held():
             self.chat_tasks[chat_id] = asyncio.create_task(self._process_chat_queue(chat_id))
 
     async def _process_chat_queue(self, chat_id: Any) -> None:

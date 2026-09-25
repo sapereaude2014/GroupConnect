@@ -77,6 +77,7 @@ class InboundMessage:
     reply_to_bot_username: str = ""
     is_bot_relay: bool = False
     hop_count: int = 0
+    is_resume: bool = False  # crash-recovery re-dispatch (bypasses live grace windows)
 
 
 class BaseChannel(ABC):

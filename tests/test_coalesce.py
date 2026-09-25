@@ -105,3 +105,43 @@ class TestQueueCoalescing(unittest.IsolatedAsyncioTestCase):
         # Queue should be completely empty
         self.assertTrue(self.engine.chat_queues[chat_id].empty())
         self.engine.adapter.terminate.assert_called_with(chat_id)
+
+    async def test_resume_burst_single_coalesced_drain(self):
+        """A resume burst parks queue workers until the settle window lapses,
+        then the whole batch drains in ONE coalesced pass (one reply)."""
+        from types import SimpleNamespace
+
+        chat_id = 5555
+        self.engine._handle_triggered_message = AsyncMock()
+        self.engine.autonomous = SimpleNamespace(cfg=SimpleNamespace(max_queue_backlog=50))
+
+        with patch("groupconnect.engine.RESUME_BURST_SETTLE_SECS", 0.1):
+            for i in range(3):
+                await self.engine._dispatch_autonomous({
+                    "chat_id": chat_id, "chat_type": "group", "msg_id": 400 + i,
+                    "sender": "Zheng Ma", "text": f"补捞任务{i}",
+                    "target_bots": ["test_bot"], "urgency": "immediate",
+                    "is_resume": True,
+                })
+
+            # Inside the settle window: worker parked, nothing processed yet
+            self.assertNotIn(chat_id, self.engine.chat_tasks)
+            self.assertEqual(self.engine._handle_triggered_message.call_count, 0)
+
+            # Window lapses -> release task starts the worker -> single drain
+            await asyncio.sleep(0.4)
+
+        self.assertEqual(self.engine._handle_triggered_message.call_count, 1)
+        args, kwargs = self.engine._handle_triggered_message.call_args
+        self.assertEqual(args[0].msg_id, 402)  # latest lands in Current Query
+        self.assertEqual(len(kwargs.get("coalesced_items", [])), 2)
+
+        # A live (non-resume) dispatch during calm starts the worker immediately
+        self.engine._handle_triggered_message.reset_mock()
+        await self.engine._dispatch_autonomous({
+            "chat_id": chat_id, "chat_type": "group", "msg_id": 410,
+            "sender": "Zheng Ma", "text": "实时的活消息",
+            "target_bots": ["test_bot"], "urgency": "immediate",
+        })
+        await asyncio.sleep(0.05)
+        self.assertEqual(self.engine._handle_triggered_message.call_count, 1)

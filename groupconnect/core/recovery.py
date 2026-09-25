@@ -188,7 +188,8 @@ class ResumeManager:
                             sender_name=str(last.get("sender", "")),
                             from_user={},
                             text=raw,
-                            is_triggered=is_trig
+                            is_triggered=is_trig,
+                            is_resume=True
                         )
                         resumable.append((chat_id, inbound))
                         logger.info(
@@ -260,7 +261,8 @@ class ResumeManager:
                     sender_name=str(last.get("sender", "")),
                     from_user={},
                     text=raw,
-                    is_triggered=is_trig
+                    is_triggered=is_trig,
+                    is_resume=True
                 )
                 resumable.append((chat_id, inbound))
                 logger.info(

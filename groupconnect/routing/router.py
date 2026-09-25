@@ -455,6 +455,18 @@ class AutonomousObserver:
         should_act = self.my_bot in target_set
         if not should_act or urgency == "drop" or chat_id is None:
             return
+        if decision.get("is_resume"):
+            # Resume re-dispatch is a historical replay: the live grace window
+            # already elapsed in real time, and consecutive batch members must
+            # not cancel each other (pending holds ONE window per chat — arming
+            # the next would silently eat the previous candidate). Dispatch at
+            # decision time instead of arming a cancellable countdown.
+            logger.info(
+                f"[ROUTING] Resume decision in chat {chat_id}; dispatching {self.my_bot} "
+                f"without grace window (urgency={urgency})."
+            )
+            asyncio.create_task(self.dispatch(decision))
+            return
         secs = self.cfg.immediate_secs if urgency == "immediate" else self.cfg.silence_secs
         self._cancel(chat_id)  # always cancel stale pending first: no orphan tasks
         task = asyncio.create_task(self._countdown(decision, secs))
@@ -1065,6 +1077,7 @@ class AutonomousController:
             "sender": msg.sender_name,
             "text": msg.text or "",
             "decide_at": _dt.datetime.now().isoformat(timespec="seconds"),
+            "is_resume": bool(getattr(msg, "is_resume", False)),
             **decision,
         }
         # Track immediate dispatches as in-flight tasks for the routing context.

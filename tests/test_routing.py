@@ -152,6 +152,35 @@ class TestAutonomousRouting(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_resume_decision_dispatches_without_grace_window(self):
+        """Resume re-dispatches are historical replays: they must not arm the
+        cancellable per-chat window, and batch members must not eat each other."""
+        import asyncio
+        from groupconnect.routing.router import AutonomousObserver
+
+        async def run():
+            dispatched = []
+
+            async def spy(decision):
+                dispatched.append(decision.get("msg_id"))
+
+            obs = AutonomousObserver("primary_bot", self.cfg, spy)
+            base = {
+                "target_bot": "primary_bot", "target_bots": ["primary_bot"],
+                "urgency": "wait_silence", "chat_id": 123, "sender": "Zheng Ma",
+            }
+            obs.on_decision({**base, "msg_id": 1, "is_resume": True})
+            obs.on_decision({**base, "msg_id": 2, "is_resume": True})
+            self.assertNotIn(123, obs.pending)  # no cancellable window armed
+            await asyncio.sleep(0.05)  # let create_task(dispatch) settle
+            self.assertEqual(sorted(dispatched), [1, 2])  # neither sibling ate the other
+            # Live decisions still arm the grace window (regression guard)
+            obs.on_decision({**base, "msg_id": 3})
+            self.assertIn(123, obs.pending)
+            obs._cancel(123)
+
+        asyncio.run(run())
+
     def test_classifier_registry(self):
         # Self-describing registry: active switch + per-provider params.
         self.assertEqual(self.cfg.active_provider, "typesafe")
