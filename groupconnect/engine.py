@@ -899,100 +899,79 @@ class GroupConnectEngine:
             if active_attachments:
                 user_query = "Please inspect and analyze the attached media file(s) and provide a detailed structured response."
 
-        # Coalesced items: in group chats they already appear in the sliding
-        # window context — mark them inline with ⏳ instead of duplicating in a
-        # separate section.  In private chats (no sliding window) list them
-        # explicitly as before.
+        # Coalesced items already appear in the sliding-window context (group
+        # and private chats alike — the window is now built for both) — mark
+        # them inline with ⏳ instead of duplicating them in a separate
+        # prompt section.
         coalesce_section = ""
         pending_msg_ids = None
         if coalesced_items:
-            if is_group:
-                pending_msg_ids = {c_msg.msg_id for c_msg, _, _ in coalesced_items}
-                coalesce_section = (
-                    "\n（标注 ⏳ 的消息为排队期间接收到的连续补充要求，"
-                    "请一并综合响应，以最新【Current Query】为最终准则）\n"
-                )
-            else:
-                coalesce_lines = []
-                for c_msg, c_query, _ in coalesced_items:
-                    c_text = c_query if c_query else c_msg.text
-                    coalesce_lines.append(f"- [{c_msg.sender_name}]: {c_text}")
-                coalesce_section = (
-                    "\n【Coalesced Pending Instructions / 排队期间接收到的连续补充要求】\n"
-                    "（重要提示：在处理上一任务期间，用户在群内连续发送了以下指令。请结合这些补充要求，以最新的【Current Query】为最终准则一并综合响应）：\n"
-                    + "\n".join(coalesce_lines) + "\n"
-                )
+            pending_msg_ids = {c_msg.msg_id for c_msg, _, _ in coalesced_items}
+            coalesce_section = (
+                "\n（标注 ⏳ 的消息为排队期间接收到的连续补充要求，"
+                "请一并综合响应，以最新【Current Query】为最终准则）\n"
+            )
 
         # Soul prompt (session initialization only)
         soul_section = ""
         if cid is None:
             soul_section = _load_soul(self.config)
 
-        # Build full prompt with context
-        if not is_group:
-            if cid is None:
-                full_prompt = (
-                    f"【Role Context】\n"
-                    f"You are @{self.config.bot_username} ({self.config.bot_name}) in workspace: {self.config.workspace_dir}\n"
-                    f"{soul_section}"
-                    f"{attachments_section}\n"
-                    f"{coalesce_section}"
-                    f"【Sender】: {msg.sender_name}\n"
-                    f"【Query】: {user_query}\n\n"
-                    f"Please provide a helpful, accurate, and structured response."
-                )
-            else:
-                full_prompt = (
-                    f"【Role Context】\n"
-                    f"You are @{self.config.bot_username} ({self.config.bot_name})\n"
-                    f"{attachments_section}\n"
-                    f"{coalesce_section}"
-                    f"【Sender】: {msg.sender_name}\n"
-                    f"【Query】: {user_query}\n\n"
-                    f"Please continue the conversation naturally."
-                )
+        # Unified context building for group AND private chats: the sliding
+        # window is the cold-start safety net (the runtime conversation can
+        # expire after idle or be lost across restarts).  First turn / expired
+        # session → full window; subsequent turns → incremental slice since
+        # the last processed input (the runtime conversation holds the rest).
+        if is_group:
+            window_title = "【Recent Group Discussion Context (Sliding Window)】"
+            inc_title = "【New Group Messages Since Last Response】"
+            closing = "Please address the current query taking the group discussion background into account."
         else:
-            if cid is None:
-                context_str = self.context_mgr.build_group_context(
-                    chat_id,
-                    since_msg_id=0,
-                    exclude_msg_id=msg.msg_id,
-                    pending_msg_ids=pending_msg_ids
-                ) or "(No prior history)"
-                full_prompt = (
-                    f"【Role Context】\n"
-                    f"You are @{self.config.bot_username} ({self.config.bot_name}) in workspace: {self.config.workspace_dir}\n"
-                    f"{soul_section}"
-                    f"{attachments_section}\n"
-                    f"【Recent Group Discussion Context (Sliding Window)】\n"
-                    f"{context_str}\n"
-                    f"{coalesce_section}\n"
-                    f"【Current Query】\n"
-                    f"Sender: {msg.sender_name}\n"
-                    f"Content: {user_query}\n\n"
-                    f"Please address the current query taking the group discussion background into account."
-                )
-            else:
-                last_input_id = session.get("last_input_msg_id", 0)
-                inc_context = self.context_mgr.build_group_context(
-                    chat_id,
-                    since_msg_id=last_input_id,
-                    exclude_msg_id=msg.msg_id,
-                    skip_bot_username=self.config.bot_username,
-                    pending_msg_ids=pending_msg_ids
-                )
-                inc_section = f"\n【New Group Messages Since Last Response】\n{inc_context}\n" if inc_context else ""
-                full_prompt = (
-                    f"【Role Context】\n"
-                    f"You are @{self.config.bot_username} ({self.config.bot_name})\n"
-                    f"{attachments_section}"
-                    f"{inc_section}"
-                    f"{coalesce_section}\n"
-                    f"【Current Query】\n"
-                    f"Sender: {msg.sender_name}\n"
-                    f"Content: {user_query}\n\n"
-                    f"Please continue the conversation naturally."
-                )
+            window_title = "【Recent Conversation Context (Sliding Window)】"
+            inc_title = "【New Messages Since Last Response】"
+            closing = "Please address the current query taking the recent conversation background into account."
+
+        if cid is None:
+            context_str = self.context_mgr.build_group_context(
+                chat_id,
+                since_msg_id=0,
+                exclude_msg_id=msg.msg_id,
+                pending_msg_ids=pending_msg_ids
+            ) or "(No prior history)"
+            full_prompt = (
+                f"【Role Context】\n"
+                f"You are @{self.config.bot_username} ({self.config.bot_name}) in workspace: {self.config.workspace_dir}\n"
+                f"{soul_section}"
+                f"{attachments_section}\n"
+                f"{window_title}\n"
+                f"{context_str}\n"
+                f"{coalesce_section}"
+                f"【Current Query】\n"
+                f"Sender: {msg.sender_name}\n"
+                f"Content: {user_query}\n\n"
+                f"{closing}"
+            )
+        else:
+            last_input_id = session.get("last_input_msg_id", 0)
+            inc_context = self.context_mgr.build_group_context(
+                chat_id,
+                since_msg_id=last_input_id,
+                exclude_msg_id=msg.msg_id,
+                skip_bot_username=self.config.bot_username,
+                pending_msg_ids=pending_msg_ids
+            )
+            inc_section = f"\n{inc_title}\n{inc_context}\n" if inc_context else ""
+            full_prompt = (
+                f"【Role Context】\n"
+                f"You are @{self.config.bot_username} ({self.config.bot_name})\n"
+                f"{attachments_section}"
+                f"{inc_section}"
+                f"{coalesce_section}"
+                f"【Current Query】\n"
+                f"Sender: {msg.sender_name}\n"
+                f"Content: {user_query}\n\n"
+                f"Please continue the conversation naturally."
+            )
 
         return full_prompt, active_attachments, user_query
 

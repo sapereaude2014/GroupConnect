@@ -185,10 +185,11 @@ class TestQueueCoalescing(unittest.IsolatedAsyncioTestCase):
         # The separate Coalesced Pending Instructions section should NOT exist
         self.assertNotIn("Coalesced Pending Instructions", full_prompt)
 
-    async def test_private_chat_coalesced_still_listed_separately(self):
-        """In private chats (no sliding window), coalesced messages are still
-        listed in a separate section as before."""
+    async def test_private_chat_coalesced_marked_inline_like_group(self):
+        """Private chats use the same sliding-window context as groups, so
+        coalesced messages are marked inline with ⏳ too — no separate section."""
         chat_id = 7777
+        self.engine.context_mgr.record_message(chat_id, "Zheng Ma", "帮我看下闹钟", msg_id=601)
         msg_latest = InboundMessage(
             chat_id=chat_id, chat_type="private", msg_id=603,
             sender_name="Zheng Ma", from_user={"id": 1, "first_name": "Zheng Ma"},
@@ -206,8 +207,65 @@ class TestQueueCoalescing(unittest.IsolatedAsyncioTestCase):
             coalesced_items=[(msg_1, "帮我看下闹钟", None)]
         )
 
-        # Private chat: separate section is used
-        self.assertIn("Coalesced Pending Instructions", full_prompt)
+        # Private chat: same inline ⏳ marking inside the sliding window
+        self.assertIn("⏳", full_prompt)
         self.assertIn("帮我看下闹钟", full_prompt)
-        # No ⏳ markers in private chat
-        self.assertNotIn("⏳", full_prompt)
+        self.assertIn("【Recent Conversation Context (Sliding Window)】", full_prompt)
+        # The separate Coalesced Pending Instructions section is gone
+        self.assertNotIn("Coalesced Pending Instructions", full_prompt)
+
+    async def test_private_first_turn_gets_full_window(self):
+        """Private chat first turn (or expired runtime session) injects the
+        full sliding window so the agent has history despite cold start."""
+        chat_id = 8888
+        self.engine.context_mgr.record_message(chat_id, "Zheng Ma", "上次聊的杭州出差", msg_id=701)
+        self.engine.context_mgr.record_message(chat_id, "Test Bot", "已为您查好车票", msg_id=702, is_bot_reply=True, bot_username="test_bot")
+        msg = InboundMessage(
+            chat_id=chat_id, chat_type="private", msg_id=703,
+            sender_name="Zheng Ma", from_user={"id": 1, "first_name": "Zheng Ma"},
+            text="还是改下午的吧", is_triggered=True
+        )
+
+        full_prompt, _, _ = self.engine._build_agent_prompt(
+            msg, "还是改下午的吧", False,
+            {"conversation_id": None}, None
+        )
+
+        # Prior history from the buffer must be present (cold-start safety net)
+        self.assertIn("上次聊的杭州出差", full_prompt)
+        self.assertIn("已为您查好车票", full_prompt)
+        self.assertIn("【Recent Conversation Context (Sliding Window)】", full_prompt)
+        # Current message itself is excluded from the window (it is the query)
+        self.assertIn("【Current Query】", full_prompt)
+        self.assertNotIn("⏳", full_prompt)  # no pending items, no markers
+
+    async def test_private_subsequent_turn_incremental_only(self):
+        """Private chat with a live runtime conversation sends only the
+        incremental slice since the last processed input."""
+        chat_id = 8889
+        self.engine.context_mgr.record_message(chat_id, "Zheng Ma", "旧消息一", msg_id=801)
+        self.engine.context_mgr.record_message(chat_id, "Zheng Ma", "旧消息二", msg_id=802)
+        self.engine.context_mgr.record_message(chat_id, "Zheng Ma", "排队新消息", msg_id=803)
+        msg = InboundMessage(
+            chat_id=chat_id, chat_type="private", msg_id=804,
+            sender_name="Zheng Ma", from_user={"id": 1, "first_name": "Zheng Ma"},
+            text="最新这条", is_triggered=True
+        )
+        msg_pending = InboundMessage(
+            chat_id=chat_id, chat_type="private", msg_id=803,
+            sender_name="Zheng Ma", from_user={"id": 1, "first_name": "Zheng Ma"},
+            text="排队新消息", is_triggered=True
+        )
+
+        full_prompt, _, _ = self.engine._build_agent_prompt(
+            msg, "最新这条", False,
+            {"conversation_id": "sess-123", "last_input_msg_id": 802}, "sess-123",
+            coalesced_items=[(msg_pending, "排队新消息", None)]
+        )
+
+        # Incremental slice only: messages at/below the anchor are absent
+        self.assertIn("排队新消息", full_prompt)
+        self.assertNotIn("旧消息一", full_prompt)
+        self.assertNotIn("旧消息二", full_prompt)
+        self.assertIn("【New Messages Since Last Response】", full_prompt)
+        self.assertIn("⏳", full_prompt)  # pending coalesced marked inline
