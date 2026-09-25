@@ -572,15 +572,11 @@ class GroupConnectEngine:
                 text = (entry.get("text") or "").strip()
                 if not text:
                     continue
-                # Flatten to a single line: bot replies may contain newlines,
-                # and multi-line entries would break last-line state checks
-                # (controller's _bot_awaiting_answer) and clutter the context.
-                text = text[:120].replace("\r", " ").replace("\n", " ")
                 sender = entry.get("sender", "?")
                 if entry.get("is_bot"):
-                    lines.append(f"[Bot {sender}]: {text}")
+                    lines.append(f"[Bot {sender}]: {text[:120]}")
                 else:
-                    lines.append(f"[{sender}]: {text}")
+                    lines.append(f"[{sender}]: {text[:120]}")
             ordered = list(reversed(lines))
             au = getattr(self, "autonomous", None)
             if au is not None:
