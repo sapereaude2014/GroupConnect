@@ -188,6 +188,7 @@ class GroupConnectEngine:
                     dispatch=self._dispatch_autonomous,
                     context_summary_fn=self._build_routing_context,
                     inflight_ttl=max(600.0, self.config.timeout_secs * 1.5),
+                    resume_drop_fn=self.resume_manager.mark_completed if self.resume_manager else None,
                 )
             except Exception as e:
                 logger.warning(f"Autonomous routing disabled: {e}")
@@ -411,9 +412,11 @@ class GroupConnectEngine:
         """After a restart, re-dispatch recent human messages that never received any bot reply.
         Delegates to ResumeManager with freshness window and poison message quarantine."""
         window = int(getattr(self.config, "resume_unanswered_secs", 300))
+        is_arbiter = (self.autonomous.is_arbiter if self.autonomous else True)
         resumable = self.resume_manager.find_unanswered_messages(
             window_seconds=window,
-            allowed_chat_ids=self.config.allowed_chat_ids
+            allowed_chat_ids=self.config.allowed_chat_ids,
+            is_arbiter=is_arbiter
         )
         if resumable:
             # Park queue workers until the burst finishes landing so every
@@ -578,17 +581,27 @@ class GroupConnectEngine:
 
         # 6. Untriggered messages complete here (already captured in context buffer)
         if not msg.is_triggered:
+            def _clean_resume():
+                if getattr(msg, "is_resume", False) and self.resume_manager:
+                    try:
+                        self.resume_manager.mark_completed(chat_id, msg.msg_id, msg.text or "")
+                    except Exception:
+                        pass
+
             # Source-level filter: if message is directed at another bot or user (via @mention, reply, or slash command),
             # never allow it into autonomous routing pipeline!
             if getattr(msg, "reply_to_bot_username", ""):
+                _clean_resume()
                 return
             raw_text = (msg.text or "").strip()
             if raw_text.startswith("/"):
+                _clean_resume()
                 return
             # Telegram usernames are ASCII-only, 5-32 chars, starting with a letter.
             # A bare \w+ would also match CJK particles after '@' (e.g. '不用@呀'),
             # silently dropping legit messages from autonomous routing.
             if re.search(r"@[a-zA-Z][a-zA-Z0-9_]{4,}(?!\.\w)|<@[!&]?\w+>", raw_text):
+                _clean_resume()
                 return
 
             # Autonomous routing: local preemption check + single-arbiter evaluation
@@ -597,6 +610,8 @@ class GroupConnectEngine:
                 au.on_human_message(msg)
                 if au.is_arbiter:
                     asyncio.create_task(au.evaluate_and_publish(msg))
+            else:
+                _clean_resume()
             return
 
         # 7. Enqueue triggered message for latest-driven queue draining execution
@@ -708,6 +723,7 @@ class GroupConnectEngine:
             reply_attachments=[],
             is_bot_relay=False,
             hop_count=0,
+            is_resume=bool(decision.get("is_resume", False)),
         )
         if chat_id not in self.chat_queues:
             self.chat_queues[chat_id] = asyncio.Queue()

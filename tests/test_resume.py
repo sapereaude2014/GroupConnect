@@ -250,17 +250,68 @@ class TestResumeUnanswered(unittest.IsolatedAsyncioTestCase):
         msg = engine.on_inbound_message.await_args[0][0]
         self.assertTrue(msg.is_triggered)
 
-    async def test_mention_of_other_bot_resumed_untriggered(self):
-        """A message @-mentioning someone else must NOT become triggered on resume:
-        it belongs to the mention filter (directed at another bot/user)."""
+    async def test_mention_of_other_bot_not_resumed_for_this_bot(self):
+        """A message @-mentioning someone else must NOT be resumed for this bot
+        (avoiding ghost retries and poison quarantine)."""
         engine = self._make_engine()
         engine.context_mgr.buffers[-100123] = [
             make_item("@other_bot 去看看", when=datetime.now() - timedelta(seconds=30), msg_id=101),
         ]
         await engine._resume_unanswered_messages()
-        engine.on_inbound_message.assert_awaited_once()
-        msg = engine.on_inbound_message.await_args[0][0]
-        self.assertFalse(msg.is_triggered)
+        engine.on_inbound_message.assert_not_awaited()
+        # Verify no ghost retry was recorded
+        self.assertEqual(len(engine.resume_manager._retry_counts), 0)
+
+    async def test_untriggered_group_message_filtered_for_non_arbiter(self):
+        """A follower bot (non-arbiter) ignores untriggered group messages on resume;
+        only the Arbiter bot may resume and pass them to Jev."""
+        engine = self._make_engine()
+        engine.context_mgr.buffers[-100123] = [
+            make_item("大家晚上吃什么", when=datetime.now() - timedelta(seconds=30), msg_id=101),
+        ]
+        resumable = engine.resume_manager.find_unanswered_messages(is_arbiter=False)
+        self.assertEqual(len(resumable), 0)
+        self.assertEqual(len(engine.resume_manager._retry_counts), 0)
+
+        # Arbiter process DOES resume untriggered group messages
+        resumable_arb = engine.resume_manager.find_unanswered_messages(is_arbiter=True)
+        self.assertEqual(len(resumable_arb), 1)
+        self.assertFalse(resumable_arb[0][1].is_triggered)
+
+    async def test_dropped_resume_message_marks_completed(self):
+        """When autonomous routing or engine drops a resume message, it must be
+        marked completed in ResumeManager to clear retry counts and avoid poison quarantine."""
+        from groupconnect.routing.router import AutonomousController, AutonomousConfig
+        engine = self._make_engine()
+        engine.resume_manager._retry_counts["-100123:101:哈哈哈哈"] = 1
+
+        acfg = AutonomousConfig({
+            "enabled": True,
+            "arbiter_bot": "test_bot",
+            "roles": {"test_bot": "testing"},
+        })
+        ctrl = AutonomousController(
+            bot_username="test_bot",
+            cfg=acfg,
+            resume_drop_fn=engine.resume_manager.mark_completed
+        )
+        inbound = InboundMessage(
+            chat_id=-100123,
+            chat_type="group",
+            msg_id=101,
+            sender_name="User",
+            from_user={"id": 1, "first_name": "User"},
+            text="哈哈哈哈",
+            reply_to_msg_id=None,
+            reply_preview="",
+            is_triggered=False,
+            attachments=[],
+            reply_attachments=[],
+            is_resume=True
+        )
+        await ctrl.evaluate_and_publish(inbound)
+        # "哈哈哈哈" is physical noise -> dropped -> marks completed
+        self.assertNotIn("-100123:101:哈哈哈哈", engine.resume_manager._retry_counts)
 
     # ---------- Watermark scan (reply_to linkage) ----------
 

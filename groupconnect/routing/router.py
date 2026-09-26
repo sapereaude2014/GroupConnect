@@ -35,7 +35,6 @@ def find_default_config_path() -> str:
     1. GROUPCONNECT_ROUTING_CONFIG environment variable
     2. ~/.config/groupconnect/groupconnect.yaml
     3. groupconnect.yaml (repository root)
-    4. groupconnect.example.yaml (repository root, fallback example)
     """
     env_path = os.environ.get("GROUPCONNECT_ROUTING_CONFIG")
     if env_path and os.path.isfile(env_path):
@@ -51,13 +50,12 @@ def find_default_config_path() -> str:
     for name in (
         "groupconnect.yaml",
         "groupconnect.yml",
-        "groupconnect.example.yaml",
     ):
         p = os.path.join(repo_root, name)
         if os.path.isfile(p):
             return p
 
-    return os.path.join(repo_root, "groupconnect.example.yaml")
+    return ""
 
 
 DEFAULT_CONFIG_PATH = find_default_config_path()
@@ -1012,10 +1010,12 @@ class AutonomousController:
         dispatch=None,
         context_summary_fn=None,
         inflight_ttl: float = 600.0,
+        resume_drop_fn: Optional[Callable[[Any, Any, str], None]] = None,
     ):
         self.my_bot = str(bot_username).lower().lstrip("@")
         self.cfg = cfg
         self.relay = relay
+        self.resume_drop_fn = resume_drop_fn
         self.observer = AutonomousObserver(self.my_bot, cfg, dispatch) if dispatch else None
         self.is_arbiter = (self.my_bot == cfg.arbiter_bot)
         # In-flight tasks: chat_id -> {sender, msg_id, bot, ts}.
@@ -1110,8 +1110,18 @@ class AutonomousController:
         if getattr(msg, "is_bot_relay", False) or bool(getattr(msg, "from_user", {}).get("is_bot", False)):
             return
         if getattr(msg, "attachments", None):
+            if getattr(msg, "is_resume", False) and self.resume_drop_fn:
+                try:
+                    self.resume_drop_fn(msg.chat_id, msg.msg_id, msg.text or "")
+                except Exception:
+                    pass
             return  # v1: autonomous routing for plain text only
         if not self.chat_allowed(msg.chat_id) or not self.sender_allowed(msg.sender_name):
+            if getattr(msg, "is_resume", False) and self.resume_drop_fn:
+                try:
+                    self.resume_drop_fn(msg.chat_id, msg.msg_id, msg.text or "")
+                except Exception:
+                    pass
             return
         context = ""
         if self._context_summary_fn:
@@ -1131,8 +1141,18 @@ class AutonomousController:
                 msg.text or "", msg.sender_name, context, alias_hint
             )
         if decision.get("urgency", "drop") == "drop" and decision.get("source") != "classifier":
+            if getattr(msg, "is_resume", False) and self.resume_drop_fn:
+                try:
+                    self.resume_drop_fn(msg.chat_id, msg.msg_id, msg.text or "")
+                except Exception as e:
+                    logger.warning(f"[ROUTING] Failed to mark dropped resume completed: {e}")
             return  # physical noise: silently skip, no broadcast
         if decision.get("target_bot", "none") == "none":
+            if getattr(msg, "is_resume", False) and self.resume_drop_fn:
+                try:
+                    self.resume_drop_fn(msg.chat_id, msg.msg_id, msg.text or "")
+                except Exception as e:
+                    logger.warning(f"[ROUTING] Failed to mark dropped resume completed: {e}")
             return  # semantic drop: silently skip, no broadcast
 
         # Resume messages: timing already settled (confirmed unanswered by the
@@ -1157,6 +1177,17 @@ class AutonomousController:
             "is_resume": bool(getattr(msg, "is_resume", False)),
             **decision,
         }
+        # If this was a resume candidate and this bot is NOT a target,
+        # arbiter's job is complete (delegated to peer bot via relay).
+        # Clear arbiter's retry state so it doesn't linger or turn into poison.
+        if getattr(msg, "is_resume", False) and self.resume_drop_fn:
+            target_set = {str(t).lower().lstrip("@") for t in decision.get("target_bots", [])}
+            if self.my_bot not in target_set:
+                try:
+                    self.resume_drop_fn(msg.chat_id, msg.msg_id, msg.text or "")
+                except Exception as e:
+                    logger.warning(f"[ROUTING] Failed to mark delegated resume completed: {e}")
+
         # Track non-drop dispatches as in-flight tasks for the routing context.
         # Covers both immediate and wait_silence: a wait_silence task that fires
         # after the 4s grace window is still being processed by the bot, and

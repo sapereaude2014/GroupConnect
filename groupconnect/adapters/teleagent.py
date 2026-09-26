@@ -153,6 +153,10 @@ class TeleAgentAdapter(BaseAgentAdapter):
                         # In both cases reap any leftover group members (leaked children
                         # holding the pipes) so both readers get EOF.
                         self._kill_process_group(proc)
+                        try:
+                            await proc.wait()
+                        except Exception:
+                            pass
                         break
                 while True:
                     data = await proc.stdout.read(65536)
@@ -182,11 +186,19 @@ class TeleAgentAdapter(BaseAgentAdapter):
             logger.error(f"[TeleAgent] Task timed out after {self.timeout_secs}s for chat {chat_id}")
             if proc and proc.returncode is None:
                 self._kill_process_group(proc)
+                try:
+                    await proc.wait()
+                except Exception:
+                    pass
             raise
         except asyncio.CancelledError:
             logger.info(f"[TeleAgent] Turn was cancelled for chat {chat_id}")
             if proc and proc.returncode is None:
                 self._kill_process_group(proc)
+                try:
+                    await proc.wait()
+                except Exception:
+                    pass
             raise
         finally:
             if chat_id is not None and chat_id in self.workers:

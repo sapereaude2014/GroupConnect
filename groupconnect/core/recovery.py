@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 import json
 import logging
 import os
+import re
 import time
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -83,10 +84,50 @@ class ResumeManager:
             del self._retry_counts[msg_key]
             self._save_state()
 
+    def _evaluate_candidate(
+        self,
+        raw: str,
+        chat_type: str,
+        is_arbiter: bool
+    ) -> Tuple[bool, bool]:
+        """Determines whether a message is an eligible resume candidate for THIS bot.
+        Returns (is_candidate, is_triggered).
+        If not a candidate, the message is skipped entirely (no retries incremented).
+        """
+        bot_tag = f"@{self.bot_username}".lower()
+        raw_lower = raw.lower()
+
+        if chat_type == "private":
+            return True, True
+
+        # Group chat: check for explicit slash commands
+        cmd, target_bot, _ = parse_bot_command(raw, self.bot_username)
+        if cmd:
+            if target_bot is not None and target_bot.lower() != self.bot_username.lower():
+                return False, False
+            return True, True
+
+        # Group chat: check if explicitly tagged for this bot
+        if bot_tag in raw_lower:
+            return True, True
+
+        # Check if explicitly tagged for ANOTHER bot or user mention
+        other_mention = re.search(r"@[a-zA-Z][a-zA-Z0-9_]{4,}(?!\.\w)|<@[!&]?\w+>", raw)
+        if other_mention:
+            return False, False
+
+        # Untriggered message (no @mention) in group chat:
+        # Only the Arbiter bot may re-dispatch untriggered messages to Jev.
+        if not is_arbiter:
+            return False, False
+
+        return True, False
+
     def find_unanswered_messages(
         self,
         window_seconds: Optional[int] = None,
-        allowed_chat_ids: Optional[List[Any]] = None
+        allowed_chat_ids: Optional[List[Any]] = None,
+        is_arbiter: bool = True
     ) -> List[Tuple[Any, InboundMessage]]:
         """Scans active context buffers for human messages that received no bot reply.
         Returns list of (chat_id, InboundMessage) ready to be processed."""
@@ -155,6 +196,16 @@ class ResumeManager:
                     for last in candidates:
                         raw = str(last.get("text", ""))
                         msg_id = last.get("msg_id", 0)
+
+                        try:
+                            chat_type = "private" if int(chat_id) > 0 else "group"
+                        except (TypeError, ValueError):
+                            chat_type = "group"
+
+                        is_cand, is_trig = self._evaluate_candidate(raw, chat_type, is_arbiter)
+                        if not is_cand:
+                            continue
+
                         msg_key = f"{chat_id}:{msg_id}:{raw[:40]}"
 
                         # Poison message quarantine check
@@ -171,16 +222,6 @@ class ResumeManager:
 
                         self._retry_counts[msg_key] = retries + 1
                         self._save_state()
-
-                        try:
-                            chat_type = "private" if int(chat_id) > 0 else "group"
-                        except (TypeError, ValueError):
-                            chat_type = "group"
-
-                        is_trig = chat_type == "private" or f"@{self.bot_username}".lower() in raw.lower()
-                        if not is_trig and raw.startswith("/"):
-                            cmd, target_bot, _ = parse_bot_command(raw, self.bot_username)
-                            is_trig = bool(cmd and (target_bot is None or target_bot.lower() == self.bot_username.lower()))
 
                         from_user = (
                             {"id": chat_id, "first_name": str(last.get("sender", ""))}
@@ -224,6 +265,15 @@ class ResumeManager:
                 raw = str(last.get("text", ""))
 
                 try:
+                    chat_type = "private" if int(chat_id) > 0 else "group"
+                except (TypeError, ValueError):
+                    chat_type = "group"
+
+                is_cand, is_trig = self._evaluate_candidate(raw, chat_type, is_arbiter)
+                if not is_cand:
+                    continue
+
+                try:
                     msg_time = datetime.strptime(str(last.get("time", "")), "%Y-%m-%d %H:%M:%S")
                 except ValueError:
                     continue
@@ -248,17 +298,6 @@ class ResumeManager:
 
                 self._retry_counts[msg_key] = retries + 1
                 self._save_state()
-
-                # Re-evaluate chat_type and is_triggered exactly like a fresh inbound message
-                try:
-                    chat_type = "private" if int(chat_id) > 0 else "group"
-                except (TypeError, ValueError):
-                    chat_type = "group"
-
-                is_trig = chat_type == "private" or f"@{self.bot_username}".lower() in raw.lower()
-                if not is_trig and raw.startswith("/"):
-                    cmd, target_bot, _ = parse_bot_command(raw, self.bot_username)
-                    is_trig = bool(cmd and (target_bot is None or target_bot.lower() == self.bot_username.lower()))
 
                 from_user = (
                     {"id": chat_id, "first_name": str(last.get("sender", ""))}
