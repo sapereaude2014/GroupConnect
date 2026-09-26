@@ -33,20 +33,28 @@ DEFAULT_IMMEDIATE_CRITERIA = (
     "question/offer — the sender expects an immediate bot response."
 )
 DEFAULT_WAIT_CRITERIA = (
-    "An open question, data lookup, or recommendation request directed at the "
-    "assistant bots — humans should get a chance to reply first."
+    "An open question, help request, data lookup, or recommendation request "
+    "asked to the group at large — including messages that seek advice, a "
+    "solution, or a course of action without explicitly naming any bot. "
+    "Humans should get a chance to reply first; the bots pick it up only if "
+    "nobody does."
 )
 DEFAULT_DROP_CRITERIA = (
-    "Interpersonal conversation between group members not directed at any bot "
-    "(direct 2nd-person address to another human, reactions to another human's preceding message, "
-    "pure emotional venting without action requests, or 3rd-person banter about bots). "
-    "NOT drop-worthy: referring to another member in 3rd-person to record/query tasks, or administrative requests toward the shared assistant."
+    "Interpersonal conversation between group members that seeks no answer or "
+    "action at all — direct 2nd-person address to another human, reactions to "
+    "another human's preceding message, or 3rd-person banter about bots. "
+    "Any message asking for advice, a solution, a decision, or help — even "
+    "when addressed to the whole group or phrased as a complaint — is NEVER "
+    "drop. Referring to another member in 3rd-person to record or query tasks "
+    "is not drop-worthy either."
 )
 DEFAULT_ASSIGNMENT_CRITERIA = (
     "Whether the current message falls within {bot}'s responsibility or requires {bot} ({role}) to handle it. "
-    "Return a high score if the message is a direct question, command, or request that matches {bot}'s domain; "
-    "return a low score if it is casual conversation between humans with no action request toward {bot}, "
-    "or if another bot is explicitly being instructed to coordinate or delegate to {bot} (only the dispatcher bot should respond)."
+    "Score by how well the message's topic and requested help match {bot}'s domain — regardless of "
+    "whether the sender explicitly named {bot}. A help request asked to the whole group still scores "
+    "by domain fit. Return a low score only when the message genuinely seeks no answer or falls "
+    "outside {bot}'s domain, or if another bot is explicitly being instructed to coordinate or "
+    "delegate to {bot} (only the dispatcher bot should respond)."
 )
 
 DEFAULT_RULE_TEMPLATES: Dict[str, str] = {

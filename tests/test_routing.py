@@ -955,9 +955,13 @@ class TestAutonomousRouting(unittest.TestCase):
 
         asyncio.run(run())
 
-    def test_fallback_dispatch_drops_when_below_floor(self):
-        """Choice says immediate/wait, but all bots are below sanity floor (min(0.20, relaxed)) ->
-        drops safely to true silence instead of dragging an irrelevant bot into the conversation."""
+    def test_fallback_dispatch_low_scores_when_choice_responds(self):
+        """Choice says immediate/wait and nobody claims the threshold -> fallback
+        dispatch to the highest-scoring bot with wait_silence grace, regardless
+        of how low the top score is. The sanity floor was removed (live case
+        2026-09-26: '买的蓝莓没熟咋办？' stranded at Noul 0.17 below the 0.20
+        floor and went unanswered); the 4s human-first grace window is the
+        anti-misfire safety instead."""
         import asyncio
         from unittest.mock import patch, MagicMock
         from groupconnect.routing.router import AutonomousArbiter
@@ -986,11 +990,11 @@ class TestAutonomousRouting(unittest.TestCase):
         async def run():
             with patch("httpx.AsyncClient.post", return_value=mock_resp):
                 res = await arb.classify("快点下楼车到了", "Alice", "")
-                # Top score 0.08 is below fallback_floor (0.20) -> true silence
-                self.assertEqual(res["target_bot"], "none")
-                self.assertEqual(res["target_bots"], [])
-                self.assertEqual(res["urgency"], "drop")
-                self.assertEqual(res["confidence"], 0.0)
+                # Top score 0.08 — floor is gone: fallback to highest scorer
+                self.assertEqual(res["target_bot"], "bot_a")
+                self.assertEqual(res["target_bots"], ["bot_a"])
+                self.assertEqual(res["urgency"], "wait_silence")
+                self.assertEqual(res["confidence"], 0.08)
 
         asyncio.run(run())
 

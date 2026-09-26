@@ -669,11 +669,14 @@ class AutonomousArbiter:
         4. Choice drop + candidates exist → rescue with wait_silence (4s grace).
         5. Choice not drop + candidates exist → use Choice's urgency directly.
         6. Choice not drop + no candidates → fallback dispatch: the highest-scoring
-           bot takes it with wait_silence (4s grace). Roles stay naturally scoped;
-           the arbiter mechanism — not the role text — closes the coverage, so a
-           Choice 'someone should answer' verdict is never silently lost. The
-           grace window gives humans 4s to reply first, which is the anti-misfire
-           safety for these edge messages.
+           bot takes it with wait_silence (4s grace) regardless of how low the top
+           score is (the sanity floor was removed — live case 2026-09-26: a help
+           request scoring Noul 0.17/0.08 was stranded below the 0.20 floor and
+           went unanswered). Roles stay naturally scoped; the arbiter mechanism —
+           not the role text — closes the coverage, so a Choice 'someone should
+           answer' verdict is never silently lost. The grace window gives humans
+           4s to reply first, which is the anti-misfire safety for these edge
+           messages.
         """
         criteria, jev_map, group_description = self._jev_criteria()
         assignment_templates = self._jev_assignment_templates()
@@ -797,12 +800,11 @@ class AutonomousArbiter:
 
                 # --- Final decision (layered arbitration) ---
                 if not candidate_bots:
-                    fallback_floor = min(0.20, relaxed)
-                    if choice_urgency == "drop" or not noul_results or noul_results[0][1] < fallback_floor:
-                        # Both gates say silence, no bots configured, or top score is below sanity floor → true silence
+                    if choice_urgency == "drop" or not noul_results:
+                        # Both gates say silence, or no bots configured → true silence
                         logger.info(
                             f"[ROUTING] No bot claimed message "
-                            f"(noul_threshold={noul_threshold:.2f}, floor={fallback_floor:.2f}, "
+                            f"(noul_threshold={noul_threshold:.2f}, "
                             f"scores={{{', '.join(f'{b}:{p:.2f}' for b, p in noul_results)}}})."
                         )
                         target_bot = "none"
@@ -821,7 +823,7 @@ class AutonomousArbiter:
                             f"[ROUTING] No bot claimed message but Choice said "
                             f"'{choice_urgency}'; fallback dispatch to {target_bot} "
                             f"with wait_silence grace (top score {confidence:.2f} "
-                            f"below threshold {noul_threshold:.2f}, clears floor {fallback_floor:.2f})."
+                            f"below threshold {noul_threshold:.2f})."
                         )
                 elif choice_urgency == "drop":
                     # Domain expert overrides the global screen: rescue with 4s grace
