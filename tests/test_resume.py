@@ -262,6 +262,38 @@ class TestResumeUnanswered(unittest.IsolatedAsyncioTestCase):
         # Verify no ghost retry was recorded
         self.assertEqual(len(engine.resume_manager._retry_counts), 0)
 
+    async def test_slash_command_for_other_bot_not_resumed(self):
+        """A slash command targeted at another bot (/cmd@other_bot) must NOT be resumed for this bot."""
+        engine = self._make_engine()
+        engine.context_mgr.buffers[-100123] = [
+            make_item("/status@other_bot", when=datetime.now() - timedelta(seconds=30), msg_id=101),
+        ]
+        await engine._resume_unanswered_messages()
+        engine.on_inbound_message.assert_not_awaited()
+        self.assertEqual(len(engine.resume_manager._retry_counts), 0)
+
+    async def test_slash_command_for_short_name_other_bot_not_leaked_to_arbiter(self):
+        """A slash command for another bot even with a short username (/status@foo)
+        must never leak into Arbiter untriggered conversation routing."""
+        engine = self._make_engine()
+        engine.context_mgr.buffers[-100123] = [
+            make_item("/status@foo", when=datetime.now() - timedelta(seconds=30), msg_id=101),
+        ]
+        resumable = engine.resume_manager.find_unanswered_messages(is_arbiter=True)
+        self.assertEqual(len(resumable), 0)
+        self.assertEqual(len(engine.resume_manager._retry_counts), 0)
+
+    async def test_slash_command_for_this_bot_resumed_as_triggered(self):
+        """A slash command explicitly targeted at this bot (/status@test_bot) is resumed as triggered."""
+        engine = self._make_engine()
+        engine.context_mgr.buffers[-100123] = [
+            make_item("/status@test_bot", when=datetime.now() - timedelta(seconds=30), msg_id=101),
+        ]
+        await engine._resume_unanswered_messages()
+        engine.on_inbound_message.assert_awaited_once()
+        msg = engine.on_inbound_message.await_args[0][0]
+        self.assertTrue(msg.is_triggered)
+
     async def test_untriggered_group_message_filtered_for_non_arbiter(self):
         """A follower bot (non-arbiter) ignores untriggered group messages on resume;
         only the Arbiter bot may resume and pass them to Jev."""

@@ -94,17 +94,20 @@ class ResumeManager:
         Returns (is_candidate, is_triggered).
         If not a candidate, the message is skipped entirely (no retries incremented).
         """
+        stripped = (raw or "").strip()
         bot_tag = f"@{self.bot_username}".lower()
         raw_lower = raw.lower()
 
-        if chat_type == "private":
-            return True, True
-
-        # Group chat: check for explicit slash commands
-        cmd, target_bot, _ = parse_bot_command(raw, self.bot_username)
-        if cmd:
+        # Slash commands: strictly isolated from natural conversation routing
+        if stripped.startswith("/"):
+            cmd, target_bot, _ = parse_bot_command(stripped, self.bot_username)
+            if not cmd:
+                return False, False
             if target_bot is not None and target_bot.lower() != self.bot_username.lower():
                 return False, False
+            return True, True
+
+        if chat_type == "private":
             return True, True
 
         # Group chat: check if explicitly tagged for this bot
