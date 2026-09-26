@@ -1127,18 +1127,19 @@ class TestInflightTaskMarker(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Alice", marker)
         self.assertIn("not been posted yet", marker)
 
-    async def test_drop_and_wait_do_not_record_inflight(self):
+    async def test_drop_does_not_record_inflight_but_wait_does(self):
         from unittest.mock import AsyncMock, patch
         # Noise text -> L0 drop, early return before any recording
         await self.ctrl.evaluate_and_publish(self._msg("好的"))
         self.assertEqual(self.ctrl._inflight, {})
-        # Classifier wait_silence decision -> not recorded
+        # Classifier wait_silence decision -> recorded (bot will process after 4s grace)
         with patch.object(self.ctrl.arbiter, "classify", AsyncMock(return_value={
             "target_bot": "primary_bot", "target_bots": ["primary_bot"],
             "urgency": "wait_silence", "confidence": 0.7, "source": "classifier",
         })):
             await self.ctrl.evaluate_and_publish(self._msg("帮我看看周末天气"))
-        self.assertEqual(self.ctrl._inflight, {})
+        self.assertIn(-1001234567890, self.ctrl._inflight)
+        self.assertEqual(self.ctrl._inflight[-1001234567890]["bot"], "primary_bot")
 
     async def test_bot_reply_lands_clears_marker(self):
         await self.ctrl.evaluate_and_publish(self._msg("assistant 查天气", msg_id=100))

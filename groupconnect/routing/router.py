@@ -933,13 +933,14 @@ class AutonomousArbiter:
             try:
                 async with httpx.AsyncClient(timeout=timeout) as client:
                     res = await client.post(url, json=payload, headers=headers)
-                if res.status_code == 429:  # rate limit: exponential backoff retries
+                retryable = {429, 500, 502, 503, 504}
+                if res.status_code in retryable:
                     for attempt, backoff in enumerate((2.0, 4.0), start=1):
-                        logger.warning(f"[ROUTING] Classifier 429; backoff {backoff}s (retry {attempt}/2).")
+                        logger.warning(f"[ROUTING] Classifier HTTP {res.status_code}; backoff {backoff}s (retry {attempt}/2).")
                         await asyncio.sleep(backoff)
                         async with httpx.AsyncClient(timeout=timeout) as client:
                             res = await client.post(url, json=payload, headers=headers)
-                        if res.status_code != 429:
+                        if res.status_code not in retryable:
                             break
                 if res.status_code != 200:
                     logger.warning(f"[ROUTING] Classifier HTTP {res.status_code}; fail-closed drop.")
@@ -1010,19 +1011,20 @@ class AutonomousController:
         relay=None,
         dispatch=None,
         context_summary_fn=None,
+        inflight_ttl: float = 600.0,
     ):
         self.my_bot = str(bot_username).lower().lstrip("@")
         self.cfg = cfg
         self.relay = relay
         self.observer = AutonomousObserver(self.my_bot, cfg, dispatch) if dispatch else None
         self.is_arbiter = (self.my_bot == cfg.arbiter_bot)
-        # In-flight immediate tasks: chat_id -> {sender, msg_id, bot, ts}.
+        # In-flight tasks: chat_id -> {sender, msg_id, bot, ts}.
         # Feeds a synthetic context line so the classifier knows a dispatched
         # task is still being processed (its reply has not landed in the
         # buffer yet) — otherwise follow-ups from the same sender read like
         # human small talk and get dropped.
         self._inflight: Dict[Any, Dict[str, Any]] = {}
-        self._inflight_ttl: float = 600.0
+        self._inflight_ttl: float = inflight_ttl
         self._context_summary_fn = context_summary_fn
         self.arbiter = AutonomousArbiter(cfg, context_summary_fn) if self.is_arbiter else None
         if cfg.enabled:
@@ -1155,8 +1157,11 @@ class AutonomousController:
             "is_resume": bool(getattr(msg, "is_resume", False)),
             **decision,
         }
-        # Track immediate dispatches as in-flight tasks for the routing context.
-        if decision.get("urgency") == "immediate" and decision.get("target_bots"):
+        # Track non-drop dispatches as in-flight tasks for the routing context.
+        # Covers both immediate and wait_silence: a wait_silence task that fires
+        # after the 4s grace window is still being processed by the bot, and
+        # same-sender follow-ups need the marker to avoid being read as chitchat.
+        if decision.get("urgency") != "drop" and decision.get("target_bots"):
             self._inflight[msg.chat_id] = {
                 "sender": msg.sender_name,
                 "msg_id": msg.msg_id,

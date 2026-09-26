@@ -184,6 +184,7 @@ class GroupConnectEngine:
                     relay=self.relay,
                     dispatch=self._dispatch_autonomous,
                     context_summary_fn=self._build_routing_context,
+                    inflight_ttl=max(600.0, self.config.timeout_secs * 1.5),
                 )
             except Exception as e:
                 logger.warning(f"Autonomous routing disabled: {e}")
