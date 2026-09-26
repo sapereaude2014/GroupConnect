@@ -1165,6 +1165,30 @@ class TestInflightTaskMarker(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.ctrl.inflight_marker(-1001234567890, buffer_target), "")
         self.assertNotIn(-1001234567890, self.ctrl._inflight)
 
+    async def test_reply_for_different_message_does_not_clear_marker(self):
+        """A bot reply that answers a DIFFERENT message must not clear the
+        in-flight marker for the current wait_silence task. This prevents
+        a prior task's reply from erasing the marker while the wait_silence
+        countdown is still running."""
+        # In-flight marker for msg 100
+        await self.ctrl.evaluate_and_publish(self._msg("assistant 查天气", msg_id=100))
+        self.assertTrue(self.ctrl.inflight_marker(-1001234567890, []))
+
+        # Bot replies to a PRIOR message (msg 95), not to msg 100.
+        # reply_to_msg_id=95 != in-flight msg_id=100 → must NOT clear.
+        buffer_prior = [{"is_bot": True, "msg_id": 101, "sender": "Primary Bot",
+                         "bot_username": "primary_bot", "text": "prior task done",
+                         "reply_to_msg_id": 95}]
+        self.assertIn("@primary_bot", self.ctrl.inflight_marker(-1001234567890, buffer_prior))
+        self.assertIn(-1001234567890, self.ctrl._inflight)
+
+        # Bot replies to the in-flight message (msg 100) → clears.
+        buffer_match = [{"is_bot": True, "msg_id": 102, "sender": "Primary Bot",
+                        "bot_username": "primary_bot", "text": "weather is clear",
+                        "reply_to_msg_id": 100}]
+        self.assertEqual(self.ctrl.inflight_marker(-1001234567890, buffer_match), "")
+        self.assertNotIn(-1001234567890, self.ctrl._inflight)
+
     async def test_inflight_marker_expires_after_ttl(self):
         import time as _time
         await self.ctrl.evaluate_and_publish(self._msg("assistant 查天气", msg_id=100))

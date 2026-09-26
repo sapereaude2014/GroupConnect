@@ -1073,6 +1073,21 @@ class AutonomousController:
                 target_b = str(rec.get("bot") or "").lower().lstrip("@")
                 if entry_bot and target_b and entry_bot != target_b:
                     continue
+                # Prefer precise matching via reply_to_msg_id: only the reply that
+                # actually answers the in-flight message should clear the marker.
+                # A bot reply for a DIFFERENT message (e.g. finishing a prior task
+                # while a wait_silence countdown is still running) must not erase
+                # the marker — the in-flight task hasn't been dispatched yet.
+                reply_to = str(entry.get("reply_to_msg_id") or "")
+                in_flight_mid = str(rec.get("msg_id") or "")
+                if reply_to and reply_to != "0":
+                    if reply_to == in_flight_mid:
+                        self._inflight.pop(chat_id, None)
+                        return ""
+                    # Reply answers a different message; don't clear
+                    continue
+                # Fallback for entries without reply_to_msg_id (pre-linkage data):
+                # use msg_id comparison as before
                 mid, rid = entry.get("msg_id", 0), rec.get("msg_id", 0)
                 try:
                     newer = int(mid) > int(rid)
