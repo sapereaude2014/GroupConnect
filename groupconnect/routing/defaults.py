@@ -34,27 +34,23 @@ DEFAULT_IMMEDIATE_CRITERIA = (
 )
 DEFAULT_WAIT_CRITERIA = (
     "An open question, help request, data lookup, or recommendation request "
-    "asked to the group at large — including messages that seek advice, a "
-    "solution, or a course of action without explicitly naming any bot. "
-    "Humans should get a chance to reply first; the bots pick it up only if "
-    "nobody does."
+    "where humans should get a chance to reply first — the bots pick it up "
+    "only if nobody does."
 )
 DEFAULT_DROP_CRITERIA = (
     "Interpersonal conversation between group members that seeks no answer or "
     "action at all — direct 2nd-person address to another human, reactions to "
     "another human's preceding message, or 3rd-person banter about bots. "
     "Any message asking for advice, a solution, a decision, or help — even "
-    "when addressed to the whole group or phrased as a complaint — is NEVER "
-    "drop. Referring to another member in 3rd-person to record or query tasks "
-    "is not drop-worthy either."
+    "phrased as a complaint — is NEVER drop. Referring to another member in "
+    "3rd-person to record or query tasks is not drop-worthy either."
 )
 DEFAULT_ASSIGNMENT_CRITERIA = (
     "Whether the current message falls within {bot}'s responsibility or requires {bot} ({role}) to handle it. "
-    "Score by how well the message's topic and requested help match {bot}'s domain — regardless of "
-    "whether the sender explicitly named {bot}. A help request asked to the whole group still scores "
-    "by domain fit. Return a low score only when the message genuinely seeks no answer or falls "
-    "outside {bot}'s domain, or if another bot is explicitly being instructed to coordinate or "
-    "delegate to {bot} (only the dispatcher bot should respond)."
+    "Score by how well the message's topic and requested help match {bot}'s domain. "
+    "Return a low score only when the message genuinely seeks no answer or falls "
+    "outside {bot}'s domain, or if another bot is explicitly being instructed to "
+    "coordinate or delegate to {bot} (only the dispatcher bot should respond)."
 )
 
 DEFAULT_RULE_TEMPLATES: Dict[str, str] = {
