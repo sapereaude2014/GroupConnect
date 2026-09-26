@@ -653,30 +653,9 @@ class AutonomousArbiter:
         }
         return criteria, jev_map, group
 
-    async def _classify_jev(self, text: str, sender: str, context: str, alias_hint: str, drop: dict) -> Dict[str, Any]:
-        """Jev (TypeSafe) classifier: orthogonal Choice (timing) + Noul×N (assignment).
-
-        Choice is a fixed 3-option question (immediate/wait/drop) that only
-        evaluates social context and urgency — independent of bot identity.
-        Each bot gets an independent Noul question: 'does this message need {bot}?'
-
-        Decision logic (layered arbitration):
-        1. Extract Noul scores for all bots.
-        2. Dynamic threshold: Choice says drop → strict (confidence_threshold);
-           Choice says respond → relaxed (confidence_threshold × 2/3).
-        3. No candidate bots + Choice says drop (or no bots configured) → true silence.
-        4. Choice drop + candidates exist → rescue with wait_silence (4s grace).
-        5. Choice not drop + candidates exist → use Choice's urgency directly.
-        6. Choice not drop + no candidates → fallback dispatch: the highest-scoring
-           bot takes it with wait_silence (4s grace) regardless of how low the top
-           score is (the sanity floor was removed — live case 2026-09-26: a help
-           request scoring Noul 0.17/0.08 was stranded below the 0.20 floor and
-           went unanswered). Roles stay naturally scoped; the arbiter mechanism —
-           not the role text — closes the coverage, so a Choice 'someone should
-           answer' verdict is never silently lost. The grace window gives humans
-           4s to reply first, which is the anti-misfire safety for these edge
-           messages.
-        """
+    def _build_jev_payload(
+        self, text: str, sender: str, context: str, alias_hint: str
+    ) -> Tuple[str, dict, dict, float, dict]:
         criteria, jev_map, group_description = self._jev_criteria()
         assignment_templates = self._jev_assignment_templates()
 
@@ -708,6 +687,11 @@ class AutonomousArbiter:
         timeout = self.cfg.timeout_ms / 1000.0
         payload = {"state": state, "model": self.cfg.model, "questions": questions}
         headers = {"Authorization": f"Bearer {self.cfg.api_key}"}
+        return url, payload, headers, timeout, jev_map
+
+    async def _post_jev_systemone(
+        self, url: str, payload: dict, headers: dict, timeout: float
+    ) -> Optional[dict]:
         retryable = {429, 500, 502, 503, 504}
         backoffs = [1.0, 2.0, 4.0]
         async with self._call_lock:
@@ -729,130 +713,138 @@ class AutonomousArbiter:
                         await asyncio.sleep(backoffs[attempt])
                         continue
                     logger.warning(f"[ROUTING] Jev failed after {attempt+1} attempts: {e}; fail-closed drop.")
-                    return drop
+                    return None
                 if res.status_code in retryable and attempt < len(backoffs):
                     logger.warning(f"[ROUTING] Jev HTTP {res.status_code} (attempt {attempt+1}); retry in {backoffs[attempt]}s.")
                     await asyncio.sleep(backoffs[attempt])
             if res is None or res.status_code != 200:
                 logger.warning(f"[ROUTING] Jev exhausted retries; fail-closed drop.")
-                return drop
+                return None
             self._budget_used += 1
             try:
-                answers = res.json().get("answers", {}) or {}
-
-                # --- Choice: timing/social context (orthogonal to bot identity) ---
-                routing_ans = answers.get("routing") or {}
-                choice_key = routing_ans.get("choice", "drop")
-                confidence = float(routing_ans.get("confidence", 0.0) or 0.0)
-                _, choice_urgency = jev_map.get(choice_key, ("none", "drop"))
-
-                # --- Noul: per-bot assignment (domain experts) ---
-                noul_results: list = []  # (bot, prob) pairs
-                for b in self.cfg.roles:
-                    noul_ans = answers.get(f"assignment_{b}") or {}
-                    noul_prob = float(noul_ans.get("noul", 0.0) or 0.0)
-                    noul_results.append((b, noul_prob))
-
-                # --- Dynamic threshold (one knob, derived) ---
-                # Choice says respond -> relaxed bar (prevent false silence).
-                # Choice says drop -> the bar scales with the drop's own
-                # certainty: conf=1 keeps the strict bar (chitchat firewall
-                # unchanged), while a low-confidence drop slides toward the
-                # relaxed bar so a strong Noul claim can still rescue it
-                # through the 4s grace window. Tonight's live case: a
-                # third-person correction + rhetorical health question was
-                # dropped at conf=0.28 while Noul scored 0.53 — stranded
-                # between the strict bar and the fallback-dispatch path.
-                strict = self.cfg.confidence_threshold
-                relaxed = self.cfg.confidence_threshold * 2 / 3
-                if not isinstance(confidence, (int, float)) or math.isnan(confidence) or confidence < 0.0:
-                    conf_c = 0.0
-                else:
-                    conf_c = min(float(confidence), 1.0)
-
-                if choice_urgency == "drop":
-                    noul_threshold = relaxed + (strict - relaxed) * conf_c
-                else:
-                    noul_threshold = relaxed
-
-                # Sanitize noul probabilities against NaN
-                clean_noul = []
-                for b, p in noul_results:
-                    if not isinstance(p, (int, float)) or math.isnan(p) or p < 0.0:
-                        clean_p = 0.0
-                    else:
-                        clean_p = min(float(p), 1.0)
-                    clean_noul.append((b, clean_p))
-                noul_results = clean_noul
-
-                # Sort descending by score first so candidate_bots preserves score order
-                noul_results.sort(key=lambda x: x[1], reverse=True)
-                candidate_bots = [b for b, p in noul_results if p >= noul_threshold]
-
-                # Full decision-input audit line: makes every arbitration branch
-                # (silence / rescue / normal / fallback) reconstructible from logs.
-                logger.info(
-                    f"[ROUTING] Choice={choice_key} (conf={conf_c:.2f}); "
-                    f"Noul={{{', '.join(f'{b}:{p:.2f}' for b, p in noul_results)}}}; "
-                    f"line={noul_threshold:.2f}."
-                )
-
-                # --- Final decision (layered arbitration) ---
-                if not candidate_bots:
-                    if choice_urgency == "drop" or not noul_results:
-                        # Both gates say silence, or no bots configured → true silence
-                        logger.info(
-                            f"[ROUTING] No bot claimed message "
-                            f"(noul_threshold={noul_threshold:.2f}, "
-                            f"scores={{{', '.join(f'{b}:{p:.2f}' for b, p in noul_results)}}})."
-                        )
-                        target_bot = "none"
-                        target_bots = []
-                        urgency = "drop"
-                        confidence = 0.0
-                    else:
-                        # Choice says respond but nobody claimed → fallback dispatch:
-                        # the highest-scoring bot takes it with a wait_silence grace
-                        # window (4s social buffer; a human reply cancels the dispatch).
-                        target_bot = noul_results[0][0]
-                        target_bots = [target_bot]
-                        urgency = "wait_silence"
-                        confidence = noul_results[0][1]
-                        logger.info(
-                            f"[ROUTING] No bot claimed message but Choice said "
-                            f"'{choice_urgency}'; fallback dispatch to {target_bot} "
-                            f"with wait_silence grace (top score {confidence:.2f} "
-                            f"below threshold {noul_threshold:.2f})."
-                        )
-                elif choice_urgency == "drop":
-                    # Domain expert overrides the global screen: rescue with 4s grace
-                    logger.info(
-                        f"[ROUTING] Rescue: Choice=drop (conf={conf_c:.2f}) "
-                        f"overridden by top claim {noul_results[0][1]:.2f} "
-                        f">= line {noul_threshold:.2f}."
-                    )
-                    target_bots = candidate_bots
-                    target_bot = candidate_bots[0]
-                    urgency = "wait_silence"
-                    confidence = noul_results[0][1]
-                else:
-                    # Both gates passed: use Choice's timing directly
-                    target_bots = candidate_bots
-                    target_bot = candidate_bots[0]
-                    urgency = choice_urgency
-                    confidence = noul_results[0][1]
+                return res.json().get("answers", {}) or {}
             except Exception as e:
                 logger.warning(f"[ROUTING] Jev response parsing failed: {e}; fail-closed drop.")
-                return drop
+                return None
 
-            decision = {
+    def _arbitrate_jev(self, answers: dict, jev_map: dict, drop: dict) -> Dict[str, Any]:
+        try:
+            # --- Choice: timing/social context (orthogonal to bot identity) ---
+            routing_ans = answers.get("routing") or {}
+            choice_key = routing_ans.get("choice", "drop")
+            confidence = float(routing_ans.get("confidence", 0.0) or 0.0)
+            _, choice_urgency = jev_map.get(choice_key, ("none", "drop"))
+
+            # --- Noul: per-bot assignment (domain experts) ---
+            noul_results: list = []  # (bot, prob) pairs
+            for b in self.cfg.roles:
+                noul_ans = answers.get(f"assignment_{b}") or {}
+                noul_prob = float(noul_ans.get("noul", 0.0) or 0.0)
+                noul_results.append((b, noul_prob))
+
+            # --- Dynamic threshold (one knob, derived) ---
+            strict = self.cfg.confidence_threshold
+            relaxed = self.cfg.confidence_threshold * 2 / 3
+            if not isinstance(confidence, (int, float)) or math.isnan(confidence) or confidence < 0.0:
+                conf_c = 0.0
+            else:
+                conf_c = min(float(confidence), 1.0)
+
+            if choice_urgency == "drop":
+                noul_threshold = relaxed + (strict - relaxed) * conf_c
+            else:
+                noul_threshold = relaxed
+
+            # Sanitize noul probabilities against NaN
+            clean_noul = []
+            for b, p in noul_results:
+                if not isinstance(p, (int, float)) or math.isnan(p) or p < 0.0:
+                    clean_p = 0.0
+                else:
+                    clean_p = min(float(p), 1.0)
+                clean_noul.append((b, clean_p))
+            noul_results = clean_noul
+
+            # Sort descending by score first so candidate_bots preserves score order
+            noul_results.sort(key=lambda x: x[1], reverse=True)
+            candidate_bots = [b for b, p in noul_results if p >= noul_threshold]
+
+            # Full decision-input audit line: makes every arbitration branch
+            # (silence / rescue / normal / fallback) reconstructible from logs.
+            logger.info(
+                f"[ROUTING] Choice={choice_key} (conf={conf_c:.2f}); "
+                f"Noul={{{', '.join(f'{b}:{p:.2f}' for b, p in noul_results)}}}; "
+                f"line={noul_threshold:.2f}."
+            )
+
+            # --- Final decision (layered arbitration) ---
+            if not candidate_bots:
+                if choice_urgency == "drop" or not noul_results:
+                    # Both gates say silence, or no bots configured → true silence
+                    logger.info(
+                        f"[ROUTING] No bot claimed message "
+                        f"(noul_threshold={noul_threshold:.2f}, "
+                        f"scores={{{', '.join(f'{b}:{p:.2f}' for b, p in noul_results)}}})."
+                    )
+                    target_bot = "none"
+                    target_bots = []
+                    urgency = "drop"
+                    confidence = 0.0
+                else:
+                    # Choice says respond but nobody claimed → fallback dispatch:
+                    # the highest-scoring bot takes it with a wait_silence grace
+                    # window (4s social buffer; a human reply cancels the dispatch).
+                    target_bot = noul_results[0][0]
+                    target_bots = [target_bot]
+                    urgency = "wait_silence"
+                    confidence = noul_results[0][1]
+                    logger.info(
+                        f"[ROUTING] No bot claimed message but Choice said "
+                        f"'{choice_urgency}'; fallback dispatch to {target_bot} "
+                        f"with wait_silence grace (top score {confidence:.2f} "
+                        f"below threshold {noul_threshold:.2f})."
+                    )
+            elif choice_urgency == "drop":
+                # Domain expert overrides the global screen: rescue with 4s grace
+                logger.info(
+                    f"[ROUTING] Rescue: Choice=drop (conf={conf_c:.2f}) "
+                    f"overridden by top claim {noul_results[0][1]:.2f} "
+                    f">= line {noul_threshold:.2f}."
+                )
+                target_bots = candidate_bots
+                target_bot = candidate_bots[0]
+                urgency = "wait_silence"
+                confidence = noul_results[0][1]
+            else:
+                # Both gates passed: use Choice's timing directly
+                target_bots = candidate_bots
+                target_bot = candidate_bots[0]
+                urgency = choice_urgency
+                confidence = noul_results[0][1]
+
+            return {
                 "target_bot": target_bot,
                 "target_bots": target_bots,
                 "urgency": urgency,
                 "confidence": round(confidence, 2),
                 "source": "classifier",
             }
-            return decision
+        except Exception as e:
+            logger.warning(f"[ROUTING] Jev response parsing failed: {e}; fail-closed drop.")
+            return drop
+
+    async def _classify_jev(self, text: str, sender: str, context: str, alias_hint: str, drop: dict) -> Dict[str, Any]:
+        """Jev (TypeSafe) classifier: orthogonal Choice (timing) + Noul×N (assignment).
+
+        Choice is a fixed 3-option question (immediate/wait/drop) that only
+        evaluates social context and urgency — independent of bot identity.
+        Each bot gets an independent Noul question: 'does this message need {bot}?'
+        """
+        url, payload, headers, timeout, jev_map = self._build_jev_payload(text, sender, context, alias_hint)
+        answers = await self._post_jev_systemone(url, payload, headers, timeout)
+        if answers is None:
+            return drop
+        return self._arbitrate_jev(answers, jev_map, drop)
 
     @staticmethod
     def _extract_json_dict(raw_text: str) -> Dict[str, Any]:
@@ -1113,70 +1105,29 @@ class AutonomousController:
             return any(s in sender_name for s in self.cfg.allowed_senders)
         return True
 
-    async def evaluate_and_publish(self, msg) -> None:
-        """Arbiter-only entry: run the pipeline and broadcast the decision once."""
-        if not self.is_arbiter or self.arbiter is None:
-            return
-        self.cfg.reload_if_modified()
-        if getattr(msg, "is_bot_relay", False) or bool(getattr(msg, "from_user", {}).get("is_bot", False)):
-            return
-        if getattr(msg, "attachments", None):
-            if getattr(msg, "is_resume", False) and self.resume_drop_fn:
-                try:
-                    self.resume_drop_fn(msg.chat_id, msg.msg_id, msg.text or "")
-                except Exception:
-                    pass
-            return  # v1: autonomous routing for plain text only
-        if not self.chat_allowed(msg.chat_id) or not self.sender_allowed(msg.sender_name):
-            if getattr(msg, "is_resume", False) and self.resume_drop_fn:
-                try:
-                    self.resume_drop_fn(msg.chat_id, msg.msg_id, msg.text or "")
-                except Exception:
-                    pass
-            return
-        context = ""
-        if self._context_summary_fn:
+    def _drop_resume(self, msg, log_warning: bool = False) -> None:
+        """Mark dropped or delegated resume messages as completed so they don't linger."""
+        if getattr(msg, "is_resume", False) and self.resume_drop_fn:
             try:
-                context = self._context_summary_fn(msg.chat_id, msg.msg_id, self.cfg.context_window_size)
+                self.resume_drop_fn(msg.chat_id, msg.msg_id, msg.text or "")
             except Exception as e:
-                logger.warning(f"[ROUTING] Context build failed: {e}")
-
-        decision = self.arbiter.evaluate_sync(msg.text or "", msg.sender_name, context)
-        if decision is None:
-            alias_hint = ""
-            if self.cfg.alias_mode == "hint":
-                hit = self.cfg.alias_hit(msg.text or "")
-                if hit:
-                    alias_hint = f"(The message mentions an alias of @{hit}.)"
-            decision = await self.arbiter.classify(
-                msg.text or "", msg.sender_name, context, alias_hint
-            )
-        if decision.get("urgency", "drop") == "drop" and decision.get("source") != "classifier":
-            if getattr(msg, "is_resume", False) and self.resume_drop_fn:
-                try:
-                    self.resume_drop_fn(msg.chat_id, msg.msg_id, msg.text or "")
-                except Exception as e:
+                if log_warning:
                     logger.warning(f"[ROUTING] Failed to mark dropped resume completed: {e}")
-            return  # physical noise: silently skip, no broadcast
-        if decision.get("target_bot", "none") == "none":
-            if getattr(msg, "is_resume", False) and self.resume_drop_fn:
-                try:
-                    self.resume_drop_fn(msg.chat_id, msg.msg_id, msg.text or "")
-                except Exception as e:
-                    logger.warning(f"[ROUTING] Failed to mark dropped resume completed: {e}")
-            return  # semantic drop: silently skip, no broadcast
 
-        # Resume messages: timing already settled (confirmed unanswered by the
-        # watermark scan).  Override any wait/drop from Choice to immediate so
-        # the candidate is dispatched without a grace window or timeout delay,
-        # while keeping the Noul-based bot assignment intact.
-        if getattr(msg, "is_resume", False) and decision.get("urgency") != "immediate":
-            logger.info(
-                f"[ROUTING] Resume override: {decision.get('urgency')}→immediate "
-                f"for chat {msg.chat_id} (target={decision.get('target_bot')})."
-            )
-            decision["urgency"] = "immediate"
+    def _is_message_routable(self, msg) -> bool:
+        """Filter out non-routable messages (bots, attachments, permissions)."""
+        if getattr(msg, "is_bot_relay", False) or bool(getattr(msg, "from_user", {}).get("is_bot", False)):
+            return False
+        if getattr(msg, "attachments", None):
+            self._drop_resume(msg)
+            return False  # v1: autonomous routing for plain text only
+        if not self.chat_allowed(msg.chat_id) or not self.sender_allowed(msg.sender_name):
+            self._drop_resume(msg)
+            return False
+        return True
 
+    async def _publish_decision(self, msg, decision: Dict[str, Any]) -> None:
+        """Broadcast autonomous routing decision and update local in-flight tracking."""
         payload = {
             "event": "autonomous_decision",
             "chat_id": msg.chat_id,
@@ -1191,13 +1142,10 @@ class AutonomousController:
         # If this was a resume candidate and this bot is NOT a target,
         # arbiter's job is complete (delegated to peer bot via relay).
         # Clear arbiter's retry state so it doesn't linger or turn into poison.
-        if getattr(msg, "is_resume", False) and self.resume_drop_fn:
+        if getattr(msg, "is_resume", False):
             target_set = {str(t).lower().lstrip("@") for t in decision.get("target_bots", [])}
             if self.my_bot not in target_set:
-                try:
-                    self.resume_drop_fn(msg.chat_id, msg.msg_id, msg.text or "")
-                except Exception as e:
-                    logger.warning(f"[ROUTING] Failed to mark delegated resume completed: {e}")
+                self._drop_resume(msg, log_warning=True)
 
         # Track non-drop dispatches as in-flight tasks for the routing context.
         # Covers both immediate and wait_silence: a wait_silence task that fires
@@ -1220,3 +1168,49 @@ class AutonomousController:
                 logger.warning(f"[ROUTING] Broadcast failed: {e}")
         if self.observer is not None:
             self.observer.on_decision(payload)
+
+    async def evaluate_and_publish(self, msg) -> None:
+        """Arbiter-only entry: run the pipeline and broadcast the decision once."""
+        if not self.is_arbiter or self.arbiter is None:
+            return
+        self.cfg.reload_if_modified()
+        if not self._is_message_routable(msg):
+            return
+
+        context = ""
+        if self._context_summary_fn:
+            try:
+                context = self._context_summary_fn(msg.chat_id, msg.msg_id, self.cfg.context_window_size)
+            except Exception as e:
+                logger.warning(f"[ROUTING] Context build failed: {e}")
+
+        decision = self.arbiter.evaluate_sync(msg.text or "", msg.sender_name, context)
+        if decision is None:
+            alias_hint = ""
+            if self.cfg.alias_mode == "hint":
+                hit = self.cfg.alias_hit(msg.text or "")
+                if hit:
+                    alias_hint = f"(The message mentions an alias of @{hit}.)"
+            decision = await self.arbiter.classify(
+                msg.text or "", msg.sender_name, context, alias_hint
+            )
+
+        if decision.get("urgency", "drop") == "drop" and decision.get("source") != "classifier":
+            self._drop_resume(msg)
+            return  # physical noise: silently skip, no broadcast
+        if decision.get("target_bot", "none") == "none":
+            self._drop_resume(msg)
+            return  # semantic drop: silently skip, no broadcast
+
+        # Resume messages: timing already settled (confirmed unanswered by the
+        # watermark scan). Override any wait/drop from Choice to immediate so
+        # the candidate is dispatched without a grace window or timeout delay,
+        # while keeping the Noul-based bot assignment intact.
+        if getattr(msg, "is_resume", False) and decision.get("urgency") != "immediate":
+            logger.info(
+                f"[ROUTING] Resume override: {decision.get('urgency')}→immediate "
+                f"for chat {msg.chat_id} (target={decision.get('target_bot')})."
+            )
+            decision["urgency"] = "immediate"
+
+        await self._publish_decision(msg, decision)

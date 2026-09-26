@@ -445,6 +445,160 @@ class GroupConnectEngine:
             if worker is None or worker.done():
                 self.chat_tasks[chat_id] = asyncio.create_task(self._process_chat_queue(chat_id))
 
+    async def _handle_unauthorized(self, msg: InboundMessage, reason: str) -> None:
+        """Handles security rejection actions (lockdown notification, group leave, user alert)."""
+        chat_id = msg.chat_id
+        chat_type = msg.chat_type
+        if reason == "empty_whitelist_lockdown":
+            logger.warning(
+                f"[SECURITY] Blocked request from user {msg.from_user.get('id')} ({msg.sender_name}) "
+                "because allowlist is empty and allow_open_access is false."
+            )
+            if chat_type == "private" and msg.is_triggered:
+                await self.channel.send_reply(
+                    chat_id,
+                    "🔒 **Safe Lockdown Mode**\n\n"
+                    "No allowlist is configured in `config.json`. To protect local workspace assets, "
+                    "access is locked by default.\n\n"
+                    "👉 **To authorize yourself**, add your username or numeric ID to `allowed_usernames` "
+                    "or `allowed_user_ids` in `config.json`."
+                )
+        elif reason == "unauthorized_group":
+            logger.warning(f"[SECURITY] Unauthorized group message in {chat_id}. Leaving chat...")
+            await self.channel.leave_chat(chat_id)
+        elif reason == "unauthorized_user":
+            logger.warning(f"[SECURITY] Unauthorized private message from {msg.from_user.get('id')} ({msg.sender_name})")
+            if msg.is_triggered:
+                await self.channel.send_reply(
+                    chat_id,
+                    "⛔ **Access Restricted**\n\nThis bot is a private assistant limited to authorized members only."
+                )
+
+    async def _handle_preemptive_stop(self, msg: InboundMessage, clean_query: str, record: bool) -> bool:
+        """Preemptively intercepts /stop to terminate execution and clear queues. Returns True if handled."""
+        raw_text = msg.text or ""
+        cmd, _, _ = parse_bot_command(raw_text, self.config.bot_username)
+        if not cmd and clean_query:
+            cmd, _, _ = parse_bot_command(clean_query, self.config.bot_username)
+        if cmd != "stop" or not msg.is_triggered:
+            return False
+
+        chat_id = msg.chat_id
+        if getattr(msg, "is_resume", False):
+            if self.resume_manager:
+                try:
+                    self.resume_manager.mark_completed(chat_id, msg.msg_id, msg.text or "")
+                except Exception:
+                    pass
+            return True
+
+        logger.info(f"Received preemptive /stop command for chat {chat_id}")
+        self.adapter.terminate(chat_id)
+        if chat_id in self.chat_queues:
+            q = self.chat_queues[chat_id]
+            while not q.empty():
+                try:
+                    q_item = q.get_nowait()
+                    if self.resume_manager and q_item and getattr(q_item[0], "is_resume", False):
+                        try:
+                            self.resume_manager.mark_completed(chat_id, q_item[0].msg_id, q_item[0].text or "")
+                        except Exception:
+                            pass
+                    q.task_done()
+                except (asyncio.QueueEmpty, ValueError):
+                    break
+
+        sent_id = await self.channel.send_reply(chat_id, "⏹ Task execution was stopped.", reply_to_msg_id=msg.msg_id)
+        clean_sent_id = sent_id if isinstance(sent_id, (int, str)) else 0
+        if record:
+            self.context_mgr.record_message(
+                chat_id=chat_id,
+                sender_name=msg.sender_name,
+                text=msg.text,
+                msg_id=msg.msg_id,
+                attachments=[]
+            )
+        try:
+            self.context_mgr.record_message(
+                chat_id=chat_id,
+                sender_name=f"{self.config.bot_name} (@{self.config.bot_username})",
+                text="⏹ Task execution was stopped.",
+                msg_id=clean_sent_id,
+                is_bot_reply=True,
+                bot_username=self.config.bot_username,
+                reply_to_msg_id=msg.msg_id or 0
+            )
+            if self.resume_manager:
+                self.resume_manager.mark_completed(chat_id, msg.msg_id, msg.text or "")
+        except Exception:
+            pass
+        return True
+
+    def _handle_pattern_fast_path(self, msg: InboundMessage, clean_query: str) -> bool:
+        """Attempts fast-lane regex device control matching. Returns True if handled."""
+        _fast = clean_query or (msg.text or "").strip()
+        if _fast and not _fast.startswith("/"):
+            matched = self.pattern_executor.match(_fast)
+            if matched:
+                pc, raw = matched
+                asyncio.create_task(
+                    self.pattern_executor.execute(
+                        msg.chat_id, pc, raw, reply_to_msg_id=msg.msg_id, chat_type=msg.chat_type
+                    )
+                )
+                return True
+        return False
+
+    def _handle_untriggered_message(self, msg: InboundMessage, is_bot: bool) -> None:
+        """Filters untriggered messages and forwards eligible conversation to Zero-@ arbiter."""
+        chat_id = msg.chat_id
+
+        def _clean_resume():
+            if getattr(msg, "is_resume", False) and self.resume_manager:
+                try:
+                    self.resume_manager.mark_completed(chat_id, msg.msg_id, msg.text or "")
+                except Exception:
+                    pass
+
+        # Source-level filter: if message is directed at another bot or user, bypass routing pipeline
+        if getattr(msg, "reply_to_bot_username", ""):
+            _clean_resume()
+            return
+        raw_text = (msg.text or "").strip()
+        if raw_text.startswith("/"):
+            _clean_resume()
+            return
+        if re.search(r"@[a-zA-Z][a-zA-Z0-9_]{4,}(?!\.\w)|<@[!&]?\w+>", raw_text):
+            _clean_resume()
+            return
+
+        au = getattr(self, "autonomous", None)
+        if au is not None and au.cfg.enabled and not is_bot:
+            au.on_human_message(msg)
+            if au.is_arbiter:
+                asyncio.create_task(au.evaluate_and_publish(msg))
+        else:
+            _clean_resume()
+
+    def _enqueue_triggered_message(self, msg: InboundMessage, clean_query: str) -> None:
+        """Enqueues triggered message and ensures a queue drain worker is running."""
+        chat_id = msg.chat_id
+        if msg.msg_id:
+            self._triggered_msg_ids.append(str(msg.msg_id))
+
+        if chat_id not in self.chat_queues:
+            self.chat_queues[chat_id] = asyncio.Queue()
+
+        cmd, _, _ = parse_bot_command(msg.text or "", self.config.bot_username)
+        if not cmd and clean_query:
+            cmd, _, _ = parse_bot_command(clean_query, self.config.bot_username)
+
+        self.chat_queues[chat_id].put_nowait((msg, clean_query, cmd))
+
+        worker_task = self.chat_tasks.get(chat_id)
+        if (worker_task is None or worker_task.done()) and not self._resume_workers_held():
+            self.chat_tasks[chat_id] = asyncio.create_task(self._process_chat_queue(chat_id))
+
     async def on_inbound_message(self, msg: InboundMessage, record: bool = True) -> None:
         chat_id = msg.chat_id
         chat_type = msg.chat_type
@@ -457,95 +611,19 @@ class GroupConnectEngine:
             from_user=msg.from_user,
             dynamic_checker=dynamic_checker
         )
-
         if not authorized:
-            if reason == "empty_whitelist_lockdown":
-                logger.warning(
-                    f"[SECURITY] Blocked request from user {msg.from_user.get('id')} ({msg.sender_name}) "
-                    "because allowlist is empty and allow_open_access is false."
-                )
-                if chat_type == "private" and msg.is_triggered:
-                    await self.channel.send_reply(
-                        chat_id,
-                        "🔒 **Safe Lockdown Mode**\n\n"
-                        "No allowlist is configured in `config.json`. To protect local workspace assets, "
-                        "access is locked by default.\n\n"
-                        "👉 **To authorize yourself**, add your username or numeric ID to `allowed_usernames` "
-                        "or `allowed_user_ids` in `config.json`."
-                    )
-                return
-            elif reason == "unauthorized_group":
-                logger.warning(f"[SECURITY] Unauthorized group message in {chat_id}. Leaving chat...")
-                await self.channel.leave_chat(chat_id)
-                return
-            elif reason == "unauthorized_user":
-                logger.warning(f"[SECURITY] Unauthorized private message from {msg.from_user.get('id')} ({msg.sender_name})")
-                if msg.is_triggered:
-                    await self.channel.send_reply(
-                        chat_id,
-                        "⛔ **Access Restricted**\n\nThis bot is a private assistant limited to authorized members only."
-                    )
-                return
+            await self._handle_unauthorized(msg, reason)
+            return
 
         # 2. Clean query
-        raw_text = msg.text
+        raw_text = msg.text or ""
         clean_query = re.sub(rf"@{self.config.bot_username}\b", "", raw_text, flags=re.IGNORECASE).strip()
 
-        # 3. Preemptive /stop Intercept (Bypasses queue & immediately halts in-flight task)
-        cmd, target_bot, _ = parse_bot_command(raw_text or "", self.config.bot_username)
-        if not cmd and clean_query:
-            cmd, target_bot, _ = parse_bot_command(clean_query, self.config.bot_username)
-        if cmd == "stop" and msg.is_triggered:
-            if getattr(msg, "is_resume", False):
-                if self.resume_manager:
-                    try:
-                        self.resume_manager.mark_completed(chat_id, msg.msg_id, msg.text or "")
-                    except Exception:
-                        pass
-                return
-            logger.info(f"Received preemptive /stop command for chat {chat_id}")
-            self.adapter.terminate(chat_id)
-            if chat_id in self.chat_queues:
-                q = self.chat_queues[chat_id]
-                while not q.empty():
-                    try:
-                        q_item = q.get_nowait()
-                        if self.resume_manager and q_item and getattr(q_item[0], "is_resume", False):
-                            try:
-                                self.resume_manager.mark_completed(chat_id, q_item[0].msg_id, q_item[0].text or "")
-                            except Exception:
-                                pass
-                        q.task_done()
-                    except (asyncio.QueueEmpty, ValueError):
-                        break
-            sent_id = await self.channel.send_reply(chat_id, "⏹ Task execution was stopped.", reply_to_msg_id=msg.msg_id)
-            clean_sent_id = sent_id if isinstance(sent_id, (int, str)) else 0
-            if record:
-                self.context_mgr.record_message(
-                    chat_id=chat_id,
-                    sender_name=msg.sender_name,
-                    text=msg.text,
-                    msg_id=msg.msg_id,
-                    attachments=[]
-                )
-            try:
-                self.context_mgr.record_message(
-                    chat_id=chat_id,
-                    sender_name=f"{self.config.bot_name} (@{self.config.bot_username})",
-                    text="⏹ Task execution was stopped.",
-                    msg_id=clean_sent_id,
-                    is_bot_reply=True,
-                    bot_username=self.config.bot_username,
-                    reply_to_msg_id=msg.msg_id or 0
-                )
-                if self.resume_manager:
-                    self.resume_manager.mark_completed(chat_id, msg.msg_id, msg.text or "")
-            except Exception:
-                pass
+        # 3. Preemptive /stop Intercept
+        if await self._handle_preemptive_stop(msg, clean_query, record):
             return
 
         # 4. Immediate Real-Time Context Recording (Unblocked)
-        # Resume re-dispatch passes record=False: the message is already the buffer's last entry.
         is_bot = getattr(msg, "is_bot_relay", False) or bool(getattr(msg, "from_user", {}).get("is_bot", False))
         relay_bot_username = msg.from_user.get("username", "") if is_bot else ""
         if record:
@@ -560,66 +638,18 @@ class GroupConnectEngine:
                 bot_username=relay_bot_username
             )
 
-        # 5. Pattern command fast path: regex-matched device control bypasses LLM routing entirely.
-        #    Runs in both group and private chats — triggered or untriggered.
+        # 5. Pattern command fast path
         if not is_bot and self._pattern_commands and not getattr(msg, "reply_to_bot_username", ""):
-            _fast = clean_query or (msg.text or "").strip()
-            if _fast and not _fast.startswith("/"):
-                matched = self.pattern_executor.match(_fast)
-                if matched:
-                    pc, raw = matched
-                    asyncio.create_task(
-                        self.pattern_executor.execute(chat_id, pc, raw, reply_to_msg_id=msg.msg_id, chat_type=chat_type)
-                    )
-                    return
+            if self._handle_pattern_fast_path(msg, clean_query):
+                return
 
         # 6. Untriggered messages complete here (already captured in context buffer)
         if not msg.is_triggered:
-            def _clean_resume():
-                if getattr(msg, "is_resume", False) and self.resume_manager:
-                    try:
-                        self.resume_manager.mark_completed(chat_id, msg.msg_id, msg.text or "")
-                    except Exception:
-                        pass
-
-            # Source-level filter: if message is directed at another bot or user (via @mention, reply, or slash command),
-            # never allow it into autonomous routing pipeline!
-            if getattr(msg, "reply_to_bot_username", ""):
-                _clean_resume()
-                return
-            raw_text = (msg.text or "").strip()
-            if raw_text.startswith("/"):
-                _clean_resume()
-                return
-            # Telegram usernames are ASCII-only, 5-32 chars, starting with a letter.
-            # A bare \w+ would also match CJK particles after '@' (e.g. '不用@呀'),
-            # silently dropping legit messages from autonomous routing.
-            if re.search(r"@[a-zA-Z][a-zA-Z0-9_]{4,}(?!\.\w)|<@[!&]?\w+>", raw_text):
-                _clean_resume()
-                return
-
-            # Autonomous routing: local preemption check + single-arbiter evaluation
-            au = getattr(self, "autonomous", None)
-            if au is not None and au.cfg.enabled and not is_bot:
-                au.on_human_message(msg)
-                if au.is_arbiter:
-                    asyncio.create_task(au.evaluate_and_publish(msg))
-            else:
-                _clean_resume()
+            self._handle_untriggered_message(msg, is_bot)
             return
 
         # 7. Enqueue triggered message for latest-driven queue draining execution
-        if msg.msg_id:
-            self._triggered_msg_ids.append(str(msg.msg_id))
-
-        if chat_id not in self.chat_queues:
-            self.chat_queues[chat_id] = asyncio.Queue()
-
-        self.chat_queues[chat_id].put_nowait((msg, clean_query, cmd))
-
-        worker_task = self.chat_tasks.get(chat_id)
-        if (worker_task is None or worker_task.done()) and not self._resume_workers_held():
-            self.chat_tasks[chat_id] = asyncio.create_task(self._process_chat_queue(chat_id))
+        self._enqueue_triggered_message(msg, clean_query)
 
     def _build_routing_context(self, chat_id: Any, exclude_msg_id: Any, window: int) -> str:
         """Recent messages (human + bot) for the routing classifier.
