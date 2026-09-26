@@ -34,3 +34,4 @@ inbox/
 .venv
 env/
 venv/
+.temp/
