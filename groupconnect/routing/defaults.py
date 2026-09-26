@@ -34,9 +34,10 @@ DEFAULT_IMMEDIATE_CRITERIA = (
 )
 DEFAULT_WAIT_CRITERIA = (
     "An open question, help request, data lookup, recommendation, or everyday problem "
-    "seeking advice or a solution — including messages phrased as complaints "
-    "(e.g. what to do about something broken or unripe) — where humans should get "
-    "a chance to reply first, and bots pick it up only if nobody does."
+    "seeking advice or a solution — asked to the group at large, including messages "
+    "phrased as complaints (e.g. what to do about something broken or unripe) or "
+    "third-person requests relayed through the group — where humans should get a "
+    "chance to reply first, and bots pick it up only if nobody does."
 )
 DEFAULT_DROP_CRITERIA = (
     "Interpersonal conversation between group members that seeks no answer or "
@@ -77,7 +78,8 @@ Decision Rules (Evaluate in order, first match wins):
 
 2. OBJECTIVE INQUIRY & RECOMMENDATION (urgency = "wait_silence"):
    - Open questions, help requests, recommendations, and everyday problem-solving
-     where humans should reply first (see the wait option criteria).
+     addressed to the group at large, where humans should reply first
+     (see the wait option criteria).
 
 3. INTERPERSONAL CHITCHAT / SILENCE (urgency = "drop"):
    - Human-to-human conversation, venting, or banter (see the drop option criteria).
@@ -98,8 +100,9 @@ Decision Rules (Evaluate in order, first match wins):
 
 2. OBJECTIVE INQUIRY & RECOMMENDATION (urgency = "wait_silence"):
    - If the message is an open question, data lookup, or recommendation request
-     matching a bot's role -> Assign to the matching bot(s) in target_bots with
-     urgency "wait_silence" (leaves social space for humans to reply first).
+     addressed to the group at large, matching a bot's role -> Assign to the matching
+     bot(s) in target_bots with urgency "wait_silence" (leaves social space for
+     humans to reply first).
    - Inquiry criteria: {wait}
 
 3. INTERPERSONAL CHITCHAT / SILENCE (urgency = "drop", target_bots = []):
