@@ -101,8 +101,10 @@ class ResumeManager:
             return True, True
 
         # Group chat: check for explicit slash commands
-        cmd, _, _ = parse_bot_command(raw, self.bot_username)
+        cmd, target_bot, _ = parse_bot_command(raw, self.bot_username)
         if cmd:
+            if target_bot is not None and target_bot.lower() != self.bot_username.lower():
+                return False, False
             return True, True
 
         # Group chat: check if explicitly tagged for this bot
