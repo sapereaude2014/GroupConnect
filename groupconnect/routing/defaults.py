@@ -33,24 +33,23 @@ DEFAULT_IMMEDIATE_CRITERIA = (
     "question/offer — the sender expects an immediate bot response."
 )
 DEFAULT_WAIT_CRITERIA = (
-    "An open question, help request, data lookup, or recommendation request "
-    "where humans should get a chance to reply first — the bots pick it up "
-    "only if nobody does."
+    "An open question, help request, data lookup, recommendation, or everyday problem "
+    "seeking advice or a solution — including messages phrased as complaints "
+    "(e.g. what to do about something broken or unripe) — where humans should get "
+    "a chance to reply first, and bots pick it up only if nobody does."
 )
 DEFAULT_DROP_CRITERIA = (
     "Interpersonal conversation between group members that seeks no answer or "
-    "action at all — direct 2nd-person address to another human, reactions to "
-    "another human's preceding message, or 3rd-person banter about bots. "
-    "Any message asking for advice, a solution, a decision, or help — even "
-    "phrased as a complaint — is NEVER drop. Referring to another member in "
-    "3rd-person to record or query tasks is not drop-worthy either."
+    "action from any bot — direct 2nd-person address to another human, reactions to "
+    "another human's preceding message, casual banter, emotional venting, or sharing daily plans."
 )
 DEFAULT_ASSIGNMENT_CRITERIA = (
-    "Whether the current message falls within {bot}'s responsibility or requires {bot} ({role}) to handle it. "
-    "Score by how well the message's topic and requested help match {bot}'s domain. "
-    "Return a low score only when the message genuinely seeks no answer or falls "
-    "outside {bot}'s domain, or if another bot is explicitly being instructed to "
-    "coordinate or delegate to {bot} (only the dispatcher bot should respond)."
+    "Evaluate whether {bot} should respond to this message. "
+    "Rules for scoring: "
+    "1. DIRECT ADDRESS / DISPATCH: If the sender directly addresses or names {bot} ({aliases}) to talk to {bot} or assign a task (e.g. '{bot}, ...'), score HIGH (0.8-1.0), regardless of topic. "
+    "2. THIRD-PERSON OBJECT: If {bot} is merely mentioned in 3rd-person as a topic, target of critique, or work object by someone addressing another bot (e.g. 'A, go check {bot}'), score LOW (~0.1-0.2). "
+    "3. PARALLEL: If the sender asks multiple bots to respond together (e.g. 'both', 'all'), all mentioned bots score HIGH. "
+    "4. UNNAMED: When no bot is explicitly named, score by how well the message matches {bot}'s responsibility ({role})."
 )
 
 DEFAULT_RULE_TEMPLATES: Dict[str, str] = {
@@ -76,12 +75,12 @@ Decision Rules (Evaluate in order, first match wins):
    - Or the message is a direct command / imperative task request (see the
      immediate option criteria).
 
-2. INTERPERSONAL CHITCHAT / SILENCE (urgency = "drop"):
-   - Human-to-human conversation, venting, or banter (see the drop option criteria).
+2. OBJECTIVE INQUIRY & RECOMMENDATION (urgency = "wait_silence"):
+   - Open questions, help requests, recommendations, and everyday problem-solving
+     where humans should reply first (see the wait option criteria).
 
-3. OBJECTIVE INQUIRY & RECOMMENDATION (urgency = "wait_silence"):
-   - Open questions and data lookups where humans should reply first
-     (see the wait option criteria).
+3. INTERPERSONAL CHITCHAT / SILENCE (urgency = "drop"):
+   - Human-to-human conversation, venting, or banter (see the drop option criteria).
 """
 
 DEFAULT_ROUTING_RULES_MD = """# Autonomous Routing Decision Rules
@@ -97,14 +96,14 @@ Decision Rules (Evaluate in order, first match wins):
      role -> Assign to the matching bot(s) in target_bots with urgency "immediate".
    - Direct instruction criteria: {immediate}
 
-2. INTERPERSONAL CHITCHAT / SILENCE (urgency = "drop", target_bots = []):
-   - {drop}
-
-3. OBJECTIVE INQUIRY & RECOMMENDATION (urgency = "wait_silence"):
+2. OBJECTIVE INQUIRY & RECOMMENDATION (urgency = "wait_silence"):
    - If the message is an open question, data lookup, or recommendation request
      matching a bot's role -> Assign to the matching bot(s) in target_bots with
      urgency "wait_silence" (leaves social space for humans to reply first).
    - Inquiry criteria: {wait}
+
+3. INTERPERSONAL CHITCHAT / SILENCE (urgency = "drop", target_bots = []):
+   - {drop}
 
 4. MULTI-BOT ASSIGNMENT & DISPATCH:
    - DISPATCH: One bot is asked to handle a task involving another bot (e.g. "A, ask B to do X") -> Assign to the DISPATCHER bot only.

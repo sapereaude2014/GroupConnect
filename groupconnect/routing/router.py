@@ -633,7 +633,12 @@ class AutonomousArbiter:
         assignment = t.get("assignment", DEFAULT_ASSIGNMENT_CRITERIA)
         templates = {}
         for bot, role in self.cfg.roles.items():
-            templates[bot] = assignment.replace("{bot}", bot).replace("{role}", role)
+            aliases = ", ".join(self.cfg.aliases.get(bot, []))
+            templates[bot] = (
+                assignment.replace("{bot}", bot)
+                .replace("{role}", role)
+                .replace("{aliases}", aliases or bot)
+            )
         return templates
 
     def _jev_criteria(self) -> Tuple[dict, dict, str]:

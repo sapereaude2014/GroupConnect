@@ -1425,6 +1425,21 @@ class TestFlushPending(unittest.IsolatedAsyncioTestCase):
         # Only the manual cancel, no extra dispatch from flush
         self.assertEqual(len(self.dispatch_calls), 0)
 
+    def test_assignment_templates_substitute_aliases(self):
+        self.cfg.aliases = {
+            "primary_bot": ["助手", "小管家"]
+        }
+        templates = self.ctrl.arbiter._jev_assignment_templates()
+        self.assertIn("primary_bot", templates)
+        self.assertIn("助手, 小管家", templates["primary_bot"])
+
+    def test_jev_choice_instructions_order(self):
+        instructions = self.ctrl.arbiter._load_choice_instructions()
+        pos_imm = instructions.find("1. BOT DIALOGUE CONTINUATION")
+        pos_wait = instructions.find("2. OBJECTIVE INQUIRY & RECOMMENDATION")
+        pos_drop = instructions.find("3. INTERPERSONAL CHITCHAT / SILENCE")
+        self.assertTrue(pos_imm < pos_wait < pos_drop, "Expected order: immediate -> wait -> drop")
+
 
 if __name__ == "__main__":
     unittest.main()
