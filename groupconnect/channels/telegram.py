@@ -50,6 +50,10 @@ class TelegramChannel(BaseChannel):
         self.client = httpx.AsyncClient(timeout=60.0)
         self.is_running = False
         self.last_update_id = 0
+        self.on_burst_callback: Optional[Callable[[Optional[float]], None]] = None
+
+    def set_burst_callback(self, callback: Optional[Callable[[Optional[float]], None]]) -> None:
+        self.on_burst_callback = callback
 
     async def _api_call(self, method: str, retries: int = 3, **kwargs) -> Dict[str, Any]:
         url = f"{self.api_base}/{method}"
@@ -474,7 +478,10 @@ class TelegramChannel(BaseChannel):
             reply_to_bot_username=reply_to_bot
         )
 
-        asyncio.create_task(self.handler(inbound))
+        try:
+            await self.handler(inbound)
+        except Exception as e:
+            logger.error(f"Error handling inbound message {msg_id}: {e}", exc_info=True)
 
     async def _register_bot_commands(self) -> None:
         """Registers clean slash commands for both default and Chinese locales upon startup."""
@@ -525,7 +532,14 @@ class TelegramChannel(BaseChannel):
                     await asyncio.sleep(3)
                     continue
 
-                for update in res.get("result", []):
+                updates = res.get("result", [])
+                if len(updates) > 1 and self.on_burst_callback:
+                    try:
+                        self.on_burst_callback()
+                    except Exception as e:
+                        logger.warning(f"Error invoking burst callback: {e}")
+
+                for update in updates:
                     self.last_update_id = max(self.last_update_id, update["update_id"])
                     await self._process_update(update)
 

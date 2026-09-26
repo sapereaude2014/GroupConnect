@@ -44,6 +44,7 @@ logger = logging.getLogger("groupconnect.engine")
 # dispatch; when no new one arrives for this long, the burst is declared
 # complete and parked queue workers are released (single coalesced drain).
 RESUME_BURST_SETTLE_SECS = 8.0
+BATCH_BURST_SETTLE_SECS = 1.5
 
 
 def _load_soul(config: GatewayConfig) -> str:
@@ -105,6 +106,8 @@ class GroupConnectEngine:
 
         # 3. Channel Dynamic Factory
         self.channel: BaseChannel = self._create_channel()
+        if hasattr(self.channel, "set_burst_callback"):
+            self.channel.set_burst_callback(self.on_batch_burst)
 
         # 4. Cross-Bot IPC Relay
         self.relay = CrossBotRelay(
@@ -232,7 +235,10 @@ class GroupConnectEngine:
 
     def _create_channel(self) -> BaseChannel:
         channel_cls = get_channel_class(self.config.platform)
-        return channel_cls(self.config, self.on_inbound_message)
+        channel = channel_cls(self.config, self.on_inbound_message)
+        if hasattr(channel, "set_burst_callback"):
+            channel.set_burst_callback(self.on_batch_burst)
+        return channel
 
     def get_chat_lock(self, chat_id: Any) -> asyncio.Lock:
         if chat_id not in self.chat_locks:
@@ -256,6 +262,8 @@ class GroupConnectEngine:
         is_arbiter = (self.autonomous.is_arbiter if self.autonomous else True)
         scheduler_task = asyncio.create_task(self._scheduled_tasks_loop()) if (has_schedules and is_arbiter) else None
         await self._resume_unanswered_messages()
+        # Brief initial settle hold so startup poll updates land together without racing worker 1
+        self._extend_resume_hold(secs=BATCH_BURST_SETTLE_SECS)
         try:
             await self.channel.start()
         finally:
@@ -419,9 +427,15 @@ class GroupConnectEngine:
         """True while a resume burst is still landing (workers stay parked)."""
         return time.time() < self._resume_hold_until
 
-    def _extend_resume_hold(self) -> None:
+    def on_batch_burst(self, secs: Optional[float] = None) -> None:
+        """Called by channels when a multi-message burst or backlog is detected."""
+        hold_secs = BATCH_BURST_SETTLE_SECS if secs is None else secs
+        self._extend_resume_hold(secs=hold_secs)
+
+    def _extend_resume_hold(self, secs: Optional[float] = None) -> None:
         """(Re)arms the resume-burst settle window and ensures a release task."""
-        self._resume_hold_until = time.time() + RESUME_BURST_SETTLE_SECS
+        hold_secs = RESUME_BURST_SETTLE_SECS if secs is None else secs
+        self._resume_hold_until = max(self._resume_hold_until, time.time() + hold_secs)
         task = self._resume_hold_task
         if task is None or task.done():
             self._resume_hold_task = asyncio.create_task(self._release_resume_workers())

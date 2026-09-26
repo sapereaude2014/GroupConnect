@@ -117,3 +117,7 @@ class BaseChannel(ABC):
         """Sends an outbound file/multimedia attachment to the specified chat (optional)."""
         return None
 
+    def set_burst_callback(self, callback: Optional[Callable[[Optional[float]], None]]) -> None:
+        """Optional callback invoked when a batch of incoming messages / burst is received."""
+        pass
+

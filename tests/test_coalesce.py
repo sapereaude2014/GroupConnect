@@ -373,3 +373,98 @@ class TestQueueCoalescing(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.engine.chat_queues[chat_id].empty())
         # The adapter must NOT be terminated
         self.engine.adapter.terminate.assert_not_called()
+
+    async def test_telegram_channel_burst_callback(self):
+        """TelegramChannel triggers burst callback when receiving multiple updates in a batch."""
+        from groupconnect.channels.telegram import TelegramChannel
+        cfg = GatewayConfig({
+            "platform": "telegram",
+            "bot_token": "mock_token",
+            "bot_username": "test_bot"
+        })
+        handler = AsyncMock()
+        channel = TelegramChannel(cfg, handler)
+        burst_cb = MagicMock()
+        channel.set_burst_callback(burst_cb)
+
+        updates = [
+            {"update_id": 1, "message": {"message_id": 1001, "chat": {"id": 1, "type": "private"}, "text": "msg1", "from": {"id": 10, "first_name": "A"}}},
+            {"update_id": 2, "message": {"message_id": 1002, "chat": {"id": 1, "type": "private"}, "text": "msg2", "from": {"id": 10, "first_name": "A"}}},
+        ]
+
+        async def fake_api_call(method, **kwargs):
+            if method == "getUpdates":
+                channel.is_running = False
+                return {"ok": True, "result": updates}
+            return {"ok": True, "result": {}}
+
+        channel._api_call = fake_api_call
+        await channel.start()
+
+        burst_cb.assert_called_once()
+        self.assertEqual(handler.call_count, 2)
+
+    async def test_batch_burst_coalesces_into_single_reply(self):
+        """When on_batch_burst is called, multiple messages landing in a burst
+        coalesce into ONE reply instead of firing separate replies."""
+        chat_id = 9988
+        self.engine._handle_triggered_message = AsyncMock()
+
+        with patch("groupconnect.engine.BATCH_BURST_SETTLE_SECS", 0.1):
+            # Burst detected (e.g. from Telegram batch or restart backlog)
+            self.engine.on_batch_burst()
+            self.assertTrue(self.engine._resume_workers_held())
+
+            # 3 triggered messages arrive in rapid succession
+            for i in range(3):
+                msg = InboundMessage(
+                    chat_id=chat_id, chat_type="group", msg_id=2000 + i,
+                    sender_name="xiaorou", from_user={"id": 1, "first_name": "xiaorou"},
+                    text=f"@test_bot 离线积压消息{i}", is_triggered=True
+                )
+                await self.engine.on_inbound_message(msg)
+
+            # While held: worker is parked, no reply fired yet
+            self.assertNotIn(chat_id, self.engine.chat_tasks)
+            self.assertEqual(self.engine._handle_triggered_message.call_count, 0)
+
+            # Settle window elapses
+            await asyncio.sleep(0.3)
+
+            # All 3 messages drained in ONE single call to _handle_triggered_message
+            self.assertEqual(self.engine._handle_triggered_message.call_count, 1)
+            call_args = self.engine._handle_triggered_message.call_args
+            latest_msg, clean_query, cmd = call_args[0]
+            coalesced_items = call_args[1].get("coalesced_items", [])
+
+            self.assertEqual(latest_msg.msg_id, 2002)
+            self.assertEqual(clean_query, "离线积压消息2")
+            self.assertEqual(len(coalesced_items), 2)
+            self.assertEqual(coalesced_items[0][0].msg_id, 2000)
+            self.assertEqual(coalesced_items[1][0].msg_id, 2001)
+
+    async def test_engine_startup_initial_settle_hold(self):
+        """Engine start() arms initial settle hold so startup poll updates land together."""
+        self.engine.config.bot_token = "mock_token"
+        with patch("groupconnect.engine.BATCH_BURST_SETTLE_SECS", 0.2):
+            self.engine._resume_unanswered_messages = AsyncMock()
+            self.engine.relay = MagicMock()
+            self.engine.relay.start = AsyncMock()
+            self.engine.relay.stop = AsyncMock()
+            self.engine.channel.start = AsyncMock()
+            self.engine.channel.stop = AsyncMock()
+
+            # Before start, hold is 0
+            self.assertFalse(self.engine._resume_workers_held())
+
+            # Run start in a task, verify held immediately
+            task = asyncio.create_task(self.engine.start())
+            await asyncio.sleep(0.01)
+            self.assertTrue(self.engine._resume_workers_held())
+
+            self.engine.is_running = False
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
