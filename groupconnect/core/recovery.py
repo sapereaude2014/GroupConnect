@@ -156,19 +156,20 @@ class ResumeManager:
                 # has no linked replies at all, fall back to the legacy positional
                 # backward scan so old deployments keep their previous behavior.
                 watermark_idx = None
+                directly_answered_ids = set()
                 for i in range(len(buf) - 1, -1, -1):
                     entry = buf[i]
                     if not entry.get("is_bot"):
                         continue
                     reply_target = str(entry.get("reply_to_msg_id") or "")
                     if reply_target and reply_target != "0":
+                        directly_answered_ids.add(reply_target)
                         for j in range(len(buf)):
                             if (str(buf[j].get("msg_id", "")) == reply_target
                                     and not buf[j].get("is_bot")):
-                                watermark_idx = j
+                                if watermark_idx is None or j > watermark_idx:
+                                    watermark_idx = j
                                 break
-                        if watermark_idx is not None:
-                            break  # newest linked reply found in window — stop scanning
 
                 if watermark_idx is not None:
                     # New path: collect every human message after the watermark
@@ -196,6 +197,9 @@ class ResumeManager:
                     for last in candidates:
                         raw = str(last.get("text", ""))
                         msg_id = last.get("msg_id", 0)
+
+                        if str(msg_id) in directly_answered_ids:
+                            continue
 
                         try:
                             chat_type = "private" if int(chat_id) > 0 else "group"

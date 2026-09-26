@@ -139,20 +139,21 @@ class GroupConnectEngine:
         self._custom_commands_map = self.command_dispatcher.commands_map
         self._running_custom_commands = self.command_dispatcher.running_commands
 
-        self.pattern_executor = PatternExecutor(
-            pattern_configs=getattr(config, "pattern_commands", []),
-            custom_commands_map=self._custom_commands_map,
-            command_dispatcher=self.command_dispatcher,
-            channel=self.channel
-        )
-        self._pattern_commands = self.pattern_executor.patterns
-
         resume_secs = int(getattr(config, "resume_unanswered_secs", 300))
         self.resume_manager = ResumeManager(
             context_mgr=self.context_mgr,
             bot_username=config.bot_username,
             window_seconds=resume_secs
         )
+
+        self.pattern_executor = PatternExecutor(
+            pattern_configs=getattr(config, "pattern_commands", []),
+            custom_commands_map=self._custom_commands_map,
+            command_dispatcher=self.command_dispatcher,
+            channel=self.channel,
+            resume_complete_fn=self.resume_manager.mark_completed
+        )
+        self._pattern_commands = self.pattern_executor.patterns
 
         self.outbound_delivery = OutboundDelivery(
             channel=self.channel,
@@ -520,7 +521,12 @@ class GroupConnectEngine:
                 q = self.chat_queues[chat_id]
                 while not q.empty():
                     try:
-                        q.get_nowait()
+                        q_item = q.get_nowait()
+                        if self.resume_manager and q_item and getattr(q_item[0], "is_resume", False):
+                            try:
+                                self.resume_manager.mark_completed(chat_id, q_item[0].msg_id, q_item[0].text or "")
+                            except Exception:
+                                pass
                         q.task_done()
                     except (asyncio.QueueEmpty, ValueError):
                         break
@@ -758,6 +764,13 @@ class GroupConnectEngine:
                 if reset_idx != -1:
                     if reset_idx > 0:
                         logger.info(f"Discarding {reset_idx} pre-reset queued items in chat {chat_id} due to reset command")
+                        if self.resume_manager:
+                            for it in items[:reset_idx]:
+                                if getattr(it[0], "is_resume", False):
+                                    try:
+                                        self.resume_manager.mark_completed(chat_id, it[0].msg_id, it[0].text or "")
+                                    except Exception:
+                                        pass
                     reset_msg, reset_query, reset_cmd = items[reset_idx]
                     await self._handle_triggered_message(reset_msg, reset_query, reset_cmd, coalesced_items=[])
                     for it in items[reset_idx + 1:]:

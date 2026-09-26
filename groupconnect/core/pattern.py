@@ -6,7 +6,7 @@ Supports per-device concurrency locking.
 
 import logging
 import re
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 logger = logging.getLogger("groupconnect.pattern")
 
@@ -19,10 +19,12 @@ class PatternExecutor:
         pattern_configs: List[Dict[str, Any]],
         custom_commands_map: Dict[str, Dict[str, Any]],
         command_dispatcher: Any,
-        channel: Any
+        channel: Any,
+        resume_complete_fn: Optional[Callable[[Any, Any, str], None]] = None
     ):
         self.command_dispatcher = command_dispatcher
         self.channel = channel
+        self.resume_complete_fn = resume_complete_fn
         self.patterns: List[Dict[str, Any]] = []
 
         for pc in (pattern_configs or []):
@@ -120,3 +122,8 @@ class PatternExecutor:
         finally:
             if lock_key is not None:
                 self.release_lock(lock_key)
+            if self.resume_complete_fn and reply_to_msg_id:
+                try:
+                    self.resume_complete_fn(chat_id, reply_to_msg_id, text)
+                except Exception as e:
+                    logger.warning(f"[PATTERN] Failed to mark resume completed: {e}")

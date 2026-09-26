@@ -572,5 +572,77 @@ class TestResumeUnanswered(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(last_entry.get("reply_to_msg_id"), 5001)
 
 
+    async def test_watermark_out_of_order_replies_do_not_re_resume(self):
+        """When a slow task finishes AFTER a fast task, the newest bot reply quotes
+        the older task. The watermark scan must not regress and re-resume the
+        already-answered fast task."""
+        engine = self._make_engine()
+        chat_id = -100456
+        now = datetime.now()
+        # Buffer:
+        # 1. msg 100: slow task (human)
+        # 2. msg 101: fast task (human)
+        # 3. bot reply 102: answers fast task (reply_to_msg_id=101)
+        # 4. bot reply 103: answers slow task (reply_to_msg_id=100)
+        # 5. msg 104: new unanswered question (human)
+        engine.context_mgr.buffers[chat_id] = [
+            {"time": (now - timedelta(seconds=60)).strftime("%Y-%m-%d %H:%M:%S"), "msg_id": 100, "sender": "User", "text": "慢任务写文章", "is_bot": False},
+            {"time": (now - timedelta(seconds=50)).strftime("%Y-%m-%d %H:%M:%S"), "msg_id": 101, "sender": "User", "text": "快任务开空调", "is_bot": False},
+            {"time": (now - timedelta(seconds=40)).strftime("%Y-%m-%d %H:%M:%S"), "msg_id": 102, "sender": "Bot", "text": "空调已开", "is_bot": True, "reply_to_msg_id": 101},
+            {"time": (now - timedelta(seconds=30)).strftime("%Y-%m-%d %H:%M:%S"), "msg_id": 103, "sender": "Bot", "text": "文章已写好", "is_bot": True, "reply_to_msg_id": 100},
+            {"time": (now - timedelta(seconds=10)).strftime("%Y-%m-%d %H:%M:%S"), "msg_id": 104, "sender": "User", "text": "真正未回答的问题", "is_bot": False},
+        ]
+
+        await engine._resume_unanswered_messages()
+
+        # ONLY msg 104 should be resumed! Neither 100 nor 101 should be resumed.
+        self.assertEqual(engine.on_inbound_message.call_count, 1)
+        resumed_msg = engine.on_inbound_message.call_args[0][0]
+        self.assertEqual(resumed_msg.msg_id, 104)
+
+    async def test_resumed_pattern_command_marks_completed(self):
+        """When a pattern command executes, it must notify resume_manager to clear
+        any pending retry count for this message."""
+        engine = self._make_engine()
+        chat_id = -100456
+        engine.resume_manager._retry_counts[f"{chat_id}:2001:开电脑"] = 1
+
+        mock_pc = {
+            "_cmd_cfg": {"command": "test_cmd", "lock": False}
+        }
+        engine.command_dispatcher.execute_command = AsyncMock()
+
+        await engine.pattern_executor.execute(chat_id, mock_pc, "开电脑", reply_to_msg_id=2001)
+
+        # Retry count must be cleared!
+        self.assertNotIn(f"{chat_id}:2001:开电脑", engine.resume_manager._retry_counts)
+
+    async def test_stop_command_clears_queued_resume_state(self):
+        """When /stop command discards pending queue items, any resume messages
+        in the queue must have their retry counts cleared."""
+        chat_id = -100456
+        engine = self._make_engine(allowed_chats=[chat_id], mock_inbound=False)
+        engine.resume_manager._retry_counts[f"{chat_id}:3001:pending_resume"] = 1
+
+        q_msg = InboundMessage(
+            chat_id=chat_id, chat_type="group", msg_id=3001,
+            sender_name="User", from_user={"id": 1}, text="pending_resume",
+            is_triggered=True, is_resume=True
+        )
+        if chat_id not in engine.chat_queues:
+            engine.chat_queues[chat_id] = asyncio.Queue()
+        engine.chat_queues[chat_id].put_nowait((q_msg, "pending_resume", None))
+
+        stop_msg = InboundMessage(
+            chat_id=chat_id, chat_type="group", msg_id=3002,
+            sender_name="User", from_user={"id": 1}, text="/stop",
+            is_triggered=True
+        )
+        await engine.on_inbound_message(stop_msg, record=False)
+
+        # Discarded resume item must have been cleared from retry counts
+        self.assertNotIn(f"{chat_id}:3001:pending_resume", engine.resume_manager._retry_counts)
+
+
 if __name__ == "__main__":
     unittest.main()
