@@ -72,7 +72,6 @@ def _load_soul(config: GatewayConfig) -> str:
 from groupconnect.core.commands import CustomCommandDispatcher
 from groupconnect.core.delivery import (
     OutboundDelivery,
-    SENDFILE_TAG_PATTERN,
     extract_outbound_files,
     strip_sendfile_tags,
 )
@@ -117,8 +116,7 @@ class GroupConnectEngine:
             on_event=self.on_relay_event
         )
 
-        # Concurrency Locks & Queue State
-        self.chat_locks: Dict[Any, asyncio.Lock] = {}
+        # Concurrency & Queue State
         self.chat_queues: Dict[Any, asyncio.Queue] = {}
         self.chat_tasks: Dict[Any, asyncio.Task] = {}
         # Resume-burst batching: while re-dispatched candidates are still landing,
@@ -170,11 +168,6 @@ class GroupConnectEngine:
         acfg = getattr(config, "autonomous_config", None)
         if acfg is None:
             acfg_path = getattr(config, "autonomous_config_path", "")
-            if not acfg_path:
-                from groupconnect.routing.router import find_default_config_path
-                candidate = find_default_config_path()
-                if os.path.exists(candidate):
-                    acfg_path = candidate
             if acfg_path and os.path.exists(acfg_path):
                 try:
                     acfg = AutonomousConfig(acfg_path)
@@ -241,11 +234,6 @@ class GroupConnectEngine:
         if hasattr(channel, "set_burst_callback"):
             channel.set_burst_callback(self.on_batch_burst)
         return channel
-
-    def get_chat_lock(self, chat_id: Any) -> asyncio.Lock:
-        if chat_id not in self.chat_locks:
-            self.chat_locks[chat_id] = asyncio.Lock()
-        return self.chat_locks[chat_id]
 
     async def start(self) -> None:
         if hasattr(self.config, "validate_credentials"):

@@ -4,10 +4,7 @@ Allows offline testing and verification of Zero-@ routing decisions directly in 
 without needing to send messages to a live Telegram group.
 """
 
-import asyncio
-import os
-import sys
-from typing import List, Optional
+from typing import List
 
 from groupconnect.core.config import GatewayConfig
 from groupconnect.routing.router import AutonomousArbiter, AutonomousConfig

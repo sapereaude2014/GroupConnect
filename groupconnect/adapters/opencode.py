@@ -8,7 +8,6 @@ import json
 import logging
 import os
 import signal
-import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from groupconnect.adapters.base import BaseAgentAdapter, register_adapter

@@ -4,7 +4,7 @@ Detects unanswered messages across chats on startup and safely re-dispatches the
 with poison message quarantine to prevent crash loops.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime
 import json
 import logging
 import os
@@ -101,10 +101,8 @@ class ResumeManager:
             return True, True
 
         # Group chat: check for explicit slash commands
-        cmd, target_bot, _ = parse_bot_command(raw, self.bot_username)
+        cmd, _, _ = parse_bot_command(raw, self.bot_username)
         if cmd:
-            if target_bot is not None and target_bot.lower() != self.bot_username.lower():
-                return False, False
             return True, True
 
         # Group chat: check if explicitly tagged for this bot
@@ -122,6 +120,66 @@ class ResumeManager:
             return False, False
 
         return True, False
+
+    def _try_dispatch(
+        self,
+        entry: Dict[str, Any],
+        chat_id: Any,
+        is_arbiter: bool,
+        directly_answered_ids: Optional[Set[str]] = None,
+    ) -> Optional[InboundMessage]:
+        """Validates candidate eligibility, tracks retries, and constructs InboundMessage."""
+        raw = str(entry.get("text", ""))
+        msg_id = entry.get("msg_id", 0)
+
+        if directly_answered_ids and str(msg_id) in directly_answered_ids:
+            return None
+
+        try:
+            chat_type = "private" if int(chat_id) > 0 else "group"
+        except (TypeError, ValueError):
+            chat_type = "group"
+
+        is_cand, is_trig = self._evaluate_candidate(raw, chat_type, is_arbiter)
+        if not is_cand:
+            return None
+
+        msg_key = f"{chat_id}:{msg_id}:{raw[:40]}"
+
+        # Poison message quarantine check
+        retries = self._retry_counts.get(msg_key, 0)
+        if retries >= self.max_retries:
+            if msg_key not in self._poison_quarantine:
+                logger.error(
+                    f"[RESUME] Poison message quarantined in chat {chat_id} "
+                    f"(retried {retries} times without completion): '{raw[:40]}'. Skipping."
+                )
+                self._poison_quarantine.add(msg_key)
+                self._save_state()
+            return None
+
+        self._retry_counts[msg_key] = retries + 1
+        self._save_state()
+
+        from_user = (
+            {"id": chat_id, "first_name": str(entry.get("sender", ""))}
+            if chat_type == "private"
+            else {"first_name": str(entry.get("sender", ""))}
+        )
+        inbound = InboundMessage(
+            chat_id=chat_id,
+            chat_type=chat_type,
+            msg_id=msg_id,
+            sender_name=str(entry.get("sender", "")),
+            from_user=from_user,
+            text=raw,
+            is_triggered=is_trig,
+            is_resume=True
+        )
+        logger.info(
+            f"[RESUME] Re-dispatching unanswered message in chat {chat_id}: '{raw[:30]}'"
+        )
+        return inbound
 
     def find_unanswered_messages(
         self,
@@ -172,16 +230,11 @@ class ResumeManager:
                                 break
 
                 if watermark_idx is not None:
-                    # New path: collect every human message after the watermark
-                    # (oldest first, so the coalescer puts the LATEST message into
-                    # Current Query downstream).
-                    scan_start = watermark_idx + 1
+                    # Collect every human message after the watermark (oldest first)
                     candidates = []
-                    for i in range(scan_start, len(buf)):
+                    for i in range(watermark_idx + 1, len(buf)):
                         entry = buf[i]
-                        if entry.get("is_bot"):
-                            continue
-                        if not str(entry.get("text", "")).strip():
+                        if entry.get("is_bot") or not str(entry.get("text", "")).strip():
                             continue
                         try:
                             msg_time = datetime.strptime(str(entry.get("time", "")), "%Y-%m-%d %H:%M:%S")
@@ -191,64 +244,13 @@ class ResumeManager:
                             continue
                         candidates.append(entry)
 
-                    if not candidates:
-                        continue
-
                     for last in candidates:
-                        raw = str(last.get("text", ""))
-                        msg_id = last.get("msg_id", 0)
-
-                        if str(msg_id) in directly_answered_ids:
-                            continue
-
-                        try:
-                            chat_type = "private" if int(chat_id) > 0 else "group"
-                        except (TypeError, ValueError):
-                            chat_type = "group"
-
-                        is_cand, is_trig = self._evaluate_candidate(raw, chat_type, is_arbiter)
-                        if not is_cand:
-                            continue
-
-                        msg_key = f"{chat_id}:{msg_id}:{raw[:40]}"
-
-                        # Poison message quarantine check
-                        retries = self._retry_counts.get(msg_key, 0)
-                        if retries >= self.max_retries:
-                            if msg_key not in self._poison_quarantine:
-                                logger.error(
-                                    f"[RESUME] Poison message quarantined in chat {chat_id} "
-                                    f"(retried {retries} times without completion): '{raw[:40]}'. Skipping."
-                                )
-                                self._poison_quarantine.add(msg_key)
-                                self._save_state()
-                            continue
-
-                        self._retry_counts[msg_key] = retries + 1
-                        self._save_state()
-
-                        from_user = (
-                            {"id": chat_id, "first_name": str(last.get("sender", ""))}
-                            if chat_type == "private"
-                            else {"first_name": str(last.get("sender", ""))}
-                        )
-                        inbound = InboundMessage(
-                            chat_id=chat_id,
-                            chat_type=chat_type,
-                            msg_id=msg_id,
-                            sender_name=str(last.get("sender", "")),
-                            from_user=from_user,
-                            text=raw,
-                            is_triggered=is_trig,
-                            is_resume=True
-                        )
-                        resumable.append((chat_id, inbound))
-                        logger.info(
-                            f"[RESUME] Re-dispatching unanswered message in chat {chat_id}: '{raw[:30]}'"
-                        )
+                        inbound = self._try_dispatch(last, chat_id, is_arbiter, directly_answered_ids)
+                        if inbound:
+                            resumable.append((chat_id, inbound))
                     continue
 
-                # Legacy fallback: positional backward scan (pre-linkage data).
+                # Legacy fallback: positional backward scan (pre-linkage data / tests without reply_to_msg_id)
                 last_human_idx = None
                 seen_bot = False
                 for i in range(len(buf) - 1, -1, -1):
@@ -266,62 +268,16 @@ class ResumeManager:
                     continue
 
                 last = buf[last_human_idx]
-                raw = str(last.get("text", ""))
-
-                try:
-                    chat_type = "private" if int(chat_id) > 0 else "group"
-                except (TypeError, ValueError):
-                    chat_type = "group"
-
-                is_cand, is_trig = self._evaluate_candidate(raw, chat_type, is_arbiter)
-                if not is_cand:
-                    continue
-
                 try:
                     msg_time = datetime.strptime(str(last.get("time", "")), "%Y-%m-%d %H:%M:%S")
                 except ValueError:
                     continue
-
                 if not (0 <= time.time() - msg_time.timestamp() <= window):
                     continue
 
-                msg_id = last.get("msg_id", 0)
-                msg_key = f"{chat_id}:{msg_id}:{raw[:40]}"
-
-                # Poison message quarantine check
-                retries = self._retry_counts.get(msg_key, 0)
-                if retries >= self.max_retries:
-                    if msg_key not in self._poison_quarantine:
-                        logger.error(
-                            f"[RESUME] Poison message quarantined in chat {chat_id} "
-                            f"(retried {retries} times without completion): '{raw[:40]}'. Skipping."
-                        )
-                        self._poison_quarantine.add(msg_key)
-                        self._save_state()
-                    continue
-
-                self._retry_counts[msg_key] = retries + 1
-                self._save_state()
-
-                from_user = (
-                    {"id": chat_id, "first_name": str(last.get("sender", ""))}
-                    if chat_type == "private"
-                    else {"first_name": str(last.get("sender", ""))}
-                )
-                inbound = InboundMessage(
-                    chat_id=chat_id,
-                    chat_type=chat_type,
-                    msg_id=msg_id,
-                    sender_name=str(last.get("sender", "")),
-                    from_user=from_user,
-                    text=raw,
-                    is_triggered=is_trig,
-                    is_resume=True
-                )
-                resumable.append((chat_id, inbound))
-                logger.info(
-                    f"[RESUME] Re-dispatching unanswered message in chat {chat_id}: '{raw[:30]}'"
-                )
+                inbound = self._try_dispatch(last, chat_id, is_arbiter)
+                if inbound:
+                    resumable.append((chat_id, inbound))
             except Exception as e:
                 logger.warning(f"[RESUME] Failed to resume chat {chat_id}: {e}")
 

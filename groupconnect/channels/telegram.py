@@ -7,7 +7,6 @@ import asyncio
 import logging
 import os
 import re
-import sys
 import time
 from typing import Any, Callable, Coroutine, Dict, List, Optional, Union
 

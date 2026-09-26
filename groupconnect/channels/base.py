@@ -5,7 +5,7 @@ Allows new platform channels to register dynamically without modifying core engi
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Callable, Coroutine, Dict, List, Optional, Type, Union
+from typing import Any, Callable, Dict, List, Optional, Type, Union
 
 
 @dataclass

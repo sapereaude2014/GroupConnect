@@ -6,14 +6,12 @@ Connects Feishu Open Platform bot API & Webhook callback server to core agent ga
 import asyncio
 import json
 import logging
-import os
 import time
-from typing import Any, Callable, Coroutine, Dict, List, Optional, Union
+from typing import Any, Callable, Coroutine, Optional, Union
 
 import httpx
 
 from groupconnect.channels.base import BaseChannel, ChannelField, InboundMessage, register_channel
-from groupconnect.core.parser import parse_bot_command
 from groupconnect.core.config import GatewayConfig
 
 logger = logging.getLogger("groupconnect.channel.feishu")

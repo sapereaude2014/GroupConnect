@@ -58,8 +58,6 @@ def find_default_config_path() -> str:
     return ""
 
 
-DEFAULT_CONFIG_PATH = find_default_config_path()
-
 from groupconnect.routing.defaults import (
     DEFAULT_NOISE_PATTERNS,
     DEFAULT_ALIAS_DROP_PATTERNS,
@@ -523,8 +521,6 @@ class AutonomousArbiter:
         self.context_summary_fn = context_summary_fn
         self._budget_day: str = ""
         self._budget_used: int = 0
-        self._prompt_cache: Optional[str] = None
-        self._prompt_mtime: float = 0.0
         self._call_lock: asyncio.Lock = asyncio.Lock()  # serialize + throttle
         self._last_call_ts: float = 0.0
         self._min_interval: float = float(cfg.throttle_min_interval)

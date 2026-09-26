@@ -14,9 +14,8 @@ from typing import List, Optional
 
 import httpx
 
-from groupconnect.adapters.base import ADAPTER_METADATA
 from groupconnect.channels.base import CHANNEL_METADATA
-from groupconnect.core.config import GatewayConfig, load_raw_config_file
+from groupconnect.core.config import GatewayConfig
 from groupconnect.core.doctor import Doctor
 from groupconnect.core.simulator import run_group_simulator
 from groupconnect.engine import GroupConnectEngine

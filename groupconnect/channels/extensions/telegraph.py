@@ -7,9 +7,8 @@ import json
 import logging
 import os
 import re
-import sys
 import unicodedata
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
