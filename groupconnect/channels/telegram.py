@@ -185,19 +185,31 @@ class TelegramChannel(BaseChannel):
                         parse_mode="Markdown",
                         reply_to_message_id=target_reply_to
                     )
-                # Markdown parse fallback: retry as plain text
+                # Retry fallback: if first send failed (parse error or reply target gone)
                 if not res.get("ok"):
                     desc = res.get('description', '')
-                    logger.warning(f"Parse failed ({desc}). Retrying as plain text...")
-                    clean_chunk = self._strip_markdown(chunk)
                     # If reply target was the problem (deleted/not found), drop it on retry
                     retry_reply_to = None if ('replied' in desc or 'not found' in desc) else target_reply_to
-                    res = await self._api_call(
-                        "sendMessage",
-                        chat_id=chat_id,
-                        text=clean_chunk,
-                        reply_to_message_id=retry_reply_to
-                    )
+                    if use_html:
+                        # Blockquote (Telegraph fallback) content: preserve HTML, just drop reply_to
+                        logger.warning(f"HTML send failed ({desc}). Retrying with HTML, reply_to dropped...")
+                        res = await self._api_call(
+                            "sendMessage",
+                            chat_id=chat_id,
+                            text=chunk,
+                            parse_mode="HTML",
+                            reply_to_message_id=retry_reply_to
+                        )
+                    else:
+                        # Markdown content: strip formatting and retry as plain text
+                        logger.warning(f"Parse failed ({desc}). Retrying as plain text...")
+                        clean_chunk = self._strip_markdown(chunk)
+                        res = await self._api_call(
+                            "sendMessage",
+                            chat_id=chat_id,
+                            text=clean_chunk,
+                            reply_to_message_id=retry_reply_to
+                        )
 
                 if res.get("ok"):
                     last_sent_id = res["result"]["message_id"]
