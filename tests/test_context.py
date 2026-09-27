@@ -125,6 +125,45 @@ class TestContextManager(unittest.TestCase):
         self.assertIn("user msg", ctx)
         self.assertIn("another user msg", ctx)
 
+    def test_skip_bot_keeps_own_custom_cmd_receipt(self):
+        """Own custom-command receipts must stay visible in the bot's own window."""
+        chat_id = 1007
+        self.mgr.record_message(chat_id, "Alice", "开卧室空调", msg_id=20)
+        # Own custom_cmd receipt (engine-level execution result)
+        self.mgr.record_message(
+            chat_id, "MyBot (@my_bot)", "✅ 卧室空调已开",
+            msg_id=21, is_bot_reply=True, bot_username="my_bot", custom_cmd=True
+        )
+        # Own agent reply (already known to the issuing session)
+        self.mgr.record_message(
+            chat_id, "MyBot (@my_bot)", "my agent reply",
+            msg_id=22, is_bot_reply=True, bot_username="my_bot"
+        )
+        self.mgr.record_message(chat_id, "Bob", "收到", msg_id=23)
+
+        ctx = self.mgr.build_group_context(chat_id, skip_bot_username="my_bot")
+        # custom_cmd receipt is kept — execution results are shared facts
+        self.assertIn("卧室空调已开", ctx)
+        # own agent reply is still skipped
+        self.assertNotIn("my agent reply", ctx)
+        # user messages kept
+        self.assertIn("开卧室空调", ctx)
+        self.assertIn("收到", ctx)
+
+    def test_incremental_keeps_custom_cmd_receipt(self):
+        """Incremental window (since last input) must also surface cmd receipts."""
+        chat_id = 1008
+        self.mgr.record_message(chat_id, "Alice", "msg 1", msg_id=10)
+        self.mgr.record_message(
+            chat_id, "MyBot (@my_bot)", "✅ [管家报告 · 备份完成]",
+            msg_id=11, is_bot_reply=True, bot_username="my_bot", custom_cmd=True
+        )
+        self.mgr.record_message(chat_id, "Bob", "msg 2", msg_id=12)
+
+        delta = self.mgr.build_group_context(chat_id, since_msg_id=10, skip_bot_username="my_bot")
+        self.assertIn("备份完成", delta)
+        self.assertIn("msg 2", delta)
+
     def test_rehydration_after_restart(self):
         chat_id = 1003
         # 1. Record 5 messages with instance 1

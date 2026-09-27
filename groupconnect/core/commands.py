@@ -66,7 +66,9 @@ class CustomCommandDispatcher:
         chat_type: str = "group"
     ) -> Optional[Any]:
         """Send a terminal command reply and record it in chat history, so startup
-        resume sees the conversation as already answered. Also broadcasts via CrossBotRelay."""
+        resume sees the conversation as already answered. The record is marked
+        custom_cmd so the issuing bot's own sliding window keeps it visible.
+        Also broadcasts via CrossBotRelay."""
         sent_id = await self.channel.send_reply(chat_id, text, reply_to_msg_id=reply_to_msg_id)
         try:
             self.context_mgr.record_message(
@@ -76,7 +78,8 @@ class CustomCommandDispatcher:
                 msg_id=sent_id or 0,
                 is_bot_reply=True,
                 bot_username=self.bot_username,
-                reply_to_msg_id=reply_to_msg_id or 0
+                reply_to_msg_id=reply_to_msg_id or 0,
+                custom_cmd=True
             )
         except Exception as e:
             logger.warning(f"[CUSTOM_CMD] Failed to record command reply in history: {e}")

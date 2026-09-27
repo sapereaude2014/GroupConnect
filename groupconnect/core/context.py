@@ -158,7 +158,8 @@ class ContextManager:
         reply_preview: str = "",
         attachments: Optional[List[Dict[str, Any]]] = None,
         bot_username: str = "",
-        reply_to_msg_id: Union[int, str] = 0
+        reply_to_msg_id: Union[int, str] = 0,
+        custom_cmd: bool = False
     ) -> Dict[str, Any]:
         buf = self.get_buffer(chat_id)
         now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -173,6 +174,7 @@ class ContextManager:
             "reply_to_msg_id": reply_to_msg_id or 0,
             "is_bot": is_bot_reply,
             "bot_username": bot_username,
+            "custom_cmd": custom_cmd,
             "attachments": attachments or []
         }
         buf.append(item)
@@ -202,6 +204,9 @@ class ContextManager:
         If exclude_msg_id > 0, excludes that specific message ID from the output.
         If skip_bot_username is set, excludes only that bot's own reply messages
         from the output (partner bot messages are preserved).
+        Own custom-command receipts (custom_cmd=True) are exempt from the skip:
+        they are engine-level execution results the agent session never saw, and
+        must stay visible in the issuing bot's own window.
         If pending_msg_ids is provided, those entries are prefixed with ⏳ so
         the agent can identify coalesced pending instructions inline, without
         duplicating them in a separate prompt section.
@@ -215,7 +220,12 @@ class ContextManager:
         lines = []
         for item in buf:
             msg_id = item.get("msg_id", 0)
-            if skip_bot_username and item.get("is_bot") and item.get("bot_username") == skip_bot_username:
+            if (
+                skip_bot_username
+                and item.get("is_bot")
+                and item.get("bot_username") == skip_bot_username
+                and not item.get("custom_cmd")
+            ):
                 continue
             if exclude_msg_id and str(msg_id) == str(exclude_msg_id):
                 continue
