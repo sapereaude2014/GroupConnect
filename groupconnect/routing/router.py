@@ -234,7 +234,7 @@ class AutonomousConfig:
 
         ctx = cfg.get("context", {})
         self.context_window_size: int = int(
-            ctx.get("window_size", cfg.get("context_window_size", 3))
+            ctx.get("window_size", cfg.get("context_window_size", 5))
         )
 
         self.aliases: Dict[str, list] = {

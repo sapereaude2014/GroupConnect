@@ -29,28 +29,23 @@ DEFAULT_GROUP_DESCRIPTION = (
     "Private group chat. Configured assistant bots handle different specialized tasks."
 )
 DEFAULT_IMMEDIATE_CRITERIA = (
-    "A direct command, explicit task request, or a reply answering a bot's earlier "
-    "question/offer — the sender expects an immediate bot response."
+    "Direct command, explicit task request, follow-up amendment to an ongoing task, "
+    "or reply answering a bot's earlier question/offer — expects immediate bot action."
 )
 DEFAULT_WAIT_CRITERIA = (
-    "An open question, help request, data lookup, recommendation, or everyday problem "
-    "seeking advice or a solution — asked to the group at large, including messages "
-    "phrased as complaints (e.g. what to do about something broken or unripe) or "
-    "third-person requests relayed through the group — where humans should get a "
-    "chance to reply first, and bots pick it up only if nobody does."
+    "Open question, inquiry, data lookup, advice request, or everyday problem asked to the group, "
+    "where humans should get a chance to reply first before bots intervene."
 )
 DEFAULT_DROP_CRITERIA = (
-    "Interpersonal conversation between group members that seeks no answer or "
-    "action from any bot — direct 2nd-person address to another human, reactions to "
-    "another human's preceding message, casual banter, emotional venting, or sharing daily plans."
+    "Interpersonal conversation between humans, emotional venting, casual banter, "
+    "or statements requiring no bot response."
 )
 DEFAULT_ASSIGNMENT_CRITERIA = (
-    "Evaluate whether {bot} should respond to this message. "
-    "Rules for scoring: "
-    "1. DIRECT ADDRESS / DISPATCH: If the sender directly addresses or names {bot} ({aliases}) to talk to {bot} or assign a task (e.g. '{bot}, ...'), score HIGH (0.8-1.0), regardless of topic. "
-    "2. THIRD-PERSON OBJECT: If {bot} is merely mentioned in 3rd-person as a topic, target of critique, or work object by someone addressing another bot (e.g. 'A, go check {bot}'), score LOW (~0.1-0.2). "
-    "3. PARALLEL: If the sender asks multiple bots to respond together (e.g. 'both', 'all'), all mentioned bots score HIGH. "
-    "4. UNNAMED: When no bot is explicitly named, score by how well the message matches {bot}'s responsibility ({role})."
+    "Should {bot} respond to this message?\n"
+    "- Yes if the sender directly addresses {bot} ({aliases}), asks multiple bots to assist (e.g. 'both', 'all'), "
+    "follows up on an ongoing exchange with {bot}, or requests a task matching {bot}'s role ({role}).\n"
+    "- No if addressed to another bot, merely mentioned in passing, "
+    "or continuing a conversation with someone else."
 )
 
 DEFAULT_RULE_TEMPLATES: Dict[str, str] = {
@@ -61,28 +56,15 @@ DEFAULT_RULE_TEMPLATES: Dict[str, str] = {
     "assignment": DEFAULT_ASSIGNMENT_CRITERIA,
 }
 
-DEFAULT_JEV_CHOICE_INSTRUCTIONS = """# Autonomous Routing Timing Rules
-Group Context: {group}
+DEFAULT_JEV_CHOICE_INSTRUCTIONS = """Group Context: {group}
 
-Evaluate the conversational urgency and response timing (immediate / wait / drop)
-based on social context and conversational rhythm.
-
-Decision Rules (Evaluate in order, first match wins):
-1. BOT DIALOGUE CONTINUATION & DIRECT COMMAND (urgency = "immediate"):
-   - If recent context shows a bot asked a question, offered options, or proposed a
-     plan, and the current message is an acknowledgment, confirmation, decision
-     (e.g. "option A", "okay", "yes", "confirmed"), or a follow-up directed to
-     that bot -> immediate.
-   - Or the message is a direct command / imperative task request (see the
-     immediate option criteria).
-
-2. OBJECTIVE INQUIRY & RECOMMENDATION (urgency = "wait_silence"):
-   - Open questions, help requests, recommendations, and everyday problem-solving
-     addressed to the group at large, where humans should reply first
-     (see the wait option criteria).
-
-3. INTERPERSONAL CHITCHAT / SILENCE (urgency = "drop"):
-   - Human-to-human conversation, venting, or banter (see the drop option criteria).
+Evaluate conversational timing and urgency for assistant bots (first match wins):
+1. BOT DIALOGUE CONTINUATION & DIRECT COMMAND (immediate):
+   Direct command, task request, or follow-up response to a bot's earlier offer.
+2. OBJECTIVE INQUIRY & RECOMMENDATION (wait_silence):
+   Open question, data lookup, or advice asked to the group where humans should reply first.
+3. INTERPERSONAL CHITCHAT / SILENCE (drop):
+   Human conversation, venting, or banter requiring no bot intervention.
 """
 
 DEFAULT_ROUTING_RULES_MD = """# Autonomous Routing Decision Rules
