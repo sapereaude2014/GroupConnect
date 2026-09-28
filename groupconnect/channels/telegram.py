@@ -160,6 +160,7 @@ class TelegramChannel(BaseChannel):
             except Exception as e:
                 logger.warning(f"Error in process_outbound_text: {e}")
 
+        text = self.sanitize_markdown(text)
         chunks = self._split_message(text, max_len=self.config.max_chunk_size)
         last_sent_id = None
 
@@ -345,6 +346,47 @@ class TelegramChannel(BaseChannel):
         s = re.sub(r"\[([^\]]+)\]\((https?://[^)]+)\)", r"\1: \2", s)
         s = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", s)
         return s
+
+    @staticmethod
+    def sanitize_markdown(text: str) -> str:
+        """
+        Sanitizes Markdown list hierarchy for Telegram mobile/desktop clients.
+        Telegram's rich text layout flattens indented bullet lists (- or *)
+        or nested ordered lists under ordered lists into a single continuous
+        numbered sequence (1, 2, 3, 4, 5...).
+        This converts:
+        - Indented bullets (leading whitespace + [-*+]) to unicode bullet '• '
+        - Indented ordered list items (leading whitespace + \d+.) to '(\d+) '
+        Fenced code blocks, top-level lists, and horizontal rules are untouched.
+        """
+        if not text:
+            return text
+
+        lines = text.split("\n")
+        in_code_block = False
+        new_lines = []
+
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("```"):
+                in_code_block = not in_code_block
+                new_lines.append(line)
+                continue
+
+            if not in_code_block:
+                bullet_match = re.match(r"^(\s+)[-*+]\s+(.*)$", line)
+                if bullet_match:
+                    indent, rest = bullet_match.group(1), bullet_match.group(2)
+                    line = f"{indent}• {rest}"
+                else:
+                    num_match = re.match(r"^(\s+)(\d+)\.\s+(.*)$", line)
+                    if num_match:
+                        indent, num, rest = num_match.group(1), num_match.group(2), num_match.group(3)
+                        line = f"{indent}({num}) {rest}"
+
+            new_lines.append(line)
+
+        return "\n".join(new_lines)
 
     async def _download_file(self, file_id: str, dest_filename: str) -> Optional[str]:
         try:

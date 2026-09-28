@@ -145,6 +145,41 @@ class TestTelegramChannelOutbound(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(saved_path, os.path.join(tmp_att, "evil.sh"))
             self.assertTrue(os.path.isfile(os.path.join(tmp_att, "evil.sh")))
 
+    def test_sanitize_markdown(self):
+        # Indented bullets converted to unicode bullet
+        md = "1. Item\n   - Sub A\n   * Sub B\n   + Sub C"
+        expected = "1. Item\n   • Sub A\n   • Sub B\n   • Sub C"
+        self.assertEqual(TelegramChannel.sanitize_markdown(md), expected)
+
+        # Indented numbers converted to (n)
+        md_num = "1. Item\n   1. Sub 1\n   2. Sub 2"
+        expected_num = "1. Item\n   (1) Sub 1\n   (2) Sub 2"
+        self.assertEqual(TelegramChannel.sanitize_markdown(md_num), expected_num)
+
+        # Top-level lists and code blocks untouched
+        preserved = "- Top bullet\n* Star\n1. Top ordered\n```python\n   - code\n   1. code\n```\n---"
+        self.assertEqual(TelegramChannel.sanitize_markdown(preserved), preserved)
+
+    async def test_send_reply_sanitizes_nested_lists(self):
+        cfg = GatewayConfig({
+            "platform": "telegram",
+            "bot_token": "mock_token",
+        })
+        channel = TelegramChannel(cfg, AsyncMock())
+        channel._api_call = AsyncMock(return_value={"ok": True, "result": {"message_id": 999}})
+
+        raw_text = "1. Title\n   - Sub A\n   - Sub B"
+        await channel.send_reply(chat_id=1, text=raw_text)
+
+        channel._api_call.assert_called_once_with(
+            "sendMessage",
+            chat_id=1,
+            text="1. Title\n   • Sub A\n   • Sub B",
+            parse_mode="Markdown",
+            reply_to_message_id=None
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
+
