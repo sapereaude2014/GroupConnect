@@ -96,6 +96,9 @@ zero_at:
   rules:
     group: "Engineering team group chat with specialized assistant bots."   # Group context description injected into the classifier prompt
     drop: "Casual human-to-human banter, acknowledgements (ok/thanks/got it), or direct conversations between teammates with no action request."  # Explicit ignore (DROP) criteria
+    # immediate: "Direct command, explicit task request, follow-up amendment to an ongoing task, or reply answering a bot's earlier question/offer."  # Criteria requiring immediate bot response
+    # wait: "Open question, inquiry, data lookup, advice request, or everyday problem asked to the group, where humans should get a chance to reply first."  # Criteria to wait for human intervention
+    # assignment: "Should {bot} respond? Yes if message addresses {bot} ({aliases}), asks for multiple bots, or matches its role ({role}). No if addressed to another bot or continuing an unrelated thread."  # Multi-bot dispatch assignment template
 
 # ------------------------------------------------------------------------------
 # 3. Security & Access Control
