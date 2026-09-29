@@ -1112,9 +1112,7 @@ class GroupConnectEngine:
     ) -> None:
         """Invokes the agent with typing heartbeat, then delivers the response."""
         chat_id = msg.chat_id
-
-        # Update incremental context anchor
-        session["last_input_msg_id"] = msg.msg_id
+        prev_input_id = session.get("last_input_msg_id", 0)
 
         # Typing heartbeat
         stop_typing = asyncio.Event()
@@ -1130,6 +1128,7 @@ class GroupConnectEngine:
 
         typing_task = asyncio.create_task(typing_loop())
 
+        turn_succeeded = False
         try:
             reply_text, new_cid = await self.adapter.execute_turn(
                 prompt=full_prompt,
@@ -1137,9 +1136,28 @@ class GroupConnectEngine:
                 chat_id=chat_id,
                 attachments=active_attachments
             )
+            turn_succeeded = (reply_text is not None and not self._is_execution_failure(reply_text))
+        except Exception as e:
+            logger.error(f"Adapter execution failed with exception for chat {chat_id}: {e}", exc_info=True)
+            reply_text = f"⚠️ 执行异常：{e}"
+            new_cid = cid
+            turn_succeeded = False
         finally:
             stop_typing.set()
             await typing_task
+
+        # Update incremental context anchor ONLY if turn succeeded.
+        # If execution failed (e.g. process crash or 503 error), preserve the previous
+        # last_input_msg_id so that this unhandled message is included in the incremental
+        # context sliding window on the next retry turn.
+        if turn_succeeded:
+            session["last_input_msg_id"] = msg.msg_id
+        else:
+            session["last_input_msg_id"] = prev_input_id
+            logger.warning(
+                f"[Context] Turn failed for msg {msg.msg_id}. "
+                f"Preserved last_input_msg_id at {prev_input_id} to retain context on retry."
+            )
 
         if reply_text is None:
             if new_cid:
@@ -1149,7 +1167,8 @@ class GroupConnectEngine:
 
         if new_cid:
             session["conversation_id"] = new_cid
-            session["turns"] = session.get("turns", 0) + 1
+            if turn_succeeded:
+                session["turns"] = session.get("turns", 0) + 1
             session["last_active"] = time.time()
         else:
             session["conversation_id"] = None
@@ -1203,3 +1222,23 @@ class GroupConnectEngine:
                     self.resume_manager.mark_completed(chat_id, reply_to_msg_id, raw_msg_text)
                 except Exception:
                     pass
+
+    @staticmethod
+    def _is_execution_failure(reply_text: Optional[str]) -> bool:
+        """Determines if the adapter response represents a process crash or execution error."""
+        if not reply_text:
+            return True
+        error_prefixes = (
+            "⚠️ Execution failed",
+            "⚠️ Claude Code error",
+            "⚠️ OpenAI Codex error",
+            "⚠️ Codex execution error",
+            "⚠️ OpenCode error",
+            "⚠️ 执行出错",
+            "⚠️ 执行异常",
+            "⚠️ 暂时未能生成有效回复",
+            "⏳ Error:",
+            "⏳ 本轮任务执行超时",
+        )
+        return any(reply_text.startswith(prefix) for prefix in error_prefixes)
+

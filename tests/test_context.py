@@ -2,6 +2,7 @@ import os
 import shutil
 import tempfile
 import unittest
+from unittest.mock import AsyncMock, MagicMock, patch
 from groupconnect.core.context import ContextManager, format_sender
 
 
@@ -261,5 +262,95 @@ class TestContextManager(unittest.TestCase):
         self.assertNotIn("msg30", ctx)
 
 
+class TestEngineContextAnchor(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from groupconnect.core.config import GatewayConfig
+        from groupconnect.engine import GroupConnectEngine
+
+        self.test_dir = tempfile.mkdtemp()
+        self.config = GatewayConfig({
+            "platform": "telegram",
+            "engine_type": "antigravity",
+            "bot_username": "test_bot",
+            "bot_name": "Test Bot",
+            "workspace_dir": self.test_dir,
+            "allow_open_access": True
+        })
+        mock_channel = MagicMock()
+        mock_channel.send_reply = AsyncMock()
+        mock_channel.send_typing_action = AsyncMock()
+        self.mock_adapter = MagicMock()
+        self.mock_delivery = MagicMock()
+        self.mock_delivery.deliver = AsyncMock(return_value=(12345, "reply"))
+
+        with patch.object(GroupConnectEngine, "_create_adapter", return_value=self.mock_adapter), \
+             patch.object(GroupConnectEngine, "_create_channel", return_value=mock_channel):
+            self.engine = GroupConnectEngine(self.config)
+            self.engine.outbound_delivery = self.mock_delivery
+
+    async def asyncTearDown(self):
+        shutil.rmtree(self.test_dir, ignore_errors=True)
+
+    def test_is_execution_failure_detection(self):
+        from groupconnect.engine import GroupConnectEngine
+
+        self.assertTrue(GroupConnectEngine._is_execution_failure(None))
+        self.assertTrue(GroupConnectEngine._is_execution_failure(""))
+        self.assertTrue(GroupConnectEngine._is_execution_failure("⚠️ Execution failed (Exit code 1):\n503 UNAVAILABLE"))
+        self.assertTrue(GroupConnectEngine._is_execution_failure("⚠️ Claude Code error (Code 1): error"))
+        self.assertTrue(GroupConnectEngine._is_execution_failure("⚠️ 执行出错（Exit code 1），已重置会话。"))
+        self.assertTrue(GroupConnectEngine._is_execution_failure("⏳ Error: Generation timed out."))
+        self.assertTrue(GroupConnectEngine._is_execution_failure("⏳ 本轮任务执行超时，未产出结果。请重试，或把任务拆小一点分步来。"))
+
+        # Normal successful response should NOT be treated as failure
+        self.assertFalse(GroupConnectEngine._is_execution_failure("Hello, this is a normal reply!"))
+        self.assertFalse(GroupConnectEngine._is_execution_failure("⚠️ 注意：明天可能会下雨，出行请带伞。"))
+
+    async def test_execution_failure_preserves_last_input_anchor(self):
+        """When execute_turn fails (exit code 1 / 503 error), last_input_msg_id must NOT
+        advance, ensuring the failed message appears in incremental context on retry."""
+        from groupconnect.channels.base import InboundMessage
+
+        chat_id = 8888
+        # Step 1: User sends message 4084
+        msg1 = InboundMessage(
+            chat_id=chat_id, chat_type="group", msg_id=4084,
+            sender_name="Zheng Ma", from_user={"id": 1, "first_name": "Zheng Ma"},
+            text="你不是说深夜两点，窗外一片寂静", is_triggered=True
+        )
+        self.engine.context_mgr.record_message(chat_id, "Zheng Ma", "你不是说深夜两点，窗外一片寂静", msg_id=4084)
+
+        session = self.engine.context_mgr.get_session(chat_id)
+        session["last_input_msg_id"] = 4080  # previous anchor
+
+        # Simulate adapter failure (e.g. 503 UNAVAILABLE)
+        self.mock_adapter.execute_turn = AsyncMock(
+            return_value=("⚠️ Execution failed (Exit code 1):\nerror: 503 UNAVAILABLE", "cid-1")
+        )
+
+        await self.engine._invoke_agent_and_deliver(
+            msg1, "prompt", [], session, cid="cid-1"
+        )
+
+        # Anchor must NOT have advanced to 4084!
+        self.assertEqual(session["last_input_msg_id"], 4080)
+
+        # Step 2: User retries with @bot (msg_id=4086)
+        msg2 = InboundMessage(
+            chat_id=chat_id, chat_type="group", msg_id=4086,
+            sender_name="Zheng Ma", from_user={"id": 1, "first_name": "Zheng Ma"},
+            text="@test_bot", is_triggered=True
+        )
+        self.engine.context_mgr.record_message(chat_id, "Zheng Ma", "@test_bot", msg_id=4086)
+
+        # Build prompt for retry turn: msg 4084 MUST be present in the incremental context!
+        prompt2, _, _ = self.engine._build_agent_prompt(
+            msg2, "", True, session, "cid-1"
+        )
+        self.assertIn("你不是说深夜两点，窗外一片寂静", prompt2)
+
+
 if __name__ == "__main__":
     unittest.main()
+
