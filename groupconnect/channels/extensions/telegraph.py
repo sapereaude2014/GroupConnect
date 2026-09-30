@@ -81,7 +81,7 @@ def _wrap_cell(text: str, max_width: int) -> List[str]:
         while _display_width(part) > max_width:
             cur_w = 0
             best_split = -1
-            delims = {" ", "/", ",", ";", "-", "|", "，", "、", "；"}
+            delims = {" ", "/", ",", ";", "-", "|", "，", "、", "；", "：", ":", "+", "（", "）", "(", ")"}
             for i, ch in enumerate(part):
                 w = 2 if ((0x1F300 <= ord(ch) <= 0x1F9FF) or (0x2600 <= ord(ch) <= 0x27BF) or unicodedata.east_asian_width(ch) in ('W', 'F')) else 1
                 if cur_w + w > max_width:
@@ -90,7 +90,10 @@ def _wrap_cell(text: str, max_width: int) -> List[str]:
                 if ch in delims:
                     best_split = i + 1
 
-            if best_split > 0 and best_split < len(part):
+            if best_split > 0 and (
+                _display_width(part[:best_split]) >= max(max_width * 0.4, 4)
+                or part[best_split - 1] in {" ", "，", "、", "；", "：", ":"}
+            ):
                 lines.append(part[:best_split].strip())
                 part = part[best_split:].strip()
             else:
@@ -114,7 +117,7 @@ def _wrap_cell(text: str, max_width: int) -> List[str]:
 def table_rows_to_preformatted_text(
     headers: List[str],
     data_rows: List[List[str]],
-    max_col_width: int = 48,
+    max_col_width: Optional[int] = None,
 ) -> str:
     """Render a table as an open-ended monospace table for Telegraph and Telegram.
 
@@ -122,6 +125,8 @@ def table_rows_to_preformatted_text(
     - Uses display width (CJK/Emoji = 2, ASCII = 1) for column alignment.
     - Wraps long cells on natural word boundaries (spaces, slashes, punctuation).
     - Uses open-ended rows (no right closing border) to prevent cumulative pixel drift.
+    - Dynamically adapts column widths to fit mobile screens (<= 33 chars) without horizontal scrolling.
+    - Tailors horizontal divider width to actual rendered text, eliminating trailing blank line artifacts.
     """
     if not data_rows:
         return ""
@@ -136,18 +141,32 @@ def table_rows_to_preformatted_text(
     norm_data = [_norm(r) for r in data_rows]
     all_rows = [norm_headers] + norm_data
 
-    col_w = []
-    for i in range(num_cols):
-        natural_w = max(_display_width(str(r[i]).strip()) for r in all_rows)
-        if max_col_width and natural_w > max_col_width:
-            col_w.append(max_col_width)
+    natural_w = [max(_display_width(str(r[i]).strip()) for r in all_rows) for i in range(num_cols)]
+
+    if max_col_width is not None and max_col_width > 0:
+        col_w = [max(min(nw, max_col_width), 1) for nw in natural_w]
+    else:
+        # Smart mobile-first budget (target total width <= 33 characters)
+        if num_cols == 1:
+            col_w = [min(natural_w[0], 32)]
+        elif num_cols == 2:
+            # 2 columns: divider takes 3 chars (" │ "). Target safe screen width <= 33.
+            # Col 0 (key/title): capped at 12 to keep divider '┼' near ~38% (center-left)
+            w0 = min(natural_w[0], 12)
+            rem = max(30 - w0, 14)
+            w1 = min(natural_w[1], rem)
+            col_w = [max(w0, 1), max(w1, 1)]
+        elif num_cols == 3:
+            # 3 columns: 2 dividers take 6 chars. Target safe width <= 34.
+            col_w = [max(min(nw, 10), 1) for nw in natural_w]
         else:
-            col_w.append(max(natural_w, 1))
+            col_w = [max(min(nw, 8), 1) for nw in natural_w]
 
     any_wrapped = False
+    max_last_w = _display_width(norm_headers[-1])
 
     def _render_row(cells: List[str]) -> Tuple[List[str], bool]:
-        nonlocal any_wrapped
+        nonlocal any_wrapped, max_last_w
         wrapped = [_wrap_cell(str(cells[i]).strip(), col_w[i]) for i in range(num_cols)]
         height = max(len(w) for w in wrapped)
         if height > 1:
@@ -161,18 +180,25 @@ def table_rows_to_preformatted_text(
                     parts.append(_pad_right(val, col_w[i]))
                 else:
                     parts.append(val)
+                    dw = _display_width(val)
+                    if dw > max_last_w:
+                        max_last_w = dw
+            # Drop trailing empty columns to prevent dangling ' │'
+            while len(parts) > 1 and not parts[-1].strip():
+                parts.pop()
             sublines.append(" │ ".join(parts).rstrip())
         return sublines, height > 1
 
-    sep_parts = ["─" * col_w[i] for i in range(num_cols - 1)] + ["─" * min(col_w[-1], 36)]
+    h_lines, _ = _render_row(norm_headers)
+    rendered_data = [_render_row(r) for r in norm_data]
+
+    # Separator: last column width strictly matches actual rendered content
+    sep_parts = ["─" * col_w[i] for i in range(num_cols - 1)] + ["─" * max(max_last_w, 1)]
     separator = "─┼─".join(sep_parts)
 
     lines = []
-    h_lines, _ = _render_row(norm_headers)
     lines.extend(h_lines)
     lines.append(separator)
-
-    rendered_data = [_render_row(r) for r in norm_data]
 
     for idx, (r_lines, _) in enumerate(rendered_data):
         if any_wrapped and idx > 0:
@@ -551,6 +577,14 @@ def extract_first_paragraph(text: str, max_chars: int = 60) -> str:
 AUTO_TELEGRAPH_THRESHOLD = 100
 
 
+def _strip_code_blocks(text: str) -> str:
+    """Remove fenced code blocks entirely for threshold measurement."""
+    if not text:
+        return ""
+    s = re.sub(r"```[a-zA-Z0-9_-]*\n?.*?```", "", text, flags=re.DOTALL)
+    return s.strip()
+
+
 async def process_outbound_text(
     reply_text: str,
     threshold: int = AUTO_TELEGRAPH_THRESHOLD,
@@ -568,10 +602,9 @@ async def process_outbound_text(
     if not reply_text:
         return reply_text
 
-    # 1. Unified threshold: if text exceeds threshold, publish to Telegraph.
-    #    Tables are just a format within the body, not a separate scenario.
-    #    If publishing fails, fall back to expandable blockquote.
-    is_over_threshold = threshold > 0 and len(reply_text.strip()) > threshold
+    # 1. Unified threshold: if text (excluding code blocks) exceeds threshold,
+    #    publish to Telegraph. Code blocks don't count toward the length check.
+    is_over_threshold = threshold > 0 and len(_strip_code_blocks(reply_text)) > threshold
 
     if is_over_threshold:
         title = extract_title(reply_text, default_author=author_name)

@@ -98,6 +98,22 @@ class TestFullwidthConversion(unittest.TestCase):
         chunks = _wrap_cell("allow_open_access test", 18)
         self.assertEqual(chunks, ["allow_open_access", "test"])
 
+    def test_mobile_golden_width_budget_and_separator_tail(self):
+        from groupconnect.channels.extensions.telegraph import _display_width
+        headers = ["目录", "归档范围"]
+        data_rows = [
+            ["01_家庭成员档案/", "每人一份基础档案（身份、称呼、工作地点、设备绑定、权限、生活习惯、长期偏好）+ 双人合画像"],
+            ["02_健康与医疗/", "体检报告、健康台账、饮食调理方案、就医记录"],
+        ]
+        text = table_rows_to_preformatted_text(headers, data_rows)
+        lines = text.split("\n")
+        # Line width on mobile must not exceed 36 chars to avoid horizontal scrolling
+        max_w = max(_display_width(l) for l in lines)
+        self.assertLessEqual(max_w, 36)
+        # Separator line length matches max line length closely (no 36-char empty tail)
+        sep_line = [l for l in lines if "─┼─" in l][0]
+        self.assertEqual(_display_width(sep_line), max_w)
+
 
 class TestMarkdownTableToPreNode(unittest.TestCase):
     def test_markdown_table_becomes_pre_node(self):
