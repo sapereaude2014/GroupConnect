@@ -8,7 +8,7 @@ import asyncio
 import json
 import logging
 import time
-from typing import Any, Callable, Coroutine, Optional, Union
+from typing import Any, Callable, Coroutine, Dict, Optional, Union
 
 import httpx
 
@@ -55,8 +55,9 @@ class FeishuChannel(BaseChannel):
         self._token_expires_at: float = 0.0
         self.client = httpx.AsyncClient(timeout=30.0)
         self._ws_client = None
-        self._ws_task = None
         self.is_running = False
+        self._last_user_msg_ids: Dict[str, str] = {}  # chat_id -> last user message_id
+        self._typing_reactions: Dict[str, tuple] = {}  # chat_id -> (message_id, reaction_id)
 
     async def get_tenant_access_token(self) -> str:
         """Retrieves and caches Feishu tenant_access_token."""
@@ -79,6 +80,12 @@ class FeishuChannel(BaseChannel):
         text: str,
         reply_to_msg_id: Optional[Union[int, str]] = None
     ) -> Optional[Union[int, str]]:
+        # Remove the typing reaction if one exists for this chat
+        reaction_info = self._typing_reactions.pop(str(chat_id), None)
+        if reaction_info:
+            msg_id, reaction_id = reaction_info
+            await self._remove_reaction(msg_id, reaction_id)
+
         token = await self.get_tenant_access_token()
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json; charset=utf-8"}
 
@@ -98,8 +105,43 @@ class FeishuChannel(BaseChannel):
         logger.error(f"[Feishu] Send message failed: {data}")
         return None
 
+    async def _add_reaction(self, message_id: str, emoji_type: str = "OnIt") -> Optional[str]:
+        """Adds a reaction to a message; returns the reaction_id for later removal."""
+        try:
+            token = await self.get_tenant_access_token()
+            headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json; charset=utf-8"}
+            url = f"{self.api_base}/open-apis/im/v1/messages/{message_id}/reactions"
+            resp = await self.client.post(url, headers=headers, json={"reaction_type": {"emoji_type": emoji_type}})
+            data = resp.json()
+            if data.get("code") == 0:
+                return data["data"]["reaction_id"]
+            logger.debug(f"[Feishu] Add reaction failed: {data}")
+        except Exception as e:
+            logger.debug(f"[Feishu] Failed to add reaction: {e}")
+        return None
+
+    async def _remove_reaction(self, message_id: str, reaction_id: str) -> None:
+        """Removes a reaction from a message."""
+        try:
+            token = await self.get_tenant_access_token()
+            headers = {"Authorization": f"Bearer {token}"}
+            url = f"{self.api_base}/open-apis/im/v1/messages/{message_id}/reactions/{reaction_id}"
+            await self.client.delete(url, headers=headers)
+        except Exception as e:
+            logger.debug(f"[Feishu] Failed to remove reaction {reaction_id}: {e}")
+
     async def send_typing_action(self, chat_id: Union[int, str]) -> None:
-        pass
+        """Adds a 'processing' reaction to the user's last message on first call;
+        subsequent calls are no-ops until send_reply removes the reaction."""
+        cid = str(chat_id)
+        if cid in self._typing_reactions:
+            return
+        msg_id = self._last_user_msg_ids.get(cid)
+        if not msg_id:
+            return
+        reaction_id = await self._add_reaction(msg_id)
+        if reaction_id:
+            self._typing_reactions[cid] = (msg_id, reaction_id)
 
     async def leave_chat(self, chat_id: Union[int, str]) -> bool:
         try:
@@ -157,6 +199,9 @@ class FeishuChannel(BaseChannel):
                 mentions = msg.mentions or []
                 is_mentioned = any(m.name == self.bot_name or m.key == "@_all" for m in mentions)
                 is_triggered = (chat_type == "private") or is_mentioned or (f"@{self.bot_username}" in text)
+
+                # Track last user message_id per chat for typing reactions
+                self._last_user_msg_ids[chat_id] = msg.message_id
 
                 inbound = InboundMessage(
                     chat_id=chat_id,
