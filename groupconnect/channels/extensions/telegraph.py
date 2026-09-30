@@ -201,7 +201,7 @@ def table_rows_to_preformatted_text(
     h_lines, _ = _render_row(norm_headers)
     rendered_data = [_render_row(r) for r in norm_data]
 
-    sep = "─" * max(max_table_w, 1)
+    sep = "-" * max(max_table_w, 1)
 
     lines = []
     lines.extend(h_lines)
