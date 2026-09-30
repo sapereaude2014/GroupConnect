@@ -569,7 +569,7 @@ async def process_outbound_text(
             safe_url = urllib.parse.quote(url, safe=":/%#?=@[]!$&'()*+,;")
             first_p = extract_first_paragraph(reply_text)
             if first_p:
-                return f"{first_p}\n\n📄 [{safe_title}]({safe_url})"
+                return f"{first_p}\n📄 [{safe_title}]({safe_url})"
             return f"📄 [{safe_title}]({safe_url})"
         else:
             logger.warning("[Telegraph] Auto-telegraph publish failed, falling back to expandable blockquote")

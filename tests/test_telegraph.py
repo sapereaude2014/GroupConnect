@@ -173,7 +173,7 @@ class TestOutboundTableRouting(unittest.IsolatedAsyncioTestCase):
         ):
             out = await tg.process_outbound_text(full_text, threshold=60)
         self.assertTrue(out.startswith(intro))
-        self.assertIn("📄 [", out)
+        self.assertIn(f"{intro}\n📄 [", out)
         self.assertIn("https://telegra.ph/alarm123", out)
 
 
