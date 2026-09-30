@@ -10,12 +10,25 @@ import logging
 import time
 from typing import Any, Callable, Coroutine, Dict, Optional, Union
 
+import os
 import httpx
 
 from groupconnect.channels.base import BaseChannel, ChannelField, InboundMessage, register_channel
 from groupconnect.core.config import GatewayConfig
 
 logger = logging.getLogger("groupconnect.channel.feishu")
+
+_FEISHU_FILE_TYPE_MAP = {
+    ".pdf": "pdf", ".doc": "doc", ".docx": "doc",
+    ".xls": "stream", ".xlsx": "stream", ".ppt": "stream", ".pptx": "stream",
+    ".txt": "stream", ".md": "stream", ".csv": "stream",
+    ".zip": "stream", ".rar": "stream", ".7z": "stream",
+    ".mp4": "mp4", ".mov": "mp4",
+    ".mp3": "opus", ".m4a": "opus", ".wav": "opus", ".aac": "opus",
+}
+
+def _feishu_file_type(ext: str) -> str:
+    return _FEISHU_FILE_TYPE_MAP.get(ext, "stream")
 
 try:
     import lark_oapi as lark
@@ -142,6 +155,86 @@ class FeishuChannel(BaseChannel):
         reaction_id = await self._add_reaction(msg_id)
         if reaction_id:
             self._typing_reactions[cid] = (msg_id, reaction_id)
+
+    async def send_file(
+        self,
+        chat_id: Union[int, str],
+        file_path: str,
+        caption: Optional[str] = None,
+        reply_to_msg_id: Optional[Union[int, str]] = None
+    ) -> Optional[Union[int, str]]:
+        """Sends a file to a Feishu chat. Images use the image API;
+        other files use the file API."""
+        if not os.path.isfile(file_path):
+            logger.warning(f"[Feishu] send_file: file not found: {file_path}")
+            return None
+
+        file_size = os.path.getsize(file_path)
+        if file_size > 30 * 1024 * 1024:
+            logger.warning(f"[Feishu] File {file_path} ({file_size} bytes) exceeds 30MB limit")
+            await self.send_reply(chat_id, f"文件超过飞书 30MB 限制，无法上传：{os.path.basename(file_path)}")
+            return None
+
+        token = await self.get_tenant_access_token()
+        ext = os.path.splitext(file_path)[1].lower()
+        filename = os.path.basename(file_path)
+
+        try:
+            if ext in (".png", ".jpg", ".jpeg", ".webp"):
+                # Upload as image
+                upload_url = f"{self.api_base}/open-apis/im/v1/images"
+                with open(file_path, "rb") as f:
+                    resp = await self.client.post(
+                        upload_url,
+                        headers={"Authorization": f"Bearer {token}"},
+                        data={"image_type": "message"},
+                        files={"image": (filename, f)},
+                        timeout=60.0,
+                    )
+                data = resp.json()
+                if data.get("code") != 0:
+                    logger.error(f"[Feishu] Image upload failed: {data}")
+                    return None
+                msg_type = "image"
+                content = json.dumps({"image_key": data["data"]["image_key"]})
+            else:
+                # Upload as file
+                upload_url = f"{self.api_base}/open-apis/im/v1/files"
+                with open(file_path, "rb") as f:
+                    resp = await self.client.post(
+                        upload_url,
+                        headers={"Authorization": f"Bearer {token}"},
+                        data={"file_type": _feishu_file_type(ext), "file_name": filename},
+                        files={"file": (filename, f)},
+                        timeout=60.0,
+                    )
+                data = resp.json()
+                if data.get("code") != 0:
+                    logger.error(f"[Feishu] File upload failed: {data}")
+                    return None
+                msg_type = "file"
+                content = json.dumps({"file_key": data["data"]["file_key"]})
+
+            # Send the message with the uploaded media
+            msg_url = f"{self.api_base}/open-apis/im/v1/messages?receive_id_type=chat_id"
+            payload = {
+                "receive_id": str(chat_id),
+                "msg_type": msg_type,
+                "content": content,
+            }
+            resp = await self.client.post(
+                msg_url,
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json; charset=utf-8"},
+                json=payload,
+            )
+            data = resp.json()
+            if data.get("code") == 0:
+                return data["data"]["message_id"]
+            logger.error(f"[Feishu] Send file message failed: {data}")
+            return None
+        except Exception as e:
+            logger.error(f"[Feishu] send_file error: {e}", exc_info=True)
+            return None
 
     async def leave_chat(self, chat_id: Union[int, str]) -> bool:
         try:
