@@ -194,6 +194,23 @@ class TestExtractFirstParagraph(unittest.TestCase):
         text = "```python\nprint(1)\n```\n其余内容"
         self.assertEqual(extract_first_paragraph(text), "")
 
+    def test_truncate_over_60_chars(self):
+        text = "这是一段非常冗长的开篇引言说明文字，内容详实且完整地介绍了本次系统自动化重构的所有背景信息和各项校验指标，并且进行了多次验证。\n\n后续详情..."
+        result = extract_first_paragraph(text)
+        self.assertTrue(result.endswith("…"))
+        # 60 chars + 1 ellipsis char
+        self.assertEqual(len(result), 61)
+
+    def test_no_newline_text_truncates_not_empty(self):
+        text = "纯一段话没有任何换行，但是超过了六十个字，我们测试一下它会不会正常截断并加上省略号，而不是像之前一样直接返回空字符串。测试更多文字。"
+        result = extract_first_paragraph(text)
+        self.assertTrue(result.endswith("…"))
+        self.assertEqual(len(result), 61)
+
+    def test_skip_leading_headers_to_get_body_paragraph(self):
+        text = "# 2026年三亚度假行程规划\n\n详细安排如下：抵达海棠湾入住酒店。\n\n第二天去蜈支洲岛。"
+        self.assertEqual(extract_first_paragraph(text), "详细安排如下：抵达海棠湾入住酒店。")
+
 
 class TestExtractTitle(unittest.TestCase):
     def test_extract_markdown_h1(self):

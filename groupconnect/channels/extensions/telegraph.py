@@ -458,30 +458,53 @@ def extract_title(text: str, default_author: str = "GroupConnect") -> str:
     return f"{default_author} 详细汇报"
 
 
-def extract_first_paragraph(text: str) -> str:
-    """Extract the first natural paragraph from text to place before the Telegraph link."""
+def extract_first_paragraph(text: str, max_chars: int = 60) -> str:
+    """Extract the first natural paragraph/snippet from text (up to max_chars) to place before Telegraph link."""
     if not text or not text.strip():
         return ""
     stripped = text.strip()
     # If text starts with structured content (table/code), do not extract as natural intro
     if stripped.startswith(("|", "```")):
         return ""
-    # Try splitting by paragraph break (\n\n)
-    if "\n\n" in stripped:
-        p0 = stripped.split("\n\n", 1)[0].strip()
-        if p0 and not p0.startswith(("|", "```")) and len(p0) <= 600:
-            return p0
-    # Try splitting by single newline if first line is a clean conversational line
-    if "\n" in stripped:
-        l0 = stripped.split("\n", 1)[0].strip()
-        if (
-            l0
-            and not l0.startswith(("|", "```", "#", "- ", "* ", "> "))
-            and not re.match(r"^\d+\.\s+", l0)
-            and len(l0) <= 140
-        ):
-            return l0
-    return ""
+
+    # If text starts with markdown headings or bracketed headers, skip them to find body intro
+    lines = stripped.split("\n")
+    idx = 0
+    while idx < len(lines) and (
+        lines[idx].strip().startswith("#")
+        or re.match(r"^[【\[].+?[】\]]$", lines[idx].strip())
+        or not lines[idx].strip()
+    ):
+        idx += 1
+
+    target = "\n".join(lines[idx:]).strip() if idx < len(lines) else ""
+    if not target:
+        target = stripped
+
+    if not target or target.startswith(("|", "```")):
+        return ""
+
+    # Candidate selection: try \n\n first, then \n, else the whole target
+    if "\n\n" in target:
+        candidate = target.split("\n\n", 1)[0].strip()
+    elif "\n" in target:
+        candidate = target.split("\n", 1)[0].strip()
+    else:
+        candidate = target
+
+    # If candidate itself has a single newline followed by structured items (lists/tables/code/quotes)
+    if "\n" in candidate:
+        first_line = candidate.split("\n", 1)[0].strip()
+        rest = candidate.split("\n", 1)[1].strip()
+        if rest.startswith(("- ", "* ", "1. ", "2. ", "|", "```", "> ")):
+            candidate = first_line
+
+    if not candidate or candidate.startswith(("|", "```")):
+        return ""
+
+    if len(candidate) <= max_chars:
+        return candidate
+    return candidate[:max_chars].rstrip("，、；： ") + "…"
 
 
 async def process_outbound_text(
