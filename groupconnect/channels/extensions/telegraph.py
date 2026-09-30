@@ -37,7 +37,7 @@ ALLOWED_TAGS = {
 
 
 def _to_fullwidth(s: str) -> str:
-    """Map ASCII to fullwidth forms and spaces to U+3000 so every glyph is 1em."""
+    """Map ASCII to fullwidth forms (kept for backward compatibility)."""
     out = []
     for ch in s:
         o = ord(ch)
@@ -46,27 +46,66 @@ def _to_fullwidth(s: str) -> str:
         elif 0x21 <= o <= 0x7E:
             out.append(chr(o + 0xFEE0))
         elif ch == '\u00B7':
-            out.append('\u30FB')  # katakana middle dot is unambiguous 1em
+            out.append('\u30FB')
         else:
             out.append(ch)
     return ''.join(out)
 
 
-def _wrap_fullwidth_cell(text: str, width: int) -> List[str]:
-    """Wrap fullwidth cell text into chunks of at most `width` characters."""
-    if not text:
-        return [""]
-    if width <= 0:
+def _display_width(s: str) -> int:
+    """Calculate display width of a string in monospace columns (CJK/Emoji = 2, ASCII = 1)."""
+    w = 0
+    for ch in s:
+        if unicodedata.category(ch) in ('Mn', 'Me', 'Cf'):
+            continue
+        o = ord(ch)
+        if (0x1F300 <= o <= 0x1F9FF) or (0x2600 <= o <= 0x27BF) or unicodedata.east_asian_width(ch) in ('W', 'F'):
+            w += 2
+        else:
+            w += 1
+    return w
+
+
+def _pad_right(s: str, target_width: int) -> str:
+    """Pad string to target display width with standard ASCII trailing spaces."""
+    return s + ' ' * max(0, target_width - _display_width(s))
+
+
+def _wrap_cell(text: str, max_width: int) -> List[str]:
+    """Wrap cell text on natural word boundaries (spaces, slashes, punctuation) within max_width."""
+    if not text or max_width <= 0:
         return [text]
     lines = []
-    for part in text.split("\n"):
-        part = part.strip()
-        if not part:
-            lines.append("")
-            continue
-        while len(part) > width:
-            lines.append(part[:width])
-            part = part[width:].lstrip("\u3000 ")
+    for raw_part in text.split("\n"):
+        part = raw_part.strip()
+        while _display_width(part) > max_width:
+            cur_w = 0
+            best_split = -1
+            delims = {" ", "/", ",", ";", "-", "|", "，", "、", "；"}
+            for i, ch in enumerate(part):
+                w = 2 if ((0x1F300 <= ord(ch) <= 0x1F9FF) or (0x2600 <= ord(ch) <= 0x27BF) or unicodedata.east_asian_width(ch) in ('W', 'F')) else 1
+                if cur_w + w > max_width:
+                    break
+                cur_w += w
+                if ch in delims:
+                    best_split = i + 1
+
+            if best_split > 0 and best_split < len(part):
+                lines.append(part[:best_split].strip())
+                part = part[best_split:].strip()
+            else:
+                # No delimiter found within max_width, break by character
+                cut_idx = 0
+                cw = 0
+                for i, ch in enumerate(part):
+                    w = 2 if ((0x1F300 <= ord(ch) <= 0x1F9FF) or (0x2600 <= ord(ch) <= 0x27BF) or unicodedata.east_asian_width(ch) in ('W', 'F')) else 1
+                    if cw + w > max_width:
+                        break
+                    cw += w
+                    cut_idx = i + 1
+                lines.append(part[:cut_idx].strip())
+                part = part[cut_idx:].strip()
+
         if part:
             lines.append(part)
     return lines if lines else [""]
@@ -75,12 +114,14 @@ def _wrap_fullwidth_cell(text: str, width: int) -> List[str]:
 def table_rows_to_preformatted_text(
     headers: List[str],
     data_rows: List[List[str]],
-    max_col_width: int = 14,
+    max_col_width: int = 48,
 ) -> str:
-    """Render a table as fullwidth-aligned text for a Telegraph <pre> block.
+    """Render a table as an open-ended monospace table for Telegraph and Telegram.
 
-    Supports automatic cell wrapping when cell content exceeds max_col_width,
-    keeping columns strictly aligned and preserving mobile screen readability.
+    - Preserves native halfwidth ASCII characters and spaces (no fullwidth distortion).
+    - Uses display width (CJK/Emoji = 2, ASCII = 1) for column alignment.
+    - Wraps long cells on natural word boundaries (spaces, slashes, punctuation).
+    - Uses open-ended rows (no right closing border) to prevent cumulative pixel drift.
     """
     if not data_rows:
         return ""
@@ -89,43 +130,49 @@ def table_rows_to_preformatted_text(
         return ""
 
     def _norm(row: List[str]) -> List[str]:
-        row = (list(row) + [""] * num_cols)[:num_cols]
-        return [_to_fullwidth(str(c).strip()) for c in row]
+        return (list(row) + [""] * num_cols)[:num_cols]
 
     norm_headers = _norm(headers)
     norm_data = [_norm(r) for r in data_rows]
     all_rows = [norm_headers] + norm_data
 
-    widths = []
+    col_w = []
     for i in range(num_cols):
-        natural_w = max(len(r[i]) for r in all_rows)
-        w = natural_w
-        if max_col_width and max_col_width > 0:
-            w = min(natural_w, max_col_width)
-        widths.append(max(w, 1))
+        natural_w = max(_display_width(str(r[i]).strip()) for r in all_rows)
+        if max_col_width and natural_w > max_col_width:
+            col_w.append(max_col_width)
+        else:
+            col_w.append(max(natural_w, 1))
+
+    any_wrapped = False
 
     def _render_row(cells: List[str]) -> Tuple[List[str], bool]:
-        wrapped = [_wrap_fullwidth_cell(cells[i], widths[i]) for i in range(num_cols)]
+        nonlocal any_wrapped
+        wrapped = [_wrap_cell(str(cells[i]).strip(), col_w[i]) for i in range(num_cols)]
         height = max(len(w) for w in wrapped)
+        if height > 1:
+            any_wrapped = True
         sublines = []
         for h in range(height):
-            line_parts = [wrapped[i][h] if h < len(wrapped[i]) else "" for i in range(num_cols)]
-            sublines.append(
-                "\uff5c".join(
-                    c + "\u3000" * (widths[i] - len(c)) for i, c in enumerate(line_parts)
-                )
-            )
+            parts = []
+            for i in range(num_cols):
+                val = wrapped[i][h] if h < len(wrapped[i]) else ""
+                if i < num_cols - 1:
+                    parts.append(_pad_right(val, col_w[i]))
+                else:
+                    parts.append(val)
+            sublines.append(" │ ".join(parts).rstrip())
         return sublines, height > 1
 
-    separator = "\uff0b".join("\uff0d" * w for w in widths)
-    lines = []
+    sep_parts = ["─" * col_w[i] for i in range(num_cols - 1)] + ["─" * min(col_w[-1], 36)]
+    separator = "─┼─".join(sep_parts)
 
-    h_lines, h_wrapped = _render_row(norm_headers)
+    lines = []
+    h_lines, _ = _render_row(norm_headers)
     lines.extend(h_lines)
     lines.append(separator)
 
     rendered_data = [_render_row(r) for r in norm_data]
-    any_wrapped = h_wrapped or any(is_w for _, is_w in rendered_data)
 
     for idx, (r_lines, _) in enumerate(rendered_data):
         if any_wrapped and idx > 0:
@@ -135,33 +182,15 @@ def table_rows_to_preformatted_text(
     return "\n".join(lines)
 
 
-def _display_width(s: str) -> int:
-    """Display width of a string (CJK characters = 2, others = 1)."""
-    w = 0
-    for ch in s:
-        if unicodedata.east_asian_width(ch) in ('W', 'F'):
-            w += 2
-        else:
-            w += 1
-    return w
-
-
-def _pad_right(s: str, target_width: int) -> str:
-    """Pad string to target display width with trailing spaces."""
-    return s + ' ' * max(0, target_width - _display_width(s))
-
-
 def _parse_md_row(line: str) -> List[str]:
     """Parse a single markdown table row into cell values."""
     return [c.strip() for c in line.strip().strip('|').split('|')]
 
 
 def _table_block_to_monospace(block: str) -> str:
-    """Convert a single markdown table block to a monospace code block.
+    """Convert a single markdown table block to an open monospace code block.
 
-    Uses Unicode box-drawing characters for clean borders and spaces for
-    CJK-aware column alignment.  Output is wrapped in triple backticks so
-    Telegram renders it with a monospaced font.
+    Reuses table_rows_to_preformatted_text for consistent cross-channel rendering.
     """
     lines = [l.strip() for l in block.strip().split('\n') if l.strip()]
     if len(lines) < 3:
@@ -169,33 +198,10 @@ def _table_block_to_monospace(block: str) -> str:
 
     headers = _parse_md_row(lines[0])
     data_rows = [_parse_md_row(l) for l in lines[2:]]
-    num_cols = len(headers)
-
-    # Column widths based on display width (CJK = 2)
-    col_w = [0] * num_cols
-    for i, h in enumerate(headers):
-        col_w[i] = max(col_w[i], _display_width(h))
-    for row in data_rows:
-        for i, v in enumerate(row):
-            if i < num_cols:
-                col_w[i] = max(col_w[i], _display_width(v))
-
-    def _fmt_row(cells: List[str]) -> str:
-        parts = []
-        for i in range(num_cols):
-            v = cells[i] if i < len(cells) else ''
-            parts.append(_pad_right(v, col_w[i]))
-        return '\u2502 ' + ' \u2502 '.join(parts) + ' \u2502'
-
-    def _sep() -> str:
-        parts = ['\u2500' * w for w in col_w]
-        return '\u251c\u2500' + '\u2500\u253c\u2500'.join(parts) + '\u2500\u2524'
-
-    out = [_fmt_row(headers), _sep()]
-    for row in data_rows:
-        out.append(_fmt_row(row))
-
-    return '\n```\n' + '\n'.join(out) + '\n```\n'
+    rendered = table_rows_to_preformatted_text(headers, data_rows)
+    if not rendered:
+        return block
+    return '\n```\n' + rendered + '\n```\n'
 
 
 # Regex to extract complete markdown table blocks (header + separator + data rows)

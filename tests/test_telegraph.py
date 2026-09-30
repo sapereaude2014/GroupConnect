@@ -43,19 +43,20 @@ class TestFullwidthConversion(unittest.TestCase):
         )
         lines = text.split("\n")
         self.assertEqual(len(lines), 5)  # header + separator + 3 rows
-        for line in lines:
-            self.assertTrue(all(_is_em_width(c) for c in line), f"non-1em char in: {line!r}")
-        # identical code-point length on every line == pixel-perfect alignment
-        self.assertEqual(len({len(l) for l in lines}), 1)
-        self.assertIn("｜", lines[0])
-        self.assertIn("＋", lines[1])
-        self.assertIn("４８６", lines[2])
+        self.assertIn("│", lines[0])
+        self.assertIn("─┼─", lines[1])
+        # Numbers and English remain halfwidth ASCII
+        self.assertIn("486.5", lines[2])
+        self.assertIn("生鲜采购", lines[2])
 
     def test_ragged_rows_normalized(self):
         text = table_rows_to_preformatted_text(
             ["A", "B"], [["x"], ["y", "z", "extra"]]
         )
-        self.assertEqual(len({len(l) for l in text.split("\n")}), 1)
+        lines = text.split("\n")
+        self.assertEqual(len(lines), 4)
+        self.assertIn("A │ B", lines[0])
+        self.assertIn("y │ z", lines[3])
 
     def test_empty_table(self):
         self.assertEqual(table_rows_to_preformatted_text([], []), "")
@@ -73,15 +74,11 @@ class TestFullwidthConversion(unittest.TestCase):
         text = table_rows_to_preformatted_text(headers, data_rows, max_col_width=14)
         lines = text.split("\n")
         # Ensure row wrapping occurred:
-        # Header (1) + Sep (1) + Row 1 (4 lines) + Sep (1) + Row 2 (2 lines) = 9 lines
         self.assertGreater(len(lines), 4)
-        # All lines strictly equal length (pixel-perfect alignment)
-        self.assertEqual(len({len(l) for l in lines}), 1)
-        # All characters are 1em em-width characters
-        for line in lines:
-            self.assertTrue(all(_is_em_width(c) for c in line), f"non-1em char in: {line!r}")
-        self.assertIn("＋", text)
-        self.assertIn("｜", text)
+        self.assertIn("─┼─", text)
+        self.assertIn("│", text)
+        self.assertIn("01_家庭成员档", text)
+        self.assertIn("02_健康与医疗/", text)
 
     def test_table_custom_max_col_width(self):
         headers = ["项目", "描述"]
@@ -89,9 +86,17 @@ class TestFullwidthConversion(unittest.TestCase):
         # With max_col_width=8, description column must be capped at 8
         text = table_rows_to_preformatted_text(headers, data_rows, max_col_width=8)
         lines = text.split("\n")
-        self.assertEqual(len({len(l) for l in lines}), 1)
-        # Check that header line length is 2 (header '项目') + 1 ('｜') + 8 = 11
-        self.assertEqual(len(lines[0]), 11)
+        self.assertGreater(len(lines), 3)
+        self.assertIn("12345678", lines[2])
+
+    def test_display_width_and_wrapping(self):
+        from groupconnect.channels.extensions.telegraph import _display_width, _wrap_cell
+        self.assertEqual(_display_width("abc"), 3)
+        self.assertEqual(_display_width("测试"), 4)
+        self.assertEqual(_display_width("✅"), 2)
+        # Word-boundary wrapping: does not cut English word in middle if possible
+        chunks = _wrap_cell("allow_open_access test", 18)
+        self.assertEqual(chunks, ["allow_open_access", "test"])
 
 
 class TestMarkdownTableToPreNode(unittest.TestCase):
@@ -102,10 +107,9 @@ class TestMarkdownTableToPreNode(unittest.TestCase):
         self.assertEqual(len(pres), 1)
         content = pres[0]["children"][0]
         self.assertIn("生鲜", content)
-        self.assertIn("４８６．５", content)
-        lines = content.split("\n")
-        self.assertEqual(len({len(l) for l in lines}), 1)
-        self.assertTrue(all(_is_em_width(c) for l in lines for c in l))
+        self.assertIn("486.5", content)
+        self.assertIn("│", content)
+        self.assertIn("─┼─", content)
 
     def test_has_markdown_table(self):
         self.assertTrue(has_markdown_table("| a | b |\n| --- | --- |\n| 1 | 2 |\n"))
