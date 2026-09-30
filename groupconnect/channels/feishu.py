@@ -114,114 +114,40 @@ class FeishuChannel(BaseChannel):
 
     @staticmethod
     def _markdown_to_card(text: str) -> dict:
-        """Converts Markdown text into a Feishu interactive card structure.
+        """Wraps Markdown text in a Feishu interactive card (JSON 2.0).
 
-        Feishu's markdown element supports bold/italic/lists/code/quotes/links
-        but renders headers and tables poorly, so:
-        - Headers become bold lines
-        - Tables become code blocks (preserve alignment)
-        - Long content is split into multiple markdown elements
+        Card 2.0's markdown component natively renders headers, tables,
+        lists, code blocks, quotes, and inline code, so the text passes
+        through unchanged. Content over ~28KB is split on paragraph
+        boundaries into multiple markdown elements to stay within the
+        card JSON size limit.
         """
-        import re
+        MAX_ELEMENT_CHARS = 28000
+        if len(text) <= MAX_ELEMENT_CHARS:
+            elements = [{"tag": "markdown", "content": text}] if text.strip() else []
+        else:
+            elements = []
+            remaining = text
+            while remaining:
+                if len(remaining) <= MAX_ELEMENT_CHARS:
+                    elements.append({"tag": "markdown", "content": remaining})
+                    break
+                # Prefer splitting at a paragraph boundary, then a line break
+                cut = remaining.rfind("\n\n", 0, MAX_ELEMENT_CHARS)
+                if cut <= 0:
+                    cut = remaining.rfind("\n", 0, MAX_ELEMENT_CHARS)
+                if cut <= 0:
+                    cut = MAX_ELEMENT_CHARS
+                elements.append({"tag": "markdown", "content": remaining[:cut]})
+                remaining = remaining[cut:].lstrip("\n")
 
-        lines = text.split("\n")
-        processed: list = []
-        in_code_block = False
-        in_table = False
-        table_buffer: list = []
-        code_buffer: list = []
-        code_langs: list = []
-
-        def _flush_table():
-            nonlocal table_buffer, in_table
-            if table_buffer:
-                # The legacy card markdown element renders tables as raw pipe
-                # text; a code block preserves column alignment instead.
-                table_text = "```\n" + "\n".join(table_buffer) + "\n```"
-                processed.append({"tag": "markdown", "content": table_text})
-                table_buffer = []
-                in_table = False
-
-        def _flush_code():
-            nonlocal code_buffer, in_code_block
-            if code_buffer:
-                # Preserve the fence's language token (e.g. ```python) for syntax highlight
-                lang = code_langs.pop(0).strip() if code_langs else ""
-                fence_open = f"```{lang}" if lang else "```"
-                block = fence_open + "\n" + "\n".join(code_buffer) + "\n```"
-                processed.append({"tag": "markdown", "content": block})
-                code_buffer = []
-                in_code_block = False
-
-        text_buffer: list = []
-
-        def _flush_text():
-            nonlocal text_buffer
-            if text_buffer:
-                processed.append({"tag": "markdown", "content": "\n".join(text_buffer)})
-                text_buffer = []
-
-        for line in lines:
-            stripped = line.strip()
-
-            # Code fence handling
-            if stripped.startswith("```"):
-                if in_code_block:
-                    _flush_code()
-                else:
-                    _flush_text()
-                    _flush_table()
-                    in_code_block = True
-                    code_langs.append(stripped[3:])
-                continue
-            if in_code_block:
-                code_buffer.append(line)
-                continue
-
-            # Table detection: consecutive lines starting and ending with |
-            if stripped.startswith("|") and stripped.endswith("|") and len(stripped) > 2:
-                _flush_text()
-                in_table = True
-                # Drop separator rows like |---|---|
-                if re.match(r"^\|[\s:|-]+\|$", stripped):
-                    continue
-                table_buffer.append(stripped)
-                continue
-            elif in_table:
-                _flush_table()
-
-            # Headers: # / ## / ### become bold lines (markdown element
-            # doesn't render # headers reliably)
-            m = re.match(r"^(#{1,4})\s+(.+)$", stripped)
-            if m:
-                _flush_text()
-                processed.append({"tag": "hr"})
-                processed.append({"tag": "markdown", "content": f"**{m.group(2).strip()}**"})
-                continue
-
-            text_buffer.append(line)
-
-        _flush_text()
-        _flush_table()
-        _flush_code()
-
-        # Merge consecutive markdown elements to reduce element count
-        merged: list = []
-        for el in processed:
-            if (merged and el["tag"] == "markdown"
-                    and merged[-1]["tag"] == "markdown"
-                    and "hr" not in merged[-1].get("tag", "")):
-                merged[-1]["content"] += "\n" + el["content"]
-            else:
-                merged.append(el)
-
-        # Ensure at least one element exists
-        if not merged:
-            merged.append({"tag": "markdown", "content": text})
+        if not elements:
+            elements = [{"tag": "markdown", "content": text}]
 
         return {
+            "schema": "2.0",
             "config": {"wide_screen_mode": True, "enable_forward": True},
-            "elements": merged,
+            "body": {"elements": elements},
         }
 
     async def send_reply(

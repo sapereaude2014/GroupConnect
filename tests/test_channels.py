@@ -223,28 +223,22 @@ class TestFeishuChannelOutbound(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(FeishuChannel._has_markdown("> 引用"))
         self.assertTrue(FeishuChannel._has_markdown("```python\ncode\n```"))
 
-    def test_markdown_to_card_headers_become_bold(self):
-        card = FeishuChannel._markdown_to_card("# 标题\n正文")
-        tags = [el["tag"] for el in card["elements"]]
-        self.assertIn("hr", tags)
-        md_contents = [el["content"] for el in card["elements"] if el["tag"] == "markdown"]
-        self.assertTrue(any("**标题**" in c for c in md_contents))
-
-    def test_markdown_to_card_table_becomes_code_block(self):
-        md = "| 名称 | 数值 |\n| --- | --- |\n| CPU | 90% |"
+    def test_markdown_to_card_schema_v2_passthrough(self):
+        md = "# 标题\n正文\n\n| 列1 | 列2 |\n| --- | --- |\n| CPU | 90% |"
         card = FeishuChannel._markdown_to_card(md)
-        contents = [el["content"] for el in card["elements"] if el["tag"] == "markdown"]
-        self.assertEqual(len(contents), 1)
-        # Table wrapped in a code block to preserve alignment (legacy card
-        # markdown element renders raw pipes as plain text otherwise)
-        self.assertTrue(contents[0].startswith("```"))
-        self.assertIn("CPU", contents[0])
-        self.assertNotIn("---", contents[0])  # separator row dropped
+        self.assertEqual(card["schema"], "2.0")
+        self.assertIn("elements", card["body"])
+        contents = [el["content"] for el in card["body"]["elements"] if el["tag"] == "markdown"]
+        joined = "\n".join(contents)
+        # Card 2.0 markdown renders headers and tables natively: pass through
+        self.assertIn("# 标题", joined)
+        self.assertIn("| 列1 | 列2 |", joined)
+        self.assertIn("| CPU | 90% |", joined)
 
     def test_markdown_to_card_code_fence_preserved(self):
         md = "before\n```python\nx = 1\n```\nafter"
         card = FeishuChannel._markdown_to_card(md)
-        joined = "\n".join(el["content"] for el in card["elements"] if el["tag"] == "markdown")
+        joined = "\n".join(el["content"] for el in card["body"]["elements"] if el["tag"] == "markdown")
         self.assertIn("```python\nx = 1\n```", joined)
         self.assertIn("before", joined)
         self.assertIn("after", joined)
@@ -257,7 +251,8 @@ class TestFeishuChannelOutbound(unittest.IsolatedAsyncioTestCase):
         payload = channel.client.post.call_args.kwargs["json"]
         self.assertEqual(payload["msg_type"], "interactive")
         card = json.loads(payload["content"])
-        self.assertIn("elements", card)
+        self.assertEqual(card["schema"], "2.0")
+        self.assertIn("elements", card["body"])
 
     async def test_send_reply_plain_text_becomes_card(self):
         channel = self._make_channel()
@@ -267,9 +262,10 @@ class TestFeishuChannelOutbound(unittest.IsolatedAsyncioTestCase):
         payload = channel.client.post.call_args.kwargs["json"]
         self.assertEqual(payload["msg_type"], "interactive")
         card = json.loads(payload["content"])
-        self.assertIn("elements", card)
+        self.assertEqual(card["schema"], "2.0")
+        self.assertIn("elements", card["body"])
         # Plain text is wrapped in a single markdown element
-        contents = "\n".join(el.get("content", "") for el in card["elements"] if el["tag"] == "markdown")
+        contents = "\n".join(el.get("content", "") for el in card["body"]["elements"] if el["tag"] == "markdown")
         self.assertIn("纯文本消息", contents)
 
     async def test_send_reply_card_failure_falls_back_to_text(self):
