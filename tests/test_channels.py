@@ -1,5 +1,6 @@
+import json
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from groupconnect.channels.telegram import TelegramChannel
 from groupconnect.channels.discord import DiscordChannel
 from groupconnect.channels.slack import SlackChannel
@@ -194,6 +195,98 @@ class TestTelegramChannelOutbound(unittest.IsolatedAsyncioTestCase):
             reply_to_message_id=None,
             link_preview_options={"is_disabled": False, "prefer_small_media": True}
         )
+
+
+class TestFeishuChannelOutbound(unittest.IsolatedAsyncioTestCase):
+    def _make_channel(self):
+        cfg = GatewayConfig({
+            "platform": "feishu",
+            "feishu_app_id": "cli_mock_123",
+            "feishu_app_secret": "sec_mock_456"
+        })
+        channel = FeishuChannel(cfg, AsyncMock())
+        channel.get_tenant_access_token = AsyncMock(return_value="mock_token")
+        return channel
+
+    @staticmethod
+    def _mock_resp(payload):
+        resp = MagicMock()
+        resp.json.return_value = payload
+        return resp
+
+    def test_has_markdown_detection(self):
+        self.assertFalse(FeishuChannel._has_markdown("你好，今天天气不错。"))
+        self.assertTrue(FeishuChannel._has_markdown("**加粗**文本"))
+        self.assertTrue(FeishuChannel._has_markdown("## 标题\n正文"))
+        self.assertTrue(FeishuChannel._has_markdown("- 列表项"))
+        self.assertTrue(FeishuChannel._has_markdown("| 列1 | 列2 |"))
+        self.assertTrue(FeishuChannel._has_markdown("> 引用"))
+        self.assertTrue(FeishuChannel._has_markdown("```python\ncode\n```"))
+
+    def test_markdown_to_card_headers_become_bold(self):
+        card = FeishuChannel._markdown_to_card("# 标题\n正文")
+        tags = [el["tag"] for el in card["elements"]]
+        self.assertIn("hr", tags)
+        md_contents = [el["content"] for el in card["elements"] if el["tag"] == "markdown"]
+        self.assertTrue(any("**标题**" in c for c in md_contents))
+
+    def test_markdown_to_card_table_becomes_code_block(self):
+        md = "| 名称 | 数值 |\n| --- | --- |\n| CPU | 90% |"
+        card = FeishuChannel._markdown_to_card(md)
+        contents = [el["content"] for el in card["elements"] if el["tag"] == "markdown"]
+        self.assertEqual(len(contents), 1)
+        # Table wrapped in a code block to preserve alignment (legacy card
+        # markdown element renders raw pipes as plain text otherwise)
+        self.assertTrue(contents[0].startswith("```"))
+        self.assertIn("CPU", contents[0])
+        self.assertNotIn("---", contents[0])  # separator row dropped
+
+    def test_markdown_to_card_code_fence_preserved(self):
+        md = "before\n```python\nx = 1\n```\nafter"
+        card = FeishuChannel._markdown_to_card(md)
+        joined = "\n".join(el["content"] for el in card["elements"] if el["tag"] == "markdown")
+        self.assertIn("```python\nx = 1\n```", joined)
+        self.assertIn("before", joined)
+        self.assertIn("after", joined)
+
+    async def test_send_reply_markdown_uses_card(self):
+        channel = self._make_channel()
+        channel.client.post = AsyncMock(return_value=self._mock_resp({"code": 0, "data": {"message_id": "om_1"}}))
+        msg_id = await channel.send_reply(chat_id="oc_1", text="**重点**内容")
+        self.assertEqual(msg_id, "om_1")
+        payload = channel.client.post.call_args.kwargs["json"]
+        self.assertEqual(payload["msg_type"], "interactive")
+        card = json.loads(payload["content"])
+        self.assertIn("elements", card)
+
+    async def test_send_reply_plain_text_becomes_card(self):
+        channel = self._make_channel()
+        channel.client.post = AsyncMock(return_value=self._mock_resp({"code": 0, "data": {"message_id": "om_2"}}))
+        msg_id = await channel.send_reply(chat_id="oc_1", text="纯文本消息")
+        self.assertEqual(msg_id, "om_2")
+        payload = channel.client.post.call_args.kwargs["json"]
+        self.assertEqual(payload["msg_type"], "interactive")
+        card = json.loads(payload["content"])
+        self.assertIn("elements", card)
+        # Plain text is wrapped in a single markdown element
+        contents = "\n".join(el.get("content", "") for el in card["elements"] if el["tag"] == "markdown")
+        self.assertIn("纯文本消息", contents)
+
+    async def test_send_reply_card_failure_falls_back_to_text(self):
+        channel = self._make_channel()
+        channel.client.post = AsyncMock(side_effect=[
+            self._mock_resp({"code": 230002, "msg": "bad card"}),
+            self._mock_resp({"code": 0, "data": {"message_id": "om_3"}}),
+        ])
+        msg_id = await channel.send_reply(chat_id="oc_1", text="## 标题\n正文")
+        self.assertEqual(msg_id, "om_3")
+        self.assertEqual(channel.client.post.call_count, 2)
+        first = channel.client.post.call_args_list[0].kwargs["json"]
+        second = channel.client.post.call_args_list[1].kwargs["json"]
+        self.assertEqual(first["msg_type"], "interactive")
+        self.assertEqual(second["msg_type"], "text")
+        # Fallback keeps the raw text so the reply is never lost
+        self.assertEqual(json.loads(second["content"])["text"], "## 标题\n正文")
 
 
 if __name__ == "__main__":

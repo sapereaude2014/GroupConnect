@@ -130,11 +130,14 @@ class FeishuChannel(BaseChannel):
         in_table = False
         table_buffer: list = []
         code_buffer: list = []
+        code_langs: list = []
 
         def _flush_table():
             nonlocal table_buffer, in_table
             if table_buffer:
-                table_text = "\n".join(table_buffer)
+                # The legacy card markdown element renders tables as raw pipe
+                # text; a code block preserves column alignment instead.
+                table_text = "```\n" + "\n".join(table_buffer) + "\n```"
                 processed.append({"tag": "markdown", "content": table_text})
                 table_buffer = []
                 in_table = False
@@ -142,7 +145,10 @@ class FeishuChannel(BaseChannel):
         def _flush_code():
             nonlocal code_buffer, in_code_block
             if code_buffer:
-                block = "```\n" + "\n".join(code_buffer) + "\n```"
+                # Preserve the fence's language token (e.g. ```python) for syntax highlight
+                lang = code_langs.pop(0).strip() if code_langs else ""
+                fence_open = f"```{lang}" if lang else "```"
+                block = fence_open + "\n" + "\n".join(code_buffer) + "\n```"
                 processed.append({"tag": "markdown", "content": block})
                 code_buffer = []
                 in_code_block = False
@@ -166,6 +172,7 @@ class FeishuChannel(BaseChannel):
                     _flush_text()
                     _flush_table()
                     in_code_block = True
+                    code_langs.append(stripped[3:])
                 continue
             if in_code_block:
                 code_buffer.append(line)
@@ -233,19 +240,13 @@ class FeishuChannel(BaseChannel):
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json; charset=utf-8"}
 
         url = f"{self.api_base}/open-apis/im/v1/messages?receive_id_type=chat_id"
-        if self._has_markdown(text):
-            card = self._markdown_to_card(text)
-            payload = {
-                "receive_id": str(chat_id),
-                "msg_type": "interactive",
-                "content": json.dumps(card, ensure_ascii=False)
-            }
-        else:
-            payload = {
-                "receive_id": str(chat_id),
-                "msg_type": "text",
-                "content": json.dumps({"text": text}, ensure_ascii=False)
-            }
+        # Always render as interactive card for consistent markdown rendering
+        card = self._markdown_to_card(text)
+        payload = {
+            "receive_id": str(chat_id),
+            "msg_type": "interactive",
+            "content": json.dumps(card, ensure_ascii=False)
+        }
         if reply_to_msg_id:
             payload["reply_in_thread"] = False
 
