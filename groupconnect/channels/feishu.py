@@ -37,10 +37,11 @@ class FeishuChannel(BaseChannel):
     ):
         self.config = config
         self.handler = message_handler
-        self.app_id = config.raw.get("feishu_app_id") or config.raw.get("app_id", "")
-        self.app_secret = config.raw.get("feishu_app_secret") or config.raw.get("app_secret", "")
+        co = config.channel_options
+        self.app_id = co.get("feishu_app_id") or config.raw.get("feishu_app_id") or config.raw.get("app_id", "")
+        self.app_secret = co.get("feishu_app_secret") or config.raw.get("feishu_app_secret") or config.raw.get("app_secret", "")
         self.verification_token = config.raw.get("feishu_verification_token", "")
-        self.port = int(config.raw.get("webhook_port", config.raw.get("port", 8088)))
+        self.port = int(co.get("webhook_port") or config.raw.get("webhook_port", config.raw.get("port", 8088)))
         self.api_base = config.raw.get("feishu_api_base", "https://open.feishu.cn")
         self.bot_username = config.bot_username
         self.bot_name = config.bot_name
