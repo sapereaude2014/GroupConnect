@@ -69,7 +69,8 @@ class TestTelegramChannelOutbound(unittest.IsolatedAsyncioTestCase):
             chat_id=1,
             text="Hello world",
             parse_mode="Markdown",
-            reply_to_message_id=None
+            reply_to_message_id=None,
+            link_preview_options={"is_disabled": True}
         )
 
     async def test_long_reply_auto_telegraph(self):
@@ -93,7 +94,8 @@ class TestTelegramChannelOutbound(unittest.IsolatedAsyncioTestCase):
                 chat_id=1,
                 text="📄 [Title](https://telegra.ph/xyz)",
                 parse_mode="Markdown",
-                reply_to_message_id=None
+                reply_to_message_id=None,
+                link_preview_options={"is_disabled": True}
             )
 
     async def test_fallback_blockquote_uses_html(self):
@@ -117,7 +119,8 @@ class TestTelegramChannelOutbound(unittest.IsolatedAsyncioTestCase):
                 chat_id=1,
                 text=fallback_html,
                 parse_mode="HTML",
-                reply_to_message_id=None
+                reply_to_message_id=None,
+                link_preview_options={"is_disabled": True}
             )
 
     async def test_download_file_sanitizes_path_traversal(self):
@@ -176,7 +179,29 @@ class TestTelegramChannelOutbound(unittest.IsolatedAsyncioTestCase):
             chat_id=1,
             text="1. Title\n   • Sub A\n   • Sub B",
             parse_mode="Markdown",
-            reply_to_message_id=None
+            reply_to_message_id=None,
+            link_preview_options={"is_disabled": True}
+        )
+
+    async def test_send_reply_custom_link_preview_options(self):
+        cfg = GatewayConfig({
+            "platform": "telegram",
+            "bot_token": "mock_token",
+            "channel_options": {
+                "link_preview_options": {"is_disabled": False, "prefer_small_media": True}
+            }
+        })
+        channel = TelegramChannel(cfg, AsyncMock())
+        channel._api_call = AsyncMock(return_value={"ok": True, "result": {"message_id": 111}})
+
+        await channel.send_reply(chat_id=1, text="Test custom preview")
+        channel._api_call.assert_called_once_with(
+            "sendMessage",
+            chat_id=1,
+            text="Test custom preview",
+            parse_mode="Markdown",
+            reply_to_message_id=None,
+            link_preview_options={"is_disabled": False, "prefer_small_media": True}
         )
 
 

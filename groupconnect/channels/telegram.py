@@ -143,13 +143,13 @@ class TelegramChannel(BaseChannel):
         text: str,
         reply_to_msg_id: Optional[Union[int, str]] = None
     ) -> Optional[Union[int, str]]:
+        opts = getattr(self.config, "channel_options", {})
         # Guard against empty text (TeleAgent can return empty on failures)
         if not text or not text.strip():
             text = "⚠️ 暂时未能生成有效回复，请稍后再试。"
         else:
             # Outbound Text Processing (Telegraph auto-publisher for long text / tables)
             try:
-                opts = getattr(self.config, "channel_options", {})
                 threshold = opts.get("auto_telegraph_threshold", 60)
                 author_name = opts.get("telegraph_author_name", getattr(self.config, "bot_name", "GroupConnect"))
                 text = await process_outbound_text(
@@ -164,6 +164,8 @@ class TelegramChannel(BaseChannel):
         chunks = self._split_message(text, max_len=self.config.max_chunk_size)
         last_sent_id = None
 
+        link_preview_opts = opts.get("link_preview_options", {"is_disabled": True})
+
         for i, chunk in enumerate(chunks):
             target_reply_to = reply_to_msg_id if i == 0 else None
             try:
@@ -175,7 +177,8 @@ class TelegramChannel(BaseChannel):
                         chat_id=chat_id,
                         text=chunk,
                         parse_mode="HTML",
-                        reply_to_message_id=target_reply_to
+                        reply_to_message_id=target_reply_to,
+                        link_preview_options=link_preview_opts
                     )
                 else:
                     # Try Markdown first
@@ -184,7 +187,8 @@ class TelegramChannel(BaseChannel):
                         chat_id=chat_id,
                         text=chunk,
                         parse_mode="Markdown",
-                        reply_to_message_id=target_reply_to
+                        reply_to_message_id=target_reply_to,
+                        link_preview_options=link_preview_opts
                     )
                 # Retry fallback: if first send failed (parse error or reply target gone)
                 if not res.get("ok"):
@@ -199,7 +203,8 @@ class TelegramChannel(BaseChannel):
                             chat_id=chat_id,
                             text=chunk,
                             parse_mode="HTML",
-                            reply_to_message_id=retry_reply_to
+                            reply_to_message_id=retry_reply_to,
+                            link_preview_options=link_preview_opts
                         )
                     else:
                         # Markdown content: strip formatting and retry as plain text
@@ -209,7 +214,8 @@ class TelegramChannel(BaseChannel):
                             "sendMessage",
                             chat_id=chat_id,
                             text=clean_chunk,
-                            reply_to_message_id=retry_reply_to
+                            reply_to_message_id=retry_reply_to,
+                            link_preview_options=link_preview_opts
                         )
 
                 if res.get("ok"):
