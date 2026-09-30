@@ -43,8 +43,9 @@ class TestFullwidthConversion(unittest.TestCase):
         )
         lines = text.split("\n")
         self.assertEqual(len(lines), 5)  # header + separator + 3 rows
-        self.assertIn("│", lines[0])
-        self.assertIn("─┼─", lines[1])
+        self.assertIn("项目", lines[0])
+        self.assertIn("金额(元)", lines[0])
+        self.assertTrue(all(c == "─" for c in lines[1]))
         # Numbers and English remain halfwidth ASCII
         self.assertIn("486.5", lines[2])
         self.assertIn("生鲜采购", lines[2])
@@ -55,8 +56,8 @@ class TestFullwidthConversion(unittest.TestCase):
         )
         lines = text.split("\n")
         self.assertEqual(len(lines), 4)
-        self.assertIn("A │ B", lines[0])
-        self.assertIn("y │ z", lines[3])
+        self.assertTrue("A" in lines[0] and "B" in lines[0])
+        self.assertTrue("y" in lines[3] and "z" in lines[3])
 
     def test_empty_table(self):
         self.assertEqual(table_rows_to_preformatted_text([], []), "")
@@ -75,8 +76,7 @@ class TestFullwidthConversion(unittest.TestCase):
         lines = text.split("\n")
         # Ensure row wrapping occurred:
         self.assertGreater(len(lines), 4)
-        self.assertIn("─┼─", text)
-        self.assertIn("│", text)
+        self.assertIn("─", text)
         self.assertIn("01_家庭成员档", text)
         self.assertIn("02_健康与医疗/", text)
 
@@ -110,9 +110,10 @@ class TestFullwidthConversion(unittest.TestCase):
         # Line width on mobile must not exceed 36 chars to avoid horizontal scrolling
         max_w = max(_display_width(l) for l in lines)
         self.assertLessEqual(max_w, 36)
-        # Separator line length matches max line length closely (no 36-char empty tail)
-        sep_line = [l for l in lines if "─┼─" in l][0]
-        self.assertEqual(_display_width(sep_line), max_w)
+        # Separator line length matches max line length closely
+        sep_lines = [l for l in lines if all(c == "─" for c in l)]
+        self.assertTrue(len(sep_lines) > 0)
+        self.assertEqual(_display_width(sep_lines[0]), max_w)
 
 
 class TestMarkdownTableToPreNode(unittest.TestCase):
@@ -124,8 +125,7 @@ class TestMarkdownTableToPreNode(unittest.TestCase):
         content = pres[0]["children"][0]
         self.assertIn("生鲜", content)
         self.assertIn("486.5", content)
-        self.assertIn("│", content)
-        self.assertIn("─┼─", content)
+        self.assertIn("─", content)
 
     def test_has_markdown_table(self):
         self.assertTrue(has_markdown_table("| a | b |\n| --- | --- |\n| 1 | 2 |\n"))
@@ -144,7 +144,8 @@ class TestOutboundTableRouting(unittest.IsolatedAsyncioTestCase):
             out = await tg.process_outbound_text(self.TABLE_MD, threshold=60)
         mock_pub.assert_not_awaited()
         self.assertIn("```", out)
-        self.assertIn("│", out)
+        self.assertIn("方案", out)
+        self.assertIn("已上线", out)
 
     async def test_long_table_goes_to_telegraph(self):
         # Over threshold: whole body (tables included) is one Telegraph page.

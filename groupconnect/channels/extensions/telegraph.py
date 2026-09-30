@@ -119,18 +119,20 @@ def table_rows_to_preformatted_text(
     data_rows: List[List[str]],
     max_col_width: Optional[int] = None,
 ) -> str:
-    """Render a table as an open-ended monospace table for Telegraph and Telegram.
+    """Render a table as a clean, borderless monospace table (WeChat-style).
 
-    - Preserves native halfwidth ASCII characters and spaces (no fullwidth distortion).
-    - Uses display width (CJK/Emoji = 2, ASCII = 1) for column alignment.
-    - Wraps long cells on natural word boundaries (spaces, slashes, punctuation).
-    - Uses open-ended rows (no right closing border) to prevent cumulative pixel drift.
-    - Dynamically adapts column widths to fit mobile screens (<= 33 chars) without horizontal scrolling.
-    - Tailors horizontal divider width to actual rendered text, eliminating trailing blank line artifacts.
+    - No vertical lines (│) or crosses (┼); columns are separated by clean whitespace gaps.
+    - Every column is strictly left-aligned at its designated horizontal offset.
+    - Clean horizontal divider rules (───) separate headers and multi-line rows.
+    - Natural halfwidth ASCII numbers/English preserved without distortion.
+    - Dynamic mobile budgeting guarantees tables stay within screen width (<= 34 chars).
     """
     if not data_rows:
         return ""
-    num_cols = max([len(headers)] + [len(r) for r in data_rows])
+    if not headers:
+        num_cols = len(data_rows[0]) if data_rows else 0
+    else:
+        num_cols = len(headers)
     if num_cols == 0:
         return ""
 
@@ -143,34 +145,41 @@ def table_rows_to_preformatted_text(
 
     natural_w = [max(_display_width(str(r[i]).strip()) for r in all_rows) for i in range(num_cols)]
 
+    gap = "  " if num_cols >= 3 else "   "
+    gap_w = _display_width(gap)
+
     if max_col_width is not None and max_col_width > 0:
         col_w = [max(min(nw, max_col_width), 1) for nw in natural_w]
     else:
-        # Smart mobile-first budget (target total width <= 33 characters)
+        # Smart mobile-first budget (target total width <= 34 characters)
         if num_cols == 1:
             col_w = [min(natural_w[0], 32)]
         elif num_cols == 2:
-            # 2 columns: divider takes 3 chars (" │ "). Target safe screen width <= 33.
-            # Col 0 (key/title): capped at 12 to keep divider '┼' near ~38% (center-left)
-            w0 = min(natural_w[0], 12)
-            rem = max(30 - w0, 14)
-            w1 = min(natural_w[1], rem)
-            col_w = [max(w0, 1), max(w1, 1)]
+            # 2 columns: target safe width <= 34
+            nw0, nw1 = natural_w[0], natural_w[1]
+            if nw0 + gap_w + nw1 <= 34:
+                col_w = [max(nw0, 1), max(nw1, 1)]
+            else:
+                w0 = min(nw0, 12)
+                rem = max(34 - gap_w - w0, 14)
+                w1 = min(nw1, rem)
+                col_w = [max(w0, 1), max(w1, 1)]
         elif num_cols == 3:
-            # 3 columns: 2 dividers take 6 chars. Target safe width <= 34.
-            col_w = [max(min(nw, 10), 1) for nw in natural_w]
+            # 3 columns: target safe width <= 34
+            total_nat = sum(natural_w) + gap_w * 2
+            if total_nat <= 34:
+                col_w = [max(nw, 1) for nw in natural_w]
+            else:
+                col_w = [max(min(nw, 10), 1) for nw in natural_w]
         else:
             col_w = [max(min(nw, 8), 1) for nw in natural_w]
 
-    any_wrapped = False
-    max_last_w = _display_width(norm_headers[-1])
+    max_table_w = 0
 
     def _render_row(cells: List[str]) -> Tuple[List[str], bool]:
-        nonlocal any_wrapped, max_last_w
+        nonlocal max_table_w
         wrapped = [_wrap_cell(str(cells[i]).strip(), col_w[i]) for i in range(num_cols)]
         height = max(len(w) for w in wrapped)
-        if height > 1:
-            any_wrapped = True
         sublines = []
         for h in range(height):
             parts = []
@@ -180,29 +189,28 @@ def table_rows_to_preformatted_text(
                     parts.append(_pad_right(val, col_w[i]))
                 else:
                     parts.append(val)
-                    dw = _display_width(val)
-                    if dw > max_last_w:
-                        max_last_w = dw
-            # Drop trailing empty columns to prevent dangling ' │'
             while len(parts) > 1 and not parts[-1].strip():
                 parts.pop()
-            sublines.append(" │ ".join(parts).rstrip())
+            line = gap.join(parts).rstrip()
+            sublines.append(line)
+            dw = _display_width(line)
+            if dw > max_table_w:
+                max_table_w = dw
         return sublines, height > 1
 
     h_lines, _ = _render_row(norm_headers)
     rendered_data = [_render_row(r) for r in norm_data]
 
-    # Separator: last column width strictly matches actual rendered content
-    sep_parts = ["─" * col_w[i] for i in range(num_cols - 1)] + ["─" * max(max_last_w, 1)]
-    separator = "─┼─".join(sep_parts)
+    sep = "─" * max(max_table_w, 1)
 
     lines = []
     lines.extend(h_lines)
-    lines.append(separator)
+    lines.append(sep)
 
+    any_wrapped = any(is_w for _, is_w in rendered_data)
     for idx, (r_lines, _) in enumerate(rendered_data):
         if any_wrapped and idx > 0:
-            lines.append(separator)
+            lines.append(sep)
         lines.extend(r_lines)
 
     return "\n".join(lines)
