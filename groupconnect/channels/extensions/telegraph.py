@@ -577,11 +577,13 @@ def extract_first_paragraph(text: str, max_chars: int = 60) -> str:
 AUTO_TELEGRAPH_THRESHOLD = 100
 
 
-def _strip_code_blocks(text: str) -> str:
-    """Remove fenced code blocks entirely for threshold measurement."""
+def _strip_blockquotes(text: str) -> str:
+    """Remove Markdown blockquote lines (lines starting with '>') for threshold measurement."""
     if not text:
         return ""
-    s = re.sub(r"```[a-zA-Z0-9_-]*\n?.*?```", "", text, flags=re.DOTALL)
+    s = re.sub(r"(?m)^[ \t]*>.*$", "", text)
+    # Collapse blank lines left behind by removed quote lines
+    s = re.sub(r"\n{3,}", "\n\n", s)
     return s.strip()
 
 
@@ -592,7 +594,7 @@ async def process_outbound_text(
 ) -> str:
     """
     Process outbound reply text:
-    1. If threshold > 0 and len(reply_text) > threshold, publish to Telegraph.
+    1. If threshold > 0 and len(text excluding blockquotes) > threshold, publish to Telegraph.
        The first paragraph is prepended before the link, keeping natural conversational context in chat.
        Tables within the body render as fullwidth-aligned preformatted code
        cards (Instant View "black code block" style, aligned on every device).
@@ -602,9 +604,9 @@ async def process_outbound_text(
     if not reply_text:
         return reply_text
 
-    # 1. Unified threshold: if text (excluding code blocks) exceeds threshold,
-    #    publish to Telegraph. Code blocks don't count toward the length check.
-    is_over_threshold = threshold > 0 and len(_strip_code_blocks(reply_text)) > threshold
+    # 1. Unified threshold: if text (excluding blockquotes) exceeds threshold,
+    #    publish to Telegraph. Blockquotes don't count toward the length check.
+    is_over_threshold = threshold > 0 and len(_strip_blockquotes(reply_text)) > threshold
 
     if is_over_threshold:
         title = extract_title(reply_text, default_author=author_name)
