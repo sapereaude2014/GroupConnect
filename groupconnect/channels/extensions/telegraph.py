@@ -458,6 +458,32 @@ def extract_title(text: str, default_author: str = "GroupConnect") -> str:
     return f"{default_author} 详细汇报"
 
 
+def extract_first_paragraph(text: str) -> str:
+    """Extract the first natural paragraph from text to place before the Telegraph link."""
+    if not text or not text.strip():
+        return ""
+    stripped = text.strip()
+    # If text starts with structured content (table/code), do not extract as natural intro
+    if stripped.startswith(("|", "```")):
+        return ""
+    # Try splitting by paragraph break (\n\n)
+    if "\n\n" in stripped:
+        p0 = stripped.split("\n\n", 1)[0].strip()
+        if p0 and not p0.startswith(("|", "```")) and len(p0) <= 600:
+            return p0
+    # Try splitting by single newline if first line is a clean conversational line
+    if "\n" in stripped:
+        l0 = stripped.split("\n", 1)[0].strip()
+        if (
+            l0
+            and not l0.startswith(("|", "```", "#", "- ", "* ", "> "))
+            and not re.match(r"^\d+\.\s+", l0)
+            and len(l0) <= 140
+        ):
+            return l0
+    return ""
+
+
 async def process_outbound_text(
     reply_text: str,
     threshold: int = 60,
@@ -466,6 +492,7 @@ async def process_outbound_text(
     """
     Process outbound reply text:
     1. If threshold > 0 and len(reply_text) > threshold, publish to Telegraph.
+       The first paragraph is prepended before the link, keeping natural conversational context in chat.
        Tables within the body render as fullwidth-aligned preformatted code
        cards (Instant View "black code block" style, aligned on every device).
     2. Graceful fallback on any failure returns original text (tables fall
@@ -483,6 +510,9 @@ async def process_outbound_text(
         title = extract_title(reply_text, default_author=author_name)
         url = await publish_to_telegraph(reply_text, title=title, author_name=author_name)
         if url:
+            first_p = extract_first_paragraph(reply_text)
+            if first_p:
+                return f"{first_p}\n\n📄 [{title}]({url})"
             return f"📄 [{title}]({url})"
         else:
             logger.warning("[Telegraph] Auto-telegraph publish failed, falling back to expandable blockquote")

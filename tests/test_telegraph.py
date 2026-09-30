@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 from groupconnect.channels.extensions import telegraph as tg
 from groupconnect.channels.extensions.telegraph import (
     _to_fullwidth,
+    extract_first_paragraph,
     extract_title,
     has_markdown_table,
     markdown_to_nodes,
@@ -162,6 +163,36 @@ class TestOutboundTableRouting(unittest.IsolatedAsyncioTestCase):
         ):
             out = await tg.process_outbound_text(long_text, threshold=60)
         self.assertIn("https://telegra.ph/z", out)
+
+    async def test_first_paragraph_prepended_before_telegraph_link(self):
+        intro = "核心结论：四道闹钟已全部撤销。"
+        body = "详细执行日志说明：\n- 闹钟1: 07:00 已删除\n- 闹钟2: 07:30 已删除\n" * 5
+        full_text = f"{intro}\n\n{body}"
+        with patch.object(
+            tg, "publish_to_telegraph", AsyncMock(return_value="https://telegra.ph/alarm123")
+        ):
+            out = await tg.process_outbound_text(full_text, threshold=60)
+        self.assertTrue(out.startswith(intro))
+        self.assertIn("📄 [", out)
+        self.assertIn("https://telegra.ph/alarm123", out)
+
+
+class TestExtractFirstParagraph(unittest.TestCase):
+    def test_extract_paragraph_with_blank_line(self):
+        text = "结论：任务已完成。\n\n详细步骤：\n1. 编译代码\n2. 运行测试"
+        self.assertEqual(extract_first_paragraph(text), "结论：任务已完成。")
+
+    def test_extract_paragraph_with_single_newline(self):
+        text = "好的，这是查询结果：\n- 项目A\n- 项目B"
+        self.assertEqual(extract_first_paragraph(text), "好的，这是查询结果：")
+
+    def test_no_extract_for_table(self):
+        text = "| 序号 | 名称 |\n| --- | --- |\n| 1 | 测试 |"
+        self.assertEqual(extract_first_paragraph(text), "")
+
+    def test_no_extract_for_code_block(self):
+        text = "```python\nprint(1)\n```\n其余内容"
+        self.assertEqual(extract_first_paragraph(text), "")
 
 
 class TestExtractTitle(unittest.TestCase):
