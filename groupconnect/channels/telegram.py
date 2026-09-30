@@ -362,7 +362,7 @@ class TelegramChannel(BaseChannel):
         numbered sequence (1, 2, 3, 4, 5...).
         This converts:
         - Indented bullets (leading whitespace + [-*+]) to unicode bullet '• '
-        - Indented ordered list items (leading whitespace + \d+.) to '(\d+) '
+        - Indented ordered list items (leading whitespace + \\d+.) to '(\d+) '
         Fenced code blocks, top-level lists, and horizontal rules are untouched.
         """
         if not text:
