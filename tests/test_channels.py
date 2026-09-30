@@ -54,10 +54,7 @@ class TestTelegramChannelOutbound(unittest.IsolatedAsyncioTestCase):
     async def test_short_reply_sent_directly(self):
         cfg = GatewayConfig({
             "platform": "telegram",
-            "bot_token": "mock_token",
-            "channel_options": {
-                "auto_telegraph_threshold": 60
-            }
+            "bot_token": "mock_token"
         })
         channel = TelegramChannel(cfg, AsyncMock())
         channel._api_call = AsyncMock(return_value={"ok": True, "result": {"message_id": 123}})
@@ -76,10 +73,7 @@ class TestTelegramChannelOutbound(unittest.IsolatedAsyncioTestCase):
     async def test_long_reply_auto_telegraph(self):
         cfg = GatewayConfig({
             "platform": "telegram",
-            "bot_token": "mock_token",
-            "channel_options": {
-                "auto_telegraph_threshold": 20
-            }
+            "bot_token": "mock_token"
         })
         channel = TelegramChannel(cfg, AsyncMock())
         channel._api_call = AsyncMock(return_value={"ok": True, "result": {"message_id": 456}})
@@ -101,10 +95,7 @@ class TestTelegramChannelOutbound(unittest.IsolatedAsyncioTestCase):
     async def test_fallback_blockquote_uses_html(self):
         cfg = GatewayConfig({
             "platform": "telegram",
-            "bot_token": "mock_token",
-            "channel_options": {
-                "auto_telegraph_threshold": 20
-            }
+            "bot_token": "mock_token"
         })
         channel = TelegramChannel(cfg, AsyncMock())
         channel._api_call = AsyncMock(return_value={"ok": True, "result": {"message_id": 789}})

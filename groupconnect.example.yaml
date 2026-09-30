@@ -19,8 +19,6 @@ bots:
     username: "coder_bot"               # Platform handle without '@' (used to match @mentions, load {username}.md soul file, and route Zero-@ decisions)
     platform: telegram                  # Chat platform: telegram | discord | slack | feishu | wecom
     token: "${CODER_BOT_TOKEN}"         # Platform bot token (referenced from .env)
-    options:
-      auto_telegraph_threshold: 60      # Auto-fold long replies exceeding N lines into Telegraph articles or expandable blockquotes
     role: "Code authoring, debugging, automated testing, and server maintenance."  # Responsibility summary (injected into Zero-@ classifier prompt to route matching topics)
     aliases:                            # Natural-language wake words (calling any alias in group chat without '@' immediately routes to this bot)
       - "coder"
@@ -61,8 +59,6 @@ bots:
     username: "reviewer_bot"
     platform: telegram
     token: "${REVIEWER_BOT_TOKEN}"
-    options:
-      auto_telegraph_threshold: 60
     role: "Architecture design, code review, security auditing, and technical documentation."
     aliases:
       - "reviewer"

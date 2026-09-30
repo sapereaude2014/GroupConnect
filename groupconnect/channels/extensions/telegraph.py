@@ -539,9 +539,15 @@ def extract_first_paragraph(text: str, max_chars: int = 60) -> str:
     return candidate[:max_chars].rstrip("，、；： \\") + "…"
 
 
+# Fold replies longer than this many characters into a Telegraph page.
+# Hard-coded (not config-exposed) to keep the config surface minimal;
+# tests may pass an explicit threshold to exercise other boundaries.
+AUTO_TELEGRAPH_THRESHOLD = 100
+
+
 async def process_outbound_text(
     reply_text: str,
-    threshold: int = 60,
+    threshold: int = AUTO_TELEGRAPH_THRESHOLD,
     author_name: str = "GroupConnect"
 ) -> str:
     """

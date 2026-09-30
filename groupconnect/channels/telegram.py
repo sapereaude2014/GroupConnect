@@ -150,13 +150,8 @@ class TelegramChannel(BaseChannel):
         else:
             # Outbound Text Processing (Telegraph auto-publisher for long text / tables)
             try:
-                threshold = opts.get("auto_telegraph_threshold", 60)
                 author_name = opts.get("telegraph_author_name", getattr(self.config, "bot_name", "GroupConnect"))
-                text = await process_outbound_text(
-                    reply_text=text,
-                    threshold=threshold,
-                    author_name=author_name
-                )
+                text = await process_outbound_text(reply_text=text, author_name=author_name)
             except Exception as e:
                 logger.warning(f"Error in process_outbound_text: {e}")
 
@@ -362,7 +357,7 @@ class TelegramChannel(BaseChannel):
         numbered sequence (1, 2, 3, 4, 5...).
         This converts:
         - Indented bullets (leading whitespace + [-*+]) to unicode bullet '• '
-        - Indented ordered list items (leading whitespace + \\d+.) to '(\d+) '
+        - Indented ordered list items (leading whitespace + \\d+.) to '(\\d+) '
         Fenced code blocks, top-level lists, and horizontal rules are untouched.
         """
         if not text:
