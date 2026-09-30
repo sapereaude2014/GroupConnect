@@ -87,6 +87,136 @@ class FeishuChannel(BaseChannel):
             return self._token
         raise RuntimeError(f"Failed to get Feishu tenant_access_token: {data}")
 
+    @staticmethod
+    def _has_markdown(text: str) -> bool:
+        """Detects whether the text contains Markdown formatting that Feishu
+        text messages cannot render (warrants an interactive card)."""
+        import re
+        # Bold / italic / strikethrough
+        if re.search(r"\*\*[^*]+\*\*|__[^_]+__|~~[^~]+~~", text):
+            return True
+        # Headers (# / ## / ###) at line start
+        if re.search(r"^#{1,4}\s+\S", text, re.MULTILINE):
+            return True
+        # Code fences
+        if "```" in text:
+            return True
+        # Lists (- item / 1. item)
+        if re.search(r"^\s*[-*]\s+\S|^\s*\d+\.\s+\S", text, re.MULTILINE):
+            return True
+        # Tables
+        if re.search(r"^\|.+\|$", text, re.MULTILINE):
+            return True
+        # Blockquotes
+        if re.search(r"^>\s+\S", text, re.MULTILINE):
+            return True
+        return False
+
+    @staticmethod
+    def _markdown_to_card(text: str) -> dict:
+        """Converts Markdown text into a Feishu interactive card structure.
+
+        Feishu's markdown element supports bold/italic/lists/code/quotes/links
+        but renders headers and tables poorly, so:
+        - Headers become bold lines
+        - Tables become code blocks (preserve alignment)
+        - Long content is split into multiple markdown elements
+        """
+        import re
+
+        lines = text.split("\n")
+        processed: list = []
+        in_code_block = False
+        in_table = False
+        table_buffer: list = []
+        code_buffer: list = []
+
+        def _flush_table():
+            nonlocal table_buffer, in_table
+            if table_buffer:
+                table_text = "\n".join(table_buffer)
+                processed.append({"tag": "markdown", "content": table_text})
+                table_buffer = []
+                in_table = False
+
+        def _flush_code():
+            nonlocal code_buffer, in_code_block
+            if code_buffer:
+                block = "```\n" + "\n".join(code_buffer) + "\n```"
+                processed.append({"tag": "markdown", "content": block})
+                code_buffer = []
+                in_code_block = False
+
+        text_buffer: list = []
+
+        def _flush_text():
+            nonlocal text_buffer
+            if text_buffer:
+                processed.append({"tag": "markdown", "content": "\n".join(text_buffer)})
+                text_buffer = []
+
+        for line in lines:
+            stripped = line.strip()
+
+            # Code fence handling
+            if stripped.startswith("```"):
+                if in_code_block:
+                    _flush_code()
+                else:
+                    _flush_text()
+                    _flush_table()
+                    in_code_block = True
+                continue
+            if in_code_block:
+                code_buffer.append(line)
+                continue
+
+            # Table detection: consecutive lines starting and ending with |
+            if stripped.startswith("|") and stripped.endswith("|") and len(stripped) > 2:
+                _flush_text()
+                in_table = True
+                # Drop separator rows like |---|---|
+                if re.match(r"^\|[\s:|-]+\|$", stripped):
+                    continue
+                table_buffer.append(stripped)
+                continue
+            elif in_table:
+                _flush_table()
+
+            # Headers: # / ## / ### become bold lines (markdown element
+            # doesn't render # headers reliably)
+            m = re.match(r"^(#{1,4})\s+(.+)$", stripped)
+            if m:
+                _flush_text()
+                processed.append({"tag": "hr"})
+                processed.append({"tag": "markdown", "content": f"**{m.group(2).strip()}**"})
+                continue
+
+            text_buffer.append(line)
+
+        _flush_text()
+        _flush_table()
+        _flush_code()
+
+        # Merge consecutive markdown elements to reduce element count
+        merged: list = []
+        for el in processed:
+            if (merged and el["tag"] == "markdown"
+                    and merged[-1]["tag"] == "markdown"
+                    and "hr" not in merged[-1].get("tag", "")):
+                merged[-1]["content"] += "\n" + el["content"]
+            else:
+                merged.append(el)
+
+        # Ensure at least one element exists
+        if not merged:
+            merged.append({"tag": "markdown", "content": text})
+
+        return {
+            "config": {"wide_screen_mode": True, "enable_forward": True},
+            "elements": merged,
+        }
+
     async def send_reply(
         self,
         chat_id: Union[int, str],
@@ -103,11 +233,19 @@ class FeishuChannel(BaseChannel):
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json; charset=utf-8"}
 
         url = f"{self.api_base}/open-apis/im/v1/messages?receive_id_type=chat_id"
-        payload = {
-            "receive_id": str(chat_id),
-            "msg_type": "text",
-            "content": json.dumps({"text": text}, ensure_ascii=False)
-        }
+        if self._has_markdown(text):
+            card = self._markdown_to_card(text)
+            payload = {
+                "receive_id": str(chat_id),
+                "msg_type": "interactive",
+                "content": json.dumps(card, ensure_ascii=False)
+            }
+        else:
+            payload = {
+                "receive_id": str(chat_id),
+                "msg_type": "text",
+                "content": json.dumps({"text": text}, ensure_ascii=False)
+            }
         if reply_to_msg_id:
             payload["reply_in_thread"] = False
 
@@ -115,6 +253,18 @@ class FeishuChannel(BaseChannel):
         data = resp.json()
         if data.get("code") == 0:
             return data["data"]["message_id"]
+        # Card send failed; degrade to plain text so the reply is not lost
+        if payload["msg_type"] == "interactive":
+            logger.warning(f"[Feishu] Card send failed ({data.get('msg')}); falling back to text")
+            fallback = {
+                "receive_id": str(chat_id),
+                "msg_type": "text",
+                "content": json.dumps({"text": text}, ensure_ascii=False)
+            }
+            resp = await self.client.post(url, headers=headers, json=fallback)
+            data = resp.json()
+            if data.get("code") == 0:
+                return data["data"]["message_id"]
         logger.error(f"[Feishu] Send message failed: {data}")
         return None
 
