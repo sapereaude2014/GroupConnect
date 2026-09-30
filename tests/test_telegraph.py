@@ -211,6 +211,16 @@ class TestExtractFirstParagraph(unittest.TestCase):
         text = "# 2026年三亚度假行程规划\n\n详细安排如下：抵达海棠湾入住酒店。\n\n第二天去蜈支洲岛。"
         self.assertEqual(extract_first_paragraph(text), "详细安排如下：抵达海棠湾入住酒店。")
 
+    def test_strip_markdown_links_and_formatting_in_preview(self):
+        text = "本总管方才特意调阅验真了小马哥（@Zheng Ma）的最新改动（[`489a7cce4e`](https://github.com/sapereaude2014/GroupConnect/commit/489a7cce4e27cf1009fc40348ccf64068540e7fe)），这版改得不仅巧妙，而且真正拿捏住了手机端阅读的“黄金屏占比”！\n\n后续详情..."
+        result = extract_first_paragraph(text)
+        # Markdown link syntax must be stripped and not cut in half
+        self.assertNotIn("https://github.com", result)
+        self.assertNotIn("[", result)
+        self.assertNotIn("]", result)
+        self.assertIn("489a7cce4e", result)
+        self.assertTrue(result.endswith("…"))
+
 
 class TestExtractTitle(unittest.TestCase):
     def test_extract_markdown_h1(self):

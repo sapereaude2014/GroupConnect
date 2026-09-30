@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import unicodedata
+import urllib.parse
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
@@ -458,6 +459,32 @@ def extract_title(text: str, default_author: str = "GroupConnect") -> str:
     return f"{default_author} 详细汇报"
 
 
+def _clean_markdown_for_preview(text: str) -> str:
+    """Clean rich markdown syntax from snippet so truncation never cuts entities in half."""
+    if not text:
+        return ""
+    # Strip markdown images and links -> keep link anchor text only
+    s = re.sub(r"!\[([^\]]*)\]\([^)]+\)", r"\1", text)
+    s = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", s)
+    # Strip code fences and inline backticks
+    s = re.sub(r"```[a-zA-Z0-9_-]*\n?(.*?)```", r"\1", s, flags=re.DOTALL)
+    s = re.sub(r"`([^`]+)`", r"\1", s)
+    # Strip bold / italic markers
+    s = re.sub(r"\*\*([^*]+)\*\*", r"\1", s)
+    s = re.sub(r"\*([^*]+)\*", r"\1", s)
+    s = re.sub(r"__([^_]+)__", r"\1", s)
+    s = re.sub(r"_([^_]+)_", r"\1", s)
+    # Replace raw square brackets with fullwidth brackets to avoid broken markdown entities
+    s = s.replace("[", "【").replace("]", "】")
+    # Remove stray markdown symbols that could leave unclosed delimiters
+    s = s.replace("*", "").replace("`", "")
+    # Escape underscores so function names/variables don't trigger italic parsing in Telegram
+    s = re.sub(r"(?<!\\)_", r"\\_", s)
+    # Collapse multiple whitespaces
+    s = re.sub(r"[ \t]+", " ", s)
+    return s.strip()
+
+
 def extract_first_paragraph(text: str, max_chars: int = 60) -> str:
     """Extract the first natural paragraph/snippet from text (up to max_chars) to place before Telegraph link."""
     if not text or not text.strip():
@@ -502,9 +529,14 @@ def extract_first_paragraph(text: str, max_chars: int = 60) -> str:
     if not candidate or candidate.startswith(("|", "```")):
         return ""
 
+    # Strip rich markdown syntax before length check and truncation
+    candidate = _clean_markdown_for_preview(candidate)
+    if not candidate:
+        return ""
+
     if len(candidate) <= max_chars:
         return candidate
-    return candidate[:max_chars].rstrip("，、；： ") + "…"
+    return candidate[:max_chars].rstrip("，、；： \\") + "…"
 
 
 async def process_outbound_text(
@@ -531,12 +563,14 @@ async def process_outbound_text(
 
     if is_over_threshold:
         title = extract_title(reply_text, default_author=author_name)
-        url = await publish_to_telegraph(reply_text, title=title, author_name=author_name)
+        safe_title = title.replace("[", "【").replace("]", "】").strip()
+        url = await publish_to_telegraph(reply_text, title=safe_title, author_name=author_name)
         if url:
+            safe_url = urllib.parse.quote(url, safe=":/%#?=@[]!$&'()*+,;")
             first_p = extract_first_paragraph(reply_text)
             if first_p:
-                return f"{first_p}\n\n📄 [{title}]({url})"
-            return f"📄 [{title}]({url})"
+                return f"{first_p}\n\n📄 [{safe_title}]({safe_url})"
+            return f"📄 [{safe_title}]({safe_url})"
         else:
             logger.warning("[Telegraph] Auto-telegraph publish failed, falling back to expandable blockquote")
             if has_markdown_table(reply_text):
