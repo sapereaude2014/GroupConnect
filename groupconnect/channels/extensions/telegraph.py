@@ -404,7 +404,7 @@ def markdown_to_nodes(md_text: str) -> List[Any]:
         soup = BeautifulSoup(html, 'html.parser')
 
         # Auto-link bare URLs into clickable <a> tags (excluding code/pre and existing links)
-        url_re = re.compile(r'(https?://[^\s<>\"\'\(\)\uff08\uff09\u3002\uff0c\uff1b\uff01\uff1f]+)')
+        url_re = re.compile(r'(https?://[^\s<>\"\'\(\)\uff08\uff09\u3001\u3002\uff0c\uff1a\uff1b\uff01\uff1f]+)')
         for text_node in list(soup.find_all(string=True)):
             if text_node.find_parent(['a', 'pre', 'code']):
                 continue
