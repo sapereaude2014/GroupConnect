@@ -264,5 +264,51 @@ class TestExtractTitle(unittest.TestCase):
         self.assertEqual(extract_title("", default_author="管家"), "管家 详细汇报")
 
 
+class TestTelegraphAutolink(unittest.TestCase):
+    def test_bare_url_autolinked(self):
+        text = "全文：https://telegra.ph/morning-brief-1001 请查收"
+        nodes = markdown_to_nodes(text)
+        # Should have an 'a' tag node with correct href and children
+        p_node = nodes[0]
+        self.assertEqual(p_node["tag"], "p")
+        a_nodes = [c for c in p_node["children"] if isinstance(c, dict) and c.get("tag") == "a"]
+        self.assertEqual(len(a_nodes), 1)
+        self.assertEqual(a_nodes[0]["attrs"]["href"], "https://telegra.ph/morning-brief-1001")
+        self.assertEqual(a_nodes[0]["children"], ["https://telegra.ph/morning-brief-1001"])
+        # Check text before and after is not truncated
+        self.assertIn("全文：", p_node["children"])
+        self.assertIn(" 请查收", p_node["children"])
+
+    def test_chinese_punctuation_preserved_outside_link(self):
+        text = "链接：https://telegra.ph/test-slug。还有：https://github.com/repo，请查看！"
+        nodes = markdown_to_nodes(text)
+        p_node = nodes[0]
+        a_nodes = [c for c in p_node["children"] if isinstance(c, dict) and c.get("tag") == "a"]
+        self.assertEqual(len(a_nodes), 2)
+        self.assertEqual(a_nodes[0]["attrs"]["href"], "https://telegra.ph/test-slug")
+        self.assertEqual(a_nodes[1]["attrs"]["href"], "https://github.com/repo")
+        self.assertIn("。还有：", p_node["children"])
+        self.assertIn("，请查看！", p_node["children"])
+
+    def test_urls_in_code_blocks_not_linked(self):
+        text = "```\nhttps://example.com/code\n```"
+        nodes = markdown_to_nodes(text)
+        self.assertEqual(nodes[0]["tag"], "pre")
+        # In pre/code tag, no 'a' tag should be created
+        code_tag = nodes[0]["children"][0]
+        self.assertEqual(code_tag["tag"], "code")
+        self.assertIn("https://example.com/code", code_tag["children"][0])
+
+    def test_existing_markdown_links_not_double_wrapped(self):
+        text = "[官方文档](https://telegra.ph/official-doc)"
+        nodes = markdown_to_nodes(text)
+        p_node = nodes[0]
+        a_nodes = [c for c in p_node["children"] if isinstance(c, dict) and c.get("tag") == "a"]
+        self.assertEqual(len(a_nodes), 1)
+        self.assertEqual(a_nodes[0]["attrs"]["href"], "https://telegra.ph/official-doc")
+        self.assertEqual(a_nodes[0]["children"], ["官方文档"])
+
+
 if __name__ == "__main__":
     unittest.main()
+

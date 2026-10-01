@@ -402,6 +402,30 @@ def markdown_to_nodes(md_text: str) -> List[Any]:
 
         html = markdown.markdown(md_text, extensions=['tables', 'fenced_code', 'nl2br'])
         soup = BeautifulSoup(html, 'html.parser')
+
+        # Auto-link bare URLs into clickable <a> tags (excluding code/pre and existing links)
+        url_re = re.compile(r'(https?://[^\s<>\"\'\(\)\uff08\uff09\u3002\uff0c\uff1b\uff01\uff1f]+)')
+        for text_node in list(soup.find_all(string=True)):
+            if text_node.find_parent(['a', 'pre', 'code']):
+                continue
+            text = str(text_node)
+            parts = url_re.split(text)
+            if len(parts) > 1:
+                from bs4 import NavigableString
+                new_nodes = []
+                for part in parts:
+                    if url_re.match(part):
+                        url = part.rstrip('.,;:')
+                        trailing = part[len(url):]
+                        a_tag = soup.new_tag('a', href=url)
+                        a_tag.string = url
+                        new_nodes.append(a_tag)
+                        if trailing:
+                            new_nodes.append(NavigableString(trailing))
+                    elif part:
+                        new_nodes.append(NavigableString(part))
+                text_node.replace_with(*new_nodes)
+
         root_nodes = []
         for child in soup.children:
             node = _tag_to_node(child)
