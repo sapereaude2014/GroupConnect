@@ -356,6 +356,22 @@ def _tag_to_node(element: Any) -> Any:
             return None
         return {"tag": "pre", "children": [pre_text]}
 
+    if tag_name in ('br', 'hr', 'img'):
+        node: Dict[str, Any] = {'tag': tag_name}
+        if tag_name == 'img' and element.get('src'):
+            node['attrs'] = {'src': element['src']}
+        child_nodes = []
+        for child in element.children:
+            child_node = _tag_to_node(child)
+            if child_node:
+                if isinstance(child_node, list):
+                    child_nodes.extend(child_node)
+                else:
+                    child_nodes.append(child_node)
+        if child_nodes:
+            return [node] + child_nodes
+        return node
+
     if tag_name not in ALLOWED_TAGS:
         children = []
         for child in element.children:
@@ -401,6 +417,8 @@ def markdown_to_nodes(md_text: str) -> List[Any]:
         md_text = re.sub(r'^[ \t]*-[ \t]+\[[xX]\][ \t]+', '- ✅ ', md_text, flags=re.MULTILINE)
 
         html = markdown.markdown(md_text, extensions=['tables', 'fenced_code', 'nl2br'])
+        # Normalize raw unclosed <br> to self-closing <br/> to avoid html.parser tag-nesting bug
+        html = re.sub(r'<br\s*/?>', '<br/>', html, flags=re.IGNORECASE)
         soup = BeautifulSoup(html, 'html.parser')
 
         # Auto-link bare URLs into clickable <a> tags (excluding code/pre and existing links)

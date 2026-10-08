@@ -309,6 +309,31 @@ class TestTelegraphAutolink(unittest.TestCase):
         self.assertEqual(a_nodes[0]["children"], ["官方文档"])
 
 
+class TestVoidTagNestingFix(unittest.TestCase):
+    def test_br_in_table_does_not_swallow_subsequent_content(self):
+        text = """| 标题 | 内容 |
+| --- | --- |
+| 项目 | 规则<br>• 说明一<br>• 说明二 |
+
+---
+
+💡 **今日温馨提醒**：
+1. **下班时间**：建议 18:02 离岗；
+2. **爱车别忘了**：去三林东站接车！"""
+        nodes = markdown_to_nodes(text)
+        last_node = nodes[-1]
+        self.assertEqual(last_node["tag"], "p")
+        # Ensure 'br' is never a container with children
+        for child in last_node["children"]:
+            if isinstance(child, dict) and child.get("tag") == "br":
+                self.assertNotIn("children", child)
+        # Ensure all reminder texts exist
+        full_text_in_node = str(last_node)
+        self.assertIn("今日温馨提醒", full_text_in_node)
+        self.assertIn("下班时间", full_text_in_node)
+        self.assertIn("爱车别忘了", full_text_in_node)
+
+
 if __name__ == "__main__":
     unittest.main()
 
