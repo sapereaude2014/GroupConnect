@@ -101,5 +101,80 @@ class TestTeleAgentOutputGuard(unittest.TestCase):
         self.assertEqual(cid, "ses_test123")
 
 
+# Fake worker that sleeps long enough for the test to /stop it mid-run.
+_SLEEP_WORKER = """#!/bin/sh
+sleep 30
+"""
+
+# Records invocation count so we can assert the revival fallback never ran.
+_COUNTING_WORKER = """#!/bin/sh
+echo "$GC_TURN" >> "%s"
+sleep 30
+"""
+
+
+class TestTeleAgentStopNoRevival(unittest.TestCase):
+    """Regression: /stop SIGKILL on a resumed-session worker used to be
+    mistaken by execute_turn's crash-revival fallback for a crashed session,
+    which respawned a fresh worker — the bot kept running after /stop."""
+
+    def _make_worker(self, body: str) -> str:
+        fd, path = tempfile.mkstemp(suffix=".sh")
+        with os.fdopen(fd, "w") as f:
+            f.write(body)
+        os.chmod(path, os.stat(path).st_mode | stat.S_IEXEC)
+        self.addCleanup(os.remove, path)
+        return path
+
+    def _make_adapter(self, worker: str) -> TeleAgentAdapter:
+        return TeleAgentAdapter(
+            teleworker_bin=worker,
+            workspace_dir=".",
+            timeout_secs=30,
+            output_grace_secs=1
+        )
+
+    def test_stop_killed_worker_is_not_revived(self):
+        calls = []
+        calls_file = tempfile.mktemp(suffix=".calls")
+        self.addCleanup(lambda: os.path.exists(calls_file) and os.remove(calls_file))
+        worker = self._make_worker(_COUNTING_WORKER % calls_file)
+
+        adapter = self._make_adapter(worker)
+
+        async def scenario():
+            task = asyncio.ensure_future(
+                adapter.execute_turn("工作", conversation_id="ses_abc", chat_id=7)
+            )
+            # Wait until the worker registers itself with the adapter
+            for _ in range(100):
+                if 7 in adapter.workers:
+                    break
+                await asyncio.sleep(0.05)
+            adapter.terminate(7)  # /stop lands mid-run
+            text, cid = await asyncio.wait_for(task, timeout=10)
+            return text, cid
+
+        text, cid = asyncio.run(scenario())
+        # Turn must end silently (no reply, no "Exit code -9" error message)
+        self.assertIsNone(text)
+        self.assertEqual(cid, "ses_abc")
+        # Exactly ONE worker invocation: the crash-revival fallback must not run
+        with open(calls_file) as f:
+            invocation_count = sum(1 for _ in f)
+        self.assertEqual(invocation_count, 1)
+        # Flag consumed, so a later turn for the same chat is unaffected
+        self.assertEqual(adapter._termination_requested, set())
+
+    def test_stop_with_no_live_worker_poisons_nothing(self):
+        adapter = self._make_adapter(self._make_worker(_CLEAN_WORKER))
+        adapter.terminate(7)  # no worker registered: must be a no-op
+        self.assertEqual(adapter._termination_requested, set())
+        # The very next turn must still run normally
+        text, cid = asyncio.run(adapter.execute_turn("ping", chat_id=7))
+        self.assertEqual(text, "任务完成：假想答卷")
+        self.assertEqual(cid, "ses_test123")
+
+
 if __name__ == "__main__":
     unittest.main()

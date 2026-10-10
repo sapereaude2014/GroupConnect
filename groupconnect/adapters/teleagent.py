@@ -83,6 +83,10 @@ class TeleAgentAdapter(BaseAgentAdapter):
 
         self.workers: Dict[int, Any] = {}
         self.worker_last_used: Dict[int, float] = {}
+        # Chats whose in-flight worker was intentionally killed by terminate()
+        # (e.g. /stop). Checked by execute_turn so the crash-revival fallback
+        # doesn't mistake the SIGKILL for a crashed session and respawn a worker.
+        self._termination_requested: set = set()
         self.skills_manifest = _load_skills_manifest(self.workspace_dir)
         if self.skills_manifest:
             logger.info(f"[TeleAgent] Loaded skills manifest from {self.workspace_dir}/.agents/")
@@ -252,6 +256,17 @@ class TeleAgentAdapter(BaseAgentAdapter):
             code, stdout_str, stderr_str, output_delivered = await self._invoke_subprocess(cmd, chat_id)
             text, new_cid, err_code = self._parse_teleworker_output(stdout_str)
 
+            # Intentional termination (/stop or engine reset) killed this worker.
+            # Do NOT mistake it for a crash: no revival fallback, no error spam.
+            if chat_id is not None and chat_id in self._termination_requested:
+                self._termination_requested.discard(chat_id)
+                if output_delivered and text:
+                    # /stop landed late: the complete answer was already in hand.
+                    logger.info(f"[TeleAgent] Stop requested post-delivery for chat {chat_id}; trusting delivered output")
+                    return text, (new_cid or conversation_id)
+                logger.info(f"[TeleAgent] Stop requested for chat {chat_id}; worker terminated without revival")
+                return None, conversation_id
+
             # Worker was force-killed only AFTER the complete final answer was already
             # delivered on stdout (worker hung post-output, or a /stop landed late).
             # Trust the delivered answer instead of erroring out or re-running the task.
@@ -281,6 +296,13 @@ class TeleAgentAdapter(BaseAgentAdapter):
 
                 logger.info(f"[TeleAgent] Spawning fresh fallback runner for chat {chat_id}")
                 code, stdout_str, stderr_str, output_delivered = await self._invoke_subprocess(fallback_cmd, chat_id)
+
+                # /stop arrived while the fallback worker was running
+                if chat_id is not None and chat_id in self._termination_requested:
+                    self._termination_requested.discard(chat_id)
+                    logger.info(f"[TeleAgent] Stop requested for chat {chat_id} during fallback; not reviving further")
+                    return None, conversation_id
+
                 text, new_cid, err_code = self._parse_teleworker_output(stdout_str)
 
                 if output_delivered and text:
@@ -305,6 +327,13 @@ class TeleAgentAdapter(BaseAgentAdapter):
     def terminate(self, chat_id: int) -> None:
         proc = self.workers.get(chat_id)
         if proc and proc.returncode is None:
+            # Flag BEFORE killing so execute_turn sees it after the process exits
+            # and skips the auto-restart fallback. Only set when actually killing
+            # a live worker — a no-op /stop must not poison the next turn.
+            try:
+                self._termination_requested.add(chat_id)
+            except TypeError:
+                pass  # unhashable chat_id; skip flagging
             logger.info(f"[TeleAgent] Preemptively terminating process group for chat {chat_id}")
             try:
                 os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
