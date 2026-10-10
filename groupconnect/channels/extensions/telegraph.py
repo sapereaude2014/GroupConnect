@@ -3,6 +3,7 @@ Telegraph Publishing and Outbound Auto-Formatting Utilities for GroupConnect.
 Provides seamless publishing to Telegraph for long messages and Markdown tables.
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -476,24 +477,33 @@ async def publish_to_telegraph(
         if not nodes:
             nodes = [{'tag': 'p', 'children': [content.strip()]}]
 
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            res = await client.post("https://api.telegra.ph/createPage", json={
-                "access_token": token,
-                "title": page_title,
-                "author_name": author_name[:128],
-                "content": nodes,
-                "return_content": False
-            })
-            data = res.json()
-            if data.get("ok"):
-                url = data["result"]["url"]
-                logger.info(f"[Telegraph] Successfully published '{page_title}' -> {url}")
-                return url
-            else:
-                logger.error(f"[Telegraph] API error creating page: {data}")
+        for attempt in range(2):
+            try:
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    res = await client.post("https://api.telegra.ph/createPage", json={
+                        "access_token": token,
+                        "title": page_title,
+                        "author_name": author_name[:128],
+                        "content": nodes,
+                        "return_content": False
+                    })
+                    data = res.json()
+                    if data.get("ok"):
+                        url = data["result"]["url"]
+                        logger.info(f"[Telegraph] Successfully published '{page_title}' -> {url}")
+                        return url
+                    else:
+                        logger.error(f"[Telegraph] API error creating page: {data}")
+                        return None
+            except Exception as e:
+                if attempt == 0:
+                    logger.warning(f"[Telegraph] Publish attempt 1 failed ({e}), retrying in 1s...")
+                    await asyncio.sleep(1.0)
+                    continue
+                logger.error(f"[Telegraph] Request exception while publishing: {e}")
                 return None
     except Exception as e:
-        logger.error(f"[Telegraph] Request exception while publishing: {e}")
+        logger.error(f"[Telegraph] Unexpected exception while publishing: {e}")
         return None
 
 

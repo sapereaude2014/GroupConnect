@@ -334,6 +334,34 @@ class TestVoidTagNestingFix(unittest.TestCase):
         self.assertIn("爱车别忘了", full_text_in_node)
 
 
+class TestPublishRetry(unittest.IsolatedAsyncioTestCase):
+    async def test_publish_retries_on_network_failure(self):
+        with patch("groupconnect.channels.extensions.telegraph.get_or_create_telegraph_token", return_value="fake_token"):
+            with patch("httpx.AsyncClient") as mock_client_cls:
+                mock_client = AsyncMock()
+                mock_client_cls.return_value.__aenter__.return_value = mock_client
+                mock_success_res = unittest.mock.MagicMock()
+                mock_success_res.json.return_value = {"ok": True, "result": {"url": "https://telegra.ph/test-url"}}
+                mock_client.post.side_effect = [Exception("Connection reset"), mock_success_res]
+
+                with patch("asyncio.sleep", new_callable=AsyncMock):
+                    url = await tg.publish_to_telegraph("hello world", title="test")
+                self.assertEqual(url, "https://telegra.ph/test-url")
+                self.assertEqual(mock_client.post.call_count, 2)
+
+    async def test_publish_fails_after_two_attempts(self):
+        with patch("groupconnect.channels.extensions.telegraph.get_or_create_telegraph_token", return_value="fake_token"):
+            with patch("httpx.AsyncClient") as mock_client_cls:
+                mock_client = AsyncMock()
+                mock_client_cls.return_value.__aenter__.return_value = mock_client
+                mock_client.post.side_effect = [Exception("Connection error 1"), Exception("Connection error 2")]
+
+                with patch("asyncio.sleep", new_callable=AsyncMock):
+                    url = await tg.publish_to_telegraph("hello world", title="test")
+                self.assertIsNone(url)
+                self.assertEqual(mock_client.post.call_count, 2)
+
+
 if __name__ == "__main__":
     unittest.main()
 
