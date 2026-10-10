@@ -32,6 +32,10 @@ class AntigravityAdapter(BaseAgentAdapter):
 
         self.workers: Dict[int, Any] = {}
         self.worker_last_used: Dict[int, float] = {}
+        # Chats whose in-flight worker was intentionally killed by terminate()
+        # (e.g. /stop). Checked by execute_turn so the SIGKILL exit isn't
+        # mistaken for a crash and pushed into chat as an error message.
+        self._termination_requested: set = set()
 
     async def execute_turn(
         self,
@@ -71,6 +75,15 @@ class AntigravityAdapter(BaseAgentAdapter):
             )
             stdout_str = stdout_bytes.decode("utf-8", errors="replace").strip()
             stderr_str = stderr_bytes.decode("utf-8", errors="replace").strip()
+
+            # Intentional termination (/stop) killed this worker mid-run:
+            # end the turn silently instead of reporting the kill as a crash.
+            if chat_id is not None and chat_id in self._termination_requested:
+                self._termination_requested.discard(chat_id)
+                if proc.returncode != 0:
+                    logger.info(f"[Antigravity] Stop requested for chat {chat_id}; worker terminated")
+                    return None, conversation_id
+                # Worker finished cleanly before /stop landed; fall through.
 
             if proc.returncode != 0:
                 logger.error(f"[Antigravity] Process exited with code {proc.returncode}. Stderr: {stderr_str}")
@@ -123,6 +136,10 @@ class AntigravityAdapter(BaseAgentAdapter):
     def terminate(self, chat_id: int) -> None:
         proc = self.workers.get(chat_id)
         if proc and proc.returncode is None:
+            # Flag BEFORE killing so execute_turn sees it after the process
+            # exits. Only set when actually killing a live worker — a no-op
+            # /stop must not poison the next turn.
+            self._termination_requested.add(chat_id)
             logger.info(f"[Antigravity] Preemptively terminating process group for chat {chat_id}")
             try:
                 os.killpg(os.getpgid(proc.pid), signal.SIGKILL)

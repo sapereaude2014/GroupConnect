@@ -176,5 +176,76 @@ class TestTeleAgentStopNoRevival(unittest.TestCase):
         self.assertEqual(cid, "ses_test123")
 
 
+class TestCliStopSilence(unittest.TestCase):
+    """Regression: /stop SIGKILL on CLI-harness workers (antigravity/claude/
+    codex/opencode) used to surface an "Exit code -9" error message in chat.
+    terminate() now flags the kill so execute_turn ends the turn silently."""
+
+    def _make_worker(self, body: str) -> str:
+        fd, path = tempfile.mkstemp(suffix=".sh")
+        with os.fdopen(fd, "w") as f:
+            f.write(body)
+        os.chmod(path, os.stat(path).st_mode | stat.S_IEXEC)
+        self.addCleanup(os.remove, path)
+        return path
+
+    def _stop_scenario(self, make_adapter):
+        worker = self._make_worker(_SLEEP_WORKER)
+        adapter = make_adapter(worker)
+
+        async def scenario():
+            task = asyncio.ensure_future(
+                adapter.execute_turn("工作", conversation_id="ses_abc", chat_id=7)
+            )
+            # Wait until the worker registers itself with the adapter
+            for _ in range(100):
+                procs = getattr(adapter, "workers", None) or getattr(adapter, "active_processes", None) or {}
+                if 7 in procs:
+                    break
+                await asyncio.sleep(0.05)
+            adapter.terminate(7)  # /stop lands mid-run
+            return await asyncio.wait_for(task, timeout=10)
+
+        text, cid = asyncio.run(scenario())
+        # Turn must end silently (no reply, no "Exit code -9" error message)
+        self.assertIsNone(text)
+        self.assertEqual(cid, "ses_abc")
+        # Flag consumed, so a later turn for the same chat is unaffected
+        self.assertEqual(adapter._termination_requested, set())
+
+    def _no_poison_scenario(self, make_adapter):
+        worker = self._make_worker("#!/bin/sh\necho ok\n")
+        adapter = make_adapter(worker)
+        adapter.terminate(7)  # no worker registered: must be a no-op
+        self.assertEqual(adapter._termination_requested, set())
+        # The very next turn must still run normally
+        text, _ = asyncio.run(adapter.execute_turn("ping", chat_id=7))
+        self.assertEqual(text, "ok")
+
+    def test_antigravity_stop_is_silent(self):
+        self._stop_scenario(lambda w: AntigravityAdapter(agy_bin=w, workspace_dir=".", timeout_secs=30))
+
+    def test_antigravity_stop_with_no_live_worker_poisons_nothing(self):
+        self._no_poison_scenario(lambda w: AntigravityAdapter(agy_bin=w, workspace_dir=".", timeout_secs=30))
+
+    def test_claude_stop_is_silent(self):
+        self._stop_scenario(lambda w: ClaudeCodeAdapter(claude_bin=w, workspace_dir=".", timeout_secs=30))
+
+    def test_claude_stop_with_no_live_worker_poisons_nothing(self):
+        self._no_poison_scenario(lambda w: ClaudeCodeAdapter(claude_bin=w, workspace_dir=".", timeout_secs=30))
+
+    def test_codex_stop_is_silent(self):
+        self._stop_scenario(lambda w: CodexAdapter(codex_bin=w, workspace_dir=".", timeout_secs=30))
+
+    def test_codex_stop_with_no_live_worker_poisons_nothing(self):
+        self._no_poison_scenario(lambda w: CodexAdapter(codex_bin=w, workspace_dir=".", timeout_secs=30))
+
+    def test_opencode_stop_is_silent(self):
+        self._stop_scenario(lambda w: OpenCodeAdapter(opencode_bin=w, workspace_dir=".", timeout_secs=30))
+
+    def test_opencode_stop_with_no_live_worker_poisons_nothing(self):
+        self._no_poison_scenario(lambda w: OpenCodeAdapter(opencode_bin=w, workspace_dir=".", timeout_secs=30))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -29,6 +29,10 @@ class CodexAdapter(BaseAgentAdapter):
         self.model = model
         self.timeout_secs = timeout_secs
         self.active_processes: Dict[int, Any] = {}
+        # Chats whose in-flight worker was intentionally killed by terminate()
+        # (e.g. /stop). Checked by execute_turn so the SIGKILL exit isn't
+        # mistaken for a crash and pushed into chat as an error message.
+        self._termination_requested: set = set()
 
     async def execute_turn(
         self,
@@ -84,6 +88,15 @@ class CodexAdapter(BaseAgentAdapter):
             stdout_str = stdout_bytes.decode("utf-8", errors="replace").strip()
             stderr_str = stderr_bytes.decode("utf-8", errors="replace").strip()
 
+            # Intentional termination (/stop) killed this worker mid-run:
+            # end the turn silently instead of reporting the kill as a crash.
+            if chat_id is not None and chat_id in self._termination_requested:
+                self._termination_requested.discard(chat_id)
+                if proc.returncode != 0:
+                    logger.info(f"[Codex] Stop requested for chat {chat_id}; worker terminated")
+                    return None, conversation_id
+                # Worker finished cleanly before /stop landed; fall through.
+
             if proc.returncode != 0:
                 logger.error(f"[Codex] Exited with code {proc.returncode}. Stderr: {stderr_str}")
                 return f"⚠️ OpenAI Codex error (Code {proc.returncode}):\n```\n{stderr_str or stdout_str}\n```", conversation_id
@@ -135,6 +148,10 @@ class CodexAdapter(BaseAgentAdapter):
     def terminate(self, chat_id: int) -> None:
         proc = self.active_processes.get(chat_id)
         if proc and proc.returncode is None:
+            # Flag BEFORE killing so execute_turn sees it after the process
+            # exits. Only set when actually killing a live worker — a no-op
+            # /stop must not poison the next turn.
+            self._termination_requested.add(chat_id)
             logger.info(f"[Codex] Killing process group for chat {chat_id}")
             try:
                 os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
