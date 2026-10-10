@@ -199,10 +199,14 @@ class TestTelegramChannelOutbound(unittest.IsolatedAsyncioTestCase):
 
 class TestFeishuChannelOutbound(unittest.IsolatedAsyncioTestCase):
     def _make_channel(self):
+        import tempfile
+        # Per-test temp ipc_dir so persisted fold caches don't leak between tests
+        tmpdir = tempfile.mkdtemp(prefix="feishu_test_ipc_")
         cfg = GatewayConfig({
             "platform": "feishu",
             "feishu_app_id": "cli_mock_123",
-            "feishu_app_secret": "sec_mock_456"
+            "feishu_app_secret": "sec_mock_456",
+            "tuning": {"ipc_dir": tmpdir},
         })
         channel = FeishuChannel(cfg, AsyncMock())
         channel.get_tenant_access_token = AsyncMock(return_value="mock_token")
@@ -292,6 +296,23 @@ class TestFeishuChannelOutbound(unittest.IsolatedAsyncioTestCase):
         # Blockquotes don't count toward the fold measurement
         quote_only = "> " + "引用内容" * 30 + "\n\n> 更多引用"
         self.assertFalse(channel._should_fold(quote_only))
+
+    def test_fold_cache_persists_across_restart(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = GatewayConfig({
+                "platform": "feishu",
+                "feishu_app_id": "cli_mock_123",
+                "feishu_app_secret": "sec_mock_456",
+                "tuning": {"ipc_dir": tmpdir},
+            })
+            ch1 = FeishuChannel(cfg, AsyncMock())
+            ch1._cache_fold("tokA", "全文内容A", "摘要A")
+            # Simulate restart: brand-new channel instance, same ipc_dir
+            ch2 = FeishuChannel(cfg, AsyncMock())
+            self.assertIn("tokA", ch2._fold_cache)
+            self.assertEqual(ch2._fold_cache["tokA"]["full"], "全文内容A")
+            self.assertEqual(ch2._fold_cache["tokA"]["summary"], "摘要A")
 
     async def test_send_reply_long_text_folds_with_expand_button(self):
         channel = self._make_channel()

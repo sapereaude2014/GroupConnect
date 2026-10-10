@@ -88,6 +88,34 @@ class FeishuChannel(BaseChannel):
         self._typing_reactions: Dict[str, tuple] = {}  # chat_id -> (message_id, reaction_id)
         self._fold_cache: Dict[str, Dict[str, str]] = {}  # token -> {"full":..., "summary":...}
         self._fold_cache_limit = 200
+        # Persisted so fold buttons survive bot restarts (full text lives only
+        # in this cache — the card itself carries just the summary).
+        self._fold_cache_path = os.path.join(getattr(config, "ipc_dir", "/tmp"), "feishu_fold_cache.json")
+        self._load_fold_cache()
+
+    def _load_fold_cache(self) -> None:
+        try:
+            if os.path.isfile(self._fold_cache_path):
+                with open(self._fold_cache_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    self._fold_cache = {
+                        str(k): v for k, v in data.items()
+                        if isinstance(v, dict) and "full" in v and "summary" in v
+                    }
+                    logger.info(f"[Feishu] Restored {len(self._fold_cache)} fold-cache entries from disk")
+        except Exception as e:
+            logger.debug(f"[Feishu] Fold cache load failed, starting fresh: {e}")
+            self._fold_cache = {}
+
+    def _save_fold_cache(self) -> None:
+        try:
+            tmp = self._fold_cache_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(self._fold_cache, f, ensure_ascii=False)
+            os.replace(tmp, self._fold_cache_path)
+        except Exception as e:
+            logger.debug(f"[Feishu] Fold cache save failed: {e}")
 
     async def get_tenant_access_token(self) -> str:
         """Retrieves and caches Feishu tenant_access_token."""
@@ -209,6 +237,7 @@ class FeishuChannel(BaseChannel):
         if len(self._fold_cache) >= self._fold_cache_limit:
             self._fold_cache.pop(next(iter(self._fold_cache)))
         self._fold_cache[token] = {"full": full_text, "summary": summary}
+        self._save_fold_cache()
 
     async def send_reply(
         self,
