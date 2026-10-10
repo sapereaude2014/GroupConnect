@@ -8,12 +8,18 @@ import asyncio
 import json
 import logging
 import time
+import uuid
 from typing import Any, Callable, Coroutine, Dict, Optional, Union
 
 import os
 import httpx
 
 from groupconnect.channels.base import BaseChannel, ChannelField, InboundMessage, register_channel
+from groupconnect.channels.extensions.telegraph import (
+    AUTO_TELEGRAPH_THRESHOLD,
+    extract_first_paragraph,
+    _strip_blockquotes,
+)
 from groupconnect.core.config import GatewayConfig
 
 logger = logging.getLogger("groupconnect.channel.feishu")
@@ -32,6 +38,11 @@ def _feishu_file_type(ext: str) -> str:
 
 try:
     import lark_oapi as lark
+    from lark_oapi.event.callback.model.p2_card_action_trigger import (
+        P2CardActionTriggerResponse,
+        CallBackCard,
+        CallBackToast,
+    )
     _HAS_LARK_SDK = True
 except ImportError:
     _HAS_LARK_SDK = False
@@ -49,6 +60,10 @@ except ImportError:
 )
 class FeishuChannel(BaseChannel):
     """Channel adapter for Feishu (Lark) Open Platform using SDK long-connection."""
+
+    # Long replies fold into a summary + expand-button card (the Feishu
+    # counterpart of the Telegram auto-Telegraph flow). Same threshold.
+    FOLD_THRESHOLD = AUTO_TELEGRAPH_THRESHOLD
 
     def __init__(
         self,
@@ -71,6 +86,8 @@ class FeishuChannel(BaseChannel):
         self.is_running = False
         self._last_user_msg_ids: Dict[str, str] = {}  # chat_id -> last user message_id
         self._typing_reactions: Dict[str, tuple] = {}  # chat_id -> (message_id, reaction_id)
+        self._fold_cache: Dict[str, Dict[str, str]] = {}  # token -> {"full":..., "summary":...}
+        self._fold_cache_limit = 200
 
     async def get_tenant_access_token(self) -> str:
         """Retrieves and caches Feishu tenant_access_token."""
@@ -113,42 +130,85 @@ class FeishuChannel(BaseChannel):
         return False
 
     @staticmethod
-    def _markdown_to_card(text: str) -> dict:
-        """Wraps Markdown text in a Feishu interactive card (JSON 2.0).
-
-        Card 2.0's markdown component natively renders headers, tables,
-        lists, code blocks, quotes, and inline code, so the text passes
-        through unchanged. Content over ~28KB is split on paragraph
-        boundaries into multiple markdown elements to stay within the
-        card JSON size limit.
-        """
+    def _markdown_body_elements(text: str) -> list:
+        """Builds schema 2.0 markdown body elements, splitting content over
+        ~28KB on paragraph boundaries to stay within the card size limit."""
         MAX_ELEMENT_CHARS = 28000
         if len(text) <= MAX_ELEMENT_CHARS:
-            elements = [{"tag": "markdown", "content": text}] if text.strip() else []
-        else:
-            elements = []
-            remaining = text
-            while remaining:
-                if len(remaining) <= MAX_ELEMENT_CHARS:
-                    elements.append({"tag": "markdown", "content": remaining})
-                    break
-                # Prefer splitting at a paragraph boundary, then a line break
-                cut = remaining.rfind("\n\n", 0, MAX_ELEMENT_CHARS)
-                if cut <= 0:
-                    cut = remaining.rfind("\n", 0, MAX_ELEMENT_CHARS)
-                if cut <= 0:
-                    cut = MAX_ELEMENT_CHARS
-                elements.append({"tag": "markdown", "content": remaining[:cut]})
-                remaining = remaining[cut:].lstrip("\n")
+            return [{"tag": "markdown", "content": text}] if text.strip() else []
+        elements = []
+        remaining = text
+        while remaining:
+            if len(remaining) <= MAX_ELEMENT_CHARS:
+                elements.append({"tag": "markdown", "content": remaining})
+                break
+            # Prefer splitting at a paragraph boundary, then a line break
+            cut = remaining.rfind("\n\n", 0, MAX_ELEMENT_CHARS)
+            if cut <= 0:
+                cut = remaining.rfind("\n", 0, MAX_ELEMENT_CHARS)
+            if cut <= 0:
+                cut = MAX_ELEMENT_CHARS
+            elements.append({"tag": "markdown", "content": remaining[:cut]})
+            remaining = remaining[cut:].lstrip("\n")
+        return elements
 
-        if not elements:
-            elements = [{"tag": "markdown", "content": text}]
-
+    @staticmethod
+    def _card_shell(elements: list) -> dict:
         return {
             "schema": "2.0",
             "config": {"wide_screen_mode": True, "enable_forward": True},
             "body": {"elements": elements},
         }
+
+    @staticmethod
+    def _markdown_to_card(text: str) -> dict:
+        """Wraps Markdown text in a Feishu interactive card (JSON 2.0).
+
+        Card 2.0's markdown component natively renders headers, tables,
+        lists, code blocks, quotes, and inline code, so the text passes
+        through unchanged.
+        """
+        elements = FeishuChannel._markdown_body_elements(text)
+        if not elements:
+            elements = [{"tag": "markdown", "content": text}]
+        return FeishuChannel._card_shell(elements)
+
+    @staticmethod
+    def _fold_button(action: str, token: str, label: str, btn_type: str) -> dict:
+        return {
+            "tag": "button",
+            "text": {"tag": "plain_text", "content": label},
+            "type": btn_type,
+            "size": "small",
+            "behaviors": [{"type": "callback", "value": {"action": action, "token": token}}],
+        }
+
+    def _should_fold(self, text: str) -> bool:
+        """True when text (excluding blockquotes) exceeds FOLD_THRESHOLD.
+        Mirrors the Telegram auto-Telegraph measurement logic."""
+        if not text or self.FOLD_THRESHOLD <= 0:
+            return False
+        return len(_strip_blockquotes(text)) > self.FOLD_THRESHOLD
+
+    def _folded_card(self, summary: str, token: str) -> dict:
+        content = summary if summary else "📄 内容较长，点击下方按钮展开全文。"
+        elements = [
+            {"tag": "markdown", "content": content},
+            self._fold_button("expand", token, "📖 展开全文", "primary"),
+        ]
+        return self._card_shell(elements)
+
+    def _expanded_card(self, full_text: str, token: str) -> dict:
+        elements = self._markdown_body_elements(full_text)
+        if not elements:
+            elements = [{"tag": "markdown", "content": full_text}]
+        elements.append(self._fold_button("collapse", token, "收起", "default"))
+        return self._card_shell(elements)
+
+    def _cache_fold(self, token: str, full_text: str, summary: str) -> None:
+        if len(self._fold_cache) >= self._fold_cache_limit:
+            self._fold_cache.pop(next(iter(self._fold_cache)))
+        self._fold_cache[token] = {"full": full_text, "summary": summary}
 
     async def send_reply(
         self,
@@ -166,8 +226,15 @@ class FeishuChannel(BaseChannel):
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json; charset=utf-8"}
 
         url = f"{self.api_base}/open-apis/im/v1/messages?receive_id_type=chat_id"
-        # Always render as interactive card for consistent markdown rendering
-        card = self._markdown_to_card(text)
+        # Always render as interactive card for consistent markdown rendering.
+        # Over-threshold replies fold into summary + expand button (telegraph-style).
+        folded_token = None
+        if self._should_fold(text):
+            folded_token = uuid.uuid4().hex[:16]
+            summary = extract_first_paragraph(text)
+            card = self._folded_card(summary, folded_token)
+        else:
+            card = self._markdown_to_card(text)
         payload = {
             "receive_id": str(chat_id),
             "msg_type": "interactive",
@@ -179,6 +246,8 @@ class FeishuChannel(BaseChannel):
         resp = await self.client.post(url, headers=headers, json=payload)
         data = resp.json()
         if data.get("code") == 0:
+            if folded_token:
+                self._cache_fold(folded_token, text, summary)
             return data["data"]["message_id"]
         # Card send failed; degrade to plain text so the reply is not lost
         if payload["msg_type"] == "interactive":
@@ -343,9 +412,47 @@ class FeishuChannel(BaseChannel):
             return False
 
     def _build_event_handler(self):
-        """Builds the SDK event dispatcher with the message-receive handler."""
+        """Builds the SDK event dispatcher with the message-receive handler
+        and the card-action handler (fold expand/collapse buttons)."""
         # NOTE: In lark-oapi >=1.4, register_* methods live on the builder
         # (returning self for chaining), not on the built handler object.
+
+        def _on_card_action(data):
+            """Handles fold-card button clicks. Returns a response that
+            updates the card in place (no separate PATCH call needed)."""
+            try:
+                if not _HAS_LARK_SDK:
+                    return None
+                ev = getattr(data, "event", None)
+                action = getattr(ev, "action", None) if ev else None
+                value = getattr(action, "value", None) if action else None
+                if not isinstance(value, dict):
+                    return None
+                act = str(value.get("action", ""))
+                token = str(value.get("token", ""))
+                entry = self._fold_cache.get(token)
+                if not entry:
+                    toast = CallBackToast()
+                    toast.type = "info"
+                    toast.content = "内容已失效"
+                    resp = P2CardActionTriggerResponse()
+                    resp.toast = toast
+                    return resp
+                if act == "expand":
+                    card = self._expanded_card(entry["full"], token)
+                elif act == "collapse":
+                    card = self._folded_card(entry["summary"], token)
+                else:
+                    return None
+                cb_card = CallBackCard()
+                cb_card.type = "raw"
+                cb_card.data = card
+                resp = P2CardActionTriggerResponse()
+                resp.card = cb_card
+                return resp
+            except Exception as e:
+                logger.error(f"[Feishu] Card action error: {e}", exc_info=True)
+                return None
 
         def _on_message_receive(data):
             try:
@@ -393,6 +500,7 @@ class FeishuChannel(BaseChannel):
         event_handler = (
             lark.EventDispatcherHandler.builder("", "")
             .register_p2_im_message_receive_v1(_on_message_receive)
+            .register_p2_card_action_trigger(_on_card_action)
             .build()
         )
         return event_handler

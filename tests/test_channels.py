@@ -284,6 +284,95 @@ class TestFeishuChannelOutbound(unittest.IsolatedAsyncioTestCase):
         # Fallback keeps the raw text so the reply is never lost
         self.assertEqual(json.loads(second["content"])["text"], "## 标题\n正文")
 
+    def test_should_fold_threshold(self):
+        channel = self._make_channel()
+        self.assertFalse(channel._should_fold("短消息"))
+        long_text = "这是一段超过一百个字符的长文本，" * 10  # ~150 chars
+        self.assertTrue(channel._should_fold(long_text))
+        # Blockquotes don't count toward the fold measurement
+        quote_only = "> " + "引用内容" * 30 + "\n\n> 更多引用"
+        self.assertFalse(channel._should_fold(quote_only))
+
+    async def test_send_reply_long_text_folds_with_expand_button(self):
+        channel = self._make_channel()
+        channel.client.post = AsyncMock(return_value=self._mock_resp({"code": 0, "data": {"message_id": "om_4"}}))
+        long_text = "核心结论先行。这是首段摘要内容。\n\n" + "后续详细内容。" * 30
+        msg_id = await channel.send_reply(chat_id="oc_1", text=long_text)
+        self.assertEqual(msg_id, "om_4")
+        payload = channel.client.post.call_args.kwargs["json"]
+        card = json.loads(payload["content"])
+        buttons = [el for el in card["body"]["elements"] if el["tag"] == "button"]
+        self.assertEqual(len(buttons), 1)
+        self.assertIn("展开全文", buttons[0]["text"]["content"])
+        self.assertEqual(buttons[0]["behaviors"][0]["type"], "callback")
+        # Full text cached for in-place expansion
+        tokens = [b["behaviors"][0]["value"]["token"] for b in buttons]
+        self.assertIn(tokens[0], channel._fold_cache)
+        self.assertEqual(channel._fold_cache[tokens[0]]["full"], long_text)
+
+    async def test_send_reply_short_text_does_not_fold(self):
+        channel = self._make_channel()
+        channel.client.post = AsyncMock(return_value=self._mock_resp({"code": 0, "data": {"message_id": "om_5"}}))
+        await channel.send_reply(chat_id="oc_1", text="短回复内容")
+        payload = channel.client.post.call_args.kwargs["json"]
+        card = json.loads(payload["content"])
+        buttons = [el for el in card["body"]["elements"] if el["tag"] == "button"]
+        self.assertEqual(buttons, [])
+        self.assertEqual(channel._fold_cache, {})
+
+    def test_fold_card_action_expand_and_collapse(self):
+        from types import SimpleNamespace
+        from groupconnect.channels.feishu import _HAS_LARK_SDK
+        if not _HAS_LARK_SDK:
+            self.skipTest("lark-oapi not installed")
+
+        channel = self._make_channel()
+        full_text = "首段。\n\n" + "正文详情。" * 40
+        channel._fold_cache["tok123"] = {"full": full_text, "summary": "首段。"}
+
+        handler = channel._build_event_handler()
+        card_action_handler = handler._callback_processor_map["p2.card.action.trigger"].f
+        self.assertIsNotNone(card_action_handler, "card action handler not registered")
+
+        fake_data = SimpleNamespace(
+            event=SimpleNamespace(
+                action=SimpleNamespace(value={"action": "expand", "token": "tok123"}),
+                operator=SimpleNamespace(open_id="ou_x"),
+                context=SimpleNamespace(open_message_id="om_9", open_chat_id="oc_1"),
+            )
+        )
+        resp = card_action_handler(fake_data)
+        self.assertIsNotNone(resp)
+        self.assertEqual(resp.card.type, "raw")
+        elements = resp.card.data["body"]["elements"]
+        self.assertIn(full_text, elements[0]["content"])
+        collapse_btn = [el for el in elements if el["tag"] == "button"][0]
+        self.assertEqual(collapse_btn["behaviors"][0]["value"]["action"], "collapse")
+
+        fake_data.event.action.value = {"action": "collapse", "token": "tok123"}
+        resp2 = card_action_handler(fake_data)
+        self.assertIn("首段。", resp2.card.data["body"]["elements"][0]["content"])
+        expand_btn = [el for el in resp2.card.data["body"]["elements"] if el["tag"] == "button"][0]
+        self.assertEqual(expand_btn["behaviors"][0]["value"]["action"], "expand")
+
+    def test_fold_card_action_invalid_token_shows_toast(self):
+        from types import SimpleNamespace
+        from groupconnect.channels.feishu import _HAS_LARK_SDK
+        if not _HAS_LARK_SDK:
+            self.skipTest("lark-oapi not installed")
+
+        channel = self._make_channel()
+        handler = channel._build_event_handler()
+        card_action_handler = handler._callback_processor_map["p2.card.action.trigger"].f
+        fake_data = SimpleNamespace(
+            event=SimpleNamespace(
+                action=SimpleNamespace(value={"action": "expand", "token": "missing"}),
+            )
+        )
+        resp = card_action_handler(fake_data)
+        self.assertIsNotNone(resp.toast)
+        self.assertIn("失效", resp.toast.content)
+
 
 if __name__ == "__main__":
     unittest.main()
