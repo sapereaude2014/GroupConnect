@@ -4,6 +4,8 @@ Connects Slack Web API & Events API webhook listener to core agent gateway.
 """
 
 import asyncio
+import hashlib
+import hmac
 import json
 import logging
 import time
@@ -16,6 +18,10 @@ from groupconnect.core.config import GatewayConfig
 
 logger = logging.getLogger("groupconnect.channel.slack")
 
+# Slack's own guidance: reject requests older than 5 minutes to block replay
+# of captured signatures.
+_MAX_SIGNATURE_AGE_SECS = 300
+
 
 @register_channel(
     name="slack",
@@ -23,7 +29,9 @@ logger = logging.getLogger("groupconnect.channel.slack")
     aliases=[],
     fields=[
         ChannelField(key="slack_bot_token", label="Slack Bot User OAuth Token (xoxb-...)", is_secret=True),
+        ChannelField(key="slack_signing_secret", label="Slack Signing Secret - required to verify webhook signatures", is_secret=True),
         ChannelField(key="bot_username", label="Slack Bot User ID / Name", default="slack_bot"),
+        ChannelField(key="webhook_bind", label="Webhook bind address (default 127.0.0.1)", default="127.0.0.1"),
         ChannelField(key="webhook_port", label="Webhook listening port", default=8091, is_int=True)
     ]
 )
@@ -38,10 +46,12 @@ class SlackChannel(BaseChannel):
         self.config = config
         self.handler = message_handler
         self.bot_token = config.raw.get("slack_bot_token") or config.raw.get("bot_token", "")
+        self.signing_secret = str(config.raw.get("slack_signing_secret", "") or "")
         self.api_base = "https://slack.com/api"
         self.bot_username = config.bot_username
         self.bot_name = config.bot_name
         self.port = int(config.raw.get("webhook_port", config.raw.get("port", 8091)))
+        self.bind_host = str(config.raw.get("webhook_bind", "127.0.0.1"))
 
         self.client = httpx.AsyncClient(
             timeout=30.0,
@@ -124,6 +134,36 @@ class SlackChannel(BaseChannel):
             body_bytes = await reader.readexactly(content_length) if content_length > 0 else b""
             body_str = body_bytes.decode("utf-8", errors="replace")
 
+            # Signature verification (fail-closed): Slack signs every request
+            # with HMAC-SHA256 over "v0:{timestamp}:{body}". Reject unsigned,
+            # badly signed or stale requests BEFORE parsing attacker-controlled data.
+            sig_header = headers.get("x-slack-signature", "")
+            ts_str = headers.get("x-slack-request-timestamp", "")
+            reject_reason = ""
+            if not self.signing_secret:
+                reject_reason = "slack_signing_secret not configured"
+            elif not sig_header or not ts_str:
+                reject_reason = "missing X-Slack-Signature / X-Slack-Request-Timestamp headers"
+            else:
+                try:
+                    if abs(time.time() - int(ts_str)) > _MAX_SIGNATURE_AGE_SECS:
+                        reject_reason = "stale signature timestamp (possible replay)"
+                    else:
+                        basestring = f"v0:{ts_str}:".encode("utf-8") + body_bytes
+                        expected = "v0=" + hmac.new(
+                            self.signing_secret.encode("utf-8"), basestring, hashlib.sha256
+                        ).hexdigest()
+                        if not hmac.compare_digest(expected, sig_header):
+                            reject_reason = "signature mismatch"
+                except ValueError:
+                    reject_reason = "invalid signature data"
+            if reject_reason:
+                logger.warning(f"[Slack] Rejecting webhook request: {reject_reason}")
+                writer.write(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n")
+                await writer.drain()
+                writer.close()
+                return
+
             if not body_str:
                 writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
                 await writer.drain()
@@ -178,7 +218,13 @@ class SlackChannel(BaseChannel):
 
     async def start(self) -> None:
         self.is_running = True
-        logger.info(f"Starting Slack Events Webhook Server on port {self.port}...")
-        self.server = await asyncio.start_server(self._handle_http_client, "0.0.0.0", self.port)
+        if not self.signing_secret:
+            logger.warning(
+                "[Slack] slack_signing_secret is not configured; ALL inbound webhook events "
+                "will be rejected (fail-closed). Copy the Signing Secret from the Slack app "
+                "config page to enable this channel."
+            )
+        logger.info(f"Starting Slack Events Webhook Server on {self.bind_host}:{self.port}...")
+        self.server = await asyncio.start_server(self._handle_http_client, self.bind_host, self.port)
         async with self.server:
             await self.server.serve_forever()

@@ -11,10 +11,15 @@ from typing import Any, Callable, Coroutine, Optional, Union
 
 import httpx
 
+from groupconnect.channels._ed25519 import verify as _ed25519_verify
 from groupconnect.channels.base import BaseChannel, ChannelField, InboundMessage, register_channel
 from groupconnect.core.config import GatewayConfig
 
 logger = logging.getLogger("groupconnect.channel.discord")
+
+# Discord signs every webhook event over (timestamp + body); reject requests
+# whose timestamp drifts too far to block replay of captured signatures.
+_MAX_SIGNATURE_AGE_SECS = 900
 
 
 @register_channel(
@@ -23,7 +28,9 @@ logger = logging.getLogger("groupconnect.channel.discord")
     aliases=["dc"],
     fields=[
         ChannelField(key="discord_bot_token", label="Discord Bot Token", is_secret=True),
+        ChannelField(key="discord_public_key", label="Discord Application Public Key (hex) - required to verify webhook signatures"),
         ChannelField(key="bot_username", label="Bot Client ID / Username", default="discord_bot"),
+        ChannelField(key="webhook_bind", label="Webhook bind address (default 127.0.0.1)", default="127.0.0.1"),
         ChannelField(key="webhook_port", label="Webhook listening port", default=8090, is_int=True)
     ]
 )
@@ -42,6 +49,8 @@ class DiscordChannel(BaseChannel):
         self.bot_username = config.bot_username
         self.bot_name = config.bot_name
         self.port = int(config.raw.get("webhook_port", config.raw.get("port", 8090)))
+        self.public_key_hex = str(config.raw.get("discord_public_key", "") or "").strip()
+        self.bind_host = str(config.raw.get("webhook_bind", "127.0.0.1"))
 
         self.client = httpx.AsyncClient(
             timeout=30.0,
@@ -120,6 +129,35 @@ class DiscordChannel(BaseChannel):
             body_bytes = await reader.readexactly(content_length) if content_length > 0 else b""
             body_str = body_bytes.decode("utf-8", errors="replace")
 
+            # Signature verification (fail-closed): Discord signs every webhook
+            # event with Ed25519 over (timestamp + body). Reject unsigned, badly
+            # signed or stale requests BEFORE parsing any attacker-controlled data.
+            sig_hex = headers.get("x-signature-ed25519", "")
+            ts_str = headers.get("x-signature-timestamp", "")
+            reject_reason = ""
+            try:
+                if not self.public_key_hex:
+                    reject_reason = "discord_public_key not configured"
+                elif not sig_hex or not ts_str:
+                    reject_reason = "missing X-Signature-Ed25519 / X-Signature-Timestamp headers"
+                else:
+                    sig = bytes.fromhex(sig_hex)
+                    pub = bytes.fromhex(self.public_key_hex)
+                    if len(sig) != 64 or len(pub) != 32:
+                        reject_reason = "malformed signature or public key"
+                    elif abs(time.time() - int(ts_str)) > _MAX_SIGNATURE_AGE_SECS:
+                        reject_reason = "stale signature timestamp (possible replay)"
+                    elif not _ed25519_verify(pub, ts_str.encode("utf-8") + body_bytes, sig):
+                        reject_reason = "signature mismatch"
+            except ValueError as e:
+                reject_reason = f"invalid signature data ({e})"
+            if reject_reason:
+                logger.warning(f"[Discord] Rejecting webhook request: {reject_reason}")
+                writer.write(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n")
+                await writer.drain()
+                writer.close()
+                return
+
             if not body_str:
                 writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
                 await writer.drain()
@@ -173,7 +211,13 @@ class DiscordChannel(BaseChannel):
 
     async def start(self) -> None:
         self.is_running = True
-        logger.info(f"Starting Discord Channel on port {self.port}...")
-        self.server = await asyncio.start_server(self._handle_http_client, "0.0.0.0", self.port)
+        if not self.public_key_hex:
+            logger.warning(
+                "[Discord] discord_public_key is not configured; ALL inbound webhook events "
+                "will be rejected (fail-closed). Copy the Application Public Key from the "
+                "Discord developer portal to enable this channel."
+            )
+        logger.info(f"Starting Discord Channel on {self.bind_host}:{self.port}...")
+        self.server = await asyncio.start_server(self._handle_http_client, self.bind_host, self.port)
         async with self.server:
             await self.server.serve_forever()

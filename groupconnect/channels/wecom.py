@@ -4,10 +4,14 @@ Supports Enterprise Self-Built App API and Webhook callback listener.
 """
 
 import asyncio
+import base64
+import hashlib
+import hmac
 import json
 import logging
 import os
 import re
+import struct
 import time
 import urllib.parse
 from typing import Any, Callable, Coroutine, Optional, Union
@@ -17,7 +21,50 @@ import httpx
 from groupconnect.channels.base import BaseChannel, ChannelField, InboundMessage, register_channel
 from groupconnect.core.config import GatewayConfig
 
+try:
+    from Crypto.Cipher import AES
+except ImportError:  # optional runtime dependency, needed for WeCom decryption
+    AES = None
+
 logger = logging.getLogger("groupconnect.channel.wecom")
+
+
+def _wecom_signature(token: str, timestamp: str, nonce: str, encrypt: str) -> str:
+    """WeCom callback signature: SHA1 over the sorted concatenation."""
+    raw = "".join(sorted([token, timestamp, nonce, encrypt]))
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()
+
+
+def _wecom_decrypt(encrypt_b64: str, encoding_aes_key: str, corp_id: str) -> str:
+    """Decrypts a WeCom callback payload (AES-256-CBC) to plaintext XML.
+
+    Layout after decryption: 16 random bytes | 4-byte big-endian msg length |
+    message XML | receive_id (corp_id). The embedded receive_id must match the
+    configured corp_id, otherwise the payload is rejected.
+    """
+    if AES is None:
+        raise RuntimeError("pycryptodome is required for WeCom callbacks (pip install pycryptodome)")
+    key = base64.b64decode(encoding_aes_key + "=")
+    if len(key) != 32:
+        raise ValueError("invalid EncodingAESKey length")
+    data = base64.b64decode(encrypt_b64)
+    if not data or len(data) % 16 != 0:
+        raise ValueError("invalid ciphertext length")
+    plain = AES.new(key, AES.MODE_CBC, key[:16]).decrypt(data)
+    pad = plain[-1]
+    if not 1 <= pad <= 32:
+        raise ValueError("bad PKCS7 padding")
+    content = plain[16:-pad]
+    if len(content) < 4:
+        raise ValueError("truncated payload")
+    msg_len = struct.unpack(">I", content[:4])[0]
+    if 4 + msg_len > len(content):
+        raise ValueError("truncated message")
+    msg = content[4:4 + msg_len]
+    receive_id = content[4 + msg_len:].decode("utf-8", errors="replace")
+    if corp_id and receive_id != corp_id:
+        raise ValueError(f"receive_id mismatch ({receive_id})")
+    return msg.decode("utf-8", errors="replace")
 
 
 @register_channel(
@@ -28,6 +75,9 @@ logger = logging.getLogger("groupconnect.channel.wecom")
         ChannelField(key="wecom_corp_id", label="WeCom Corp ID (ww...)", is_secret=False),
         ChannelField(key="wecom_corp_secret", label="WeCom App Secret", is_secret=True),
         ChannelField(key="wecom_agent_id", label="WeCom Agent ID [e.g. 1000002]", default="1000002"),
+        ChannelField(key="wecom_callback_token", label="WeCom Callback Token - required to verify webhook signatures", is_secret=True),
+        ChannelField(key="wecom_encoding_aes_key", label="WeCom EncodingAESKey (43 chars) - required to decrypt webhook payloads", is_secret=True),
+        ChannelField(key="webhook_bind", label="Webhook bind address (default 127.0.0.1)", default="127.0.0.1"),
         ChannelField(key="webhook_port", label="Webhook listening port", default=8089, is_int=True)
     ]
 )
@@ -44,6 +94,9 @@ class WeComChannel(BaseChannel):
         self.corp_id = config.raw.get("wecom_corp_id") or config.raw.get("corp_id", "")
         self.corp_secret = config.raw.get("wecom_corp_secret") or config.raw.get("corp_secret", "")
         self.agent_id = config.raw.get("wecom_agent_id") or config.raw.get("agent_id", "")
+        self.callback_token = str(config.raw.get("wecom_callback_token", "") or "")
+        self.encoding_aes_key = str(config.raw.get("wecom_encoding_aes_key", "") or "")
+        self.bind_host = str(config.raw.get("webhook_bind", "127.0.0.1"))
         self.port = int(config.raw.get("webhook_port", config.raw.get("port", 8089)))
         self.api_base = config.raw.get("wecom_api_base", "https://qyapi.weixin.qq.com")
         self.bot_username = config.bot_username
@@ -157,12 +210,35 @@ class WeComChannel(BaseChannel):
                     if k.strip().lower() == "content-length":
                         content_length = int(v.strip())
 
-            # 1. WeCom URL GET verification (echostr echo)
+            # 1. WeCom URL GET verification (signed echostr echo).
+            # Fail-closed: the msg_signature must verify and the echostr must
+            # decrypt to the configured corp_id before anything is echoed back.
             if method == "GET":
                 parsed = urllib.parse.urlparse(path)
                 qs = urllib.parse.parse_qs(parsed.query)
+                sig = qs.get("msg_signature", [""])[0]
+                ts = qs.get("timestamp", [""])[0]
+                nonce = qs.get("nonce", [""])[0]
                 echostr = qs.get("echostr", [""])[0]
-                resp_bytes = echostr.encode("utf-8")
+                reject_reason = ""
+                try:
+                    if not (self.callback_token and self.encoding_aes_key):
+                        reject_reason = "callback token / EncodingAESKey not configured"
+                    elif not (sig and ts and nonce and echostr):
+                        reject_reason = "incomplete verification params"
+                    elif not hmac.compare_digest(_wecom_signature(self.callback_token, ts, nonce, echostr), sig):
+                        reject_reason = "msg_signature mismatch"
+                    else:
+                        echo_plain = _wecom_decrypt(echostr, self.encoding_aes_key, self.corp_id)
+                except Exception as e:
+                    reject_reason = f"decryption failed ({e})"
+                if reject_reason:
+                    logger.warning(f"[WeCom] Rejecting callback verification: {reject_reason}")
+                    writer.write(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
+                    await writer.drain()
+                    writer.close()
+                    return
+                resp_bytes = echo_plain.encode("utf-8")
                 response = (
                     b"HTTP/1.1 200 OK\r\n"
                     b"Content-Type: text/plain; charset=utf-8\r\n"
@@ -174,20 +250,52 @@ class WeComChannel(BaseChannel):
                 writer.close()
                 return
 
-            # 2. WeCom Message Event POST
+            # 2. WeCom Message Event POST — signature verification (fail-closed):
+            # WeCom signs every callback with SHA1 over (token, timestamp, nonce,
+            # encrypted_body) and AES-encrypts the payload. Verify + decrypt BEFORE
+            # parsing any attacker-controlled data.
             body_bytes = await reader.readexactly(content_length) if content_length > 0 else b""
             body_str = body_bytes.decode("utf-8", errors="replace")
+
+            parsed = urllib.parse.urlparse(path)
+            qs = urllib.parse.parse_qs(parsed.query)
+            sig = qs.get("msg_signature", [""])[0]
+            ts = qs.get("timestamp", [""])[0]
+            nonce = qs.get("nonce", [""])[0]
+            encrypt_match = re.search(r"<Encrypt><!\[CDATA\[(.*?)\]\]></Encrypt>", body_str, re.DOTALL)
+            reject_reason = ""
+            try:
+                if not (self.callback_token and self.encoding_aes_key):
+                    reject_reason = "callback token / EncodingAESKey not configured"
+                elif not encrypt_match:
+                    reject_reason = "payload missing <Encrypt> field"
+                elif not (sig and ts and nonce):
+                    reject_reason = "incomplete verification params"
+                elif not hmac.compare_digest(
+                    _wecom_signature(self.callback_token, ts, nonce, encrypt_match.group(1)), sig
+                ):
+                    reject_reason = "msg_signature mismatch"
+                else:
+                    xml_plain = _wecom_decrypt(encrypt_match.group(1), self.encoding_aes_key, self.corp_id)
+            except Exception as e:
+                reject_reason = f"decryption failed ({e})"
+            if reject_reason:
+                logger.warning(f"[WeCom] Rejecting webhook event: {reject_reason}")
+                writer.write(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
+                await writer.drain()
+                writer.close()
+                return
 
             response = b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"
             writer.write(response)
             await writer.drain()
             writer.close()
 
-            # Parse XML/JSON payload
-            from_user_match = re.search(r"<FromUserName><!\[CDATA\[(.*?)\]\]></FromUserName>", body_str)
-            content_match = re.search(r"<Content><!\[CDATA\[(.*?)\]\]></Content>", body_str)
-            msg_type_match = re.search(r"<MsgType><!\[CDATA\[(.*?)\]\]></MsgType>", body_str)
-            chat_id_match = re.search(r"<ChatId><!\[CDATA\[(.*?)\]\]></ChatId>", body_str)
+            # Parse the DECRYPTED plaintext XML
+            from_user_match = re.search(r"<FromUserName><!\[CDATA\[(.*?)\]\]></FromUserName>", xml_plain)
+            content_match = re.search(r"<Content><!\[CDATA\[(.*?)\]\]></Content>", xml_plain)
+            msg_type_match = re.search(r"<MsgType><!\[CDATA\[(.*?)\]\]></MsgType>", xml_plain)
+            chat_id_match = re.search(r"<ChatId><!\[CDATA\[(.*?)\]\]></ChatId>", xml_plain)
 
             sender_id = from_user_match.group(1) if from_user_match else "wecom_user"
             text = content_match.group(1) if content_match else ""
@@ -213,7 +321,12 @@ class WeComChannel(BaseChannel):
 
     async def start(self) -> None:
         self.is_running = True
-        logger.info(f"Starting WeCom Webhook Server on port {self.port} (CorpID: {self.corp_id})...")
-        self.server = await asyncio.start_server(self._handle_http_client, "0.0.0.0", self.port)
+        if not (self.callback_token and self.encoding_aes_key):
+            logger.warning(
+                "[WeCom] wecom_callback_token / wecom_encoding_aes_key not configured; "
+                "ALL inbound webhook events will be rejected (fail-closed)."
+            )
+        logger.info(f"Starting WeCom Webhook Server on {self.bind_host}:{self.port} (CorpID: {self.corp_id})...")
+        self.server = await asyncio.start_server(self._handle_http_client, self.bind_host, self.port)
         async with self.server:
             await self.server.serve_forever()
