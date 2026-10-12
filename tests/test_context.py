@@ -261,6 +261,28 @@ class TestContextManager(unittest.TestCase):
         self.assertNotIn("msg20", ctx)
         self.assertNotIn("msg30", ctx)
 
+    def test_attachment_rendering_in_build_group_context(self):
+        """Attachments with file paths are formatted into context lines."""
+        chat_id = 9999
+        # 1. Message with caption text + photo attachment
+        self.mgr.record_message(
+            chat_id, "Zheng Ma", "这个图能看到吗", msg_id=5001,
+            attachments=[{"type": "photo", "path": "/path/to/5001_photo.jpg", "name": "5001_photo.jpg"}]
+        )
+        # 2. Message with no caption (defaults to [Photo Attachment]) + photo attachment
+        self.mgr.record_message(
+            chat_id, "Zheng Ma", "[Photo Attachment]", msg_id=5002,
+            attachments=[{"type": "photo", "path": "/path/to/5002_photo.jpg", "name": "5002_photo.jpg"}]
+        )
+        ctx = self.mgr.build_group_context(chat_id)
+        lines = ctx.split("\n")
+        self.assertEqual(len(lines), 2)
+        # First line should preserve caption AND append attachment path
+        self.assertIn("这个图能看到吗 [Photo Attachment: /path/to/5001_photo.jpg]", lines[0])
+        # Second line should replace raw placeholder with specific path
+        self.assertIn("[Photo Attachment: /path/to/5002_photo.jpg]", lines[1])
+        self.assertNotIn("[Photo Attachment] [Photo Attachment", lines[1])
+
 
 class TestEngineContextAnchor(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):

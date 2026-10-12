@@ -237,7 +237,22 @@ class ContextManager:
                     if str(msg_id) == str(since_msg_id):
                         continue
 
-            line = f"[{item['time']}] {item['sender']}{item['reply_info']}: {item['text']}"
+            text = item.get("text", "")
+            attachments = item.get("attachments") or []
+            if attachments:
+                att_parts = []
+                for a in attachments:
+                    a_path = a.get("path") or a.get("name") or "file"
+                    a_type = a.get("type", "file").capitalize()
+                    if a_path not in text:
+                        att_parts.append(f"[{a_type} Attachment: {a_path}]")
+                if att_parts:
+                    if text in ("[Photo Attachment]", "[Voice Audio Attachment]", "[Document Attachment]"):
+                        text = " ".join(att_parts)
+                    else:
+                        text = f"{text} {' '.join(att_parts)}"
+
+            line = f"[{item['time']}] {item['sender']}{item['reply_info']}: {text}".strip()
             if str(msg_id) in pending_set:
                 line = f"⏳ {line}"
             lines.append(line)
