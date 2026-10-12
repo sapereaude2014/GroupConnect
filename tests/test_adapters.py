@@ -131,7 +131,8 @@ class TestTeleAgentStopNoRevival(unittest.TestCase):
             teleworker_bin=worker,
             workspace_dir=".",
             timeout_secs=30,
-            output_grace_secs=1
+            output_grace_secs=1,
+            purge_server_sessions=False  # tests must never touch the real daemon
         )
 
     def test_stop_killed_worker_is_not_revived(self):
@@ -174,6 +175,158 @@ class TestTeleAgentStopNoRevival(unittest.TestCase):
         text, cid = asyncio.run(adapter.execute_turn("ping", chat_id=7))
         self.assertEqual(text, "任务完成：假想答卷")
         self.assertEqual(cid, "ses_test123")
+
+
+class TestTeleAgentStopPurgesServer(unittest.TestCase):
+    """Regression: /stop used to only SIGKILL the thin tele-worker client.
+    The TeleAgent daemon kept running the session's LLM loop server-side —
+    burning tokens, finishing the task, even messaging the user out-of-band
+    long after "Task execution was stopped." was sent. terminate() must now
+    also delete the daemon sessions tagged for that chat."""
+
+    _LISTING = (
+        "Total sessions: 5\n"
+        "  [ses_live_7a] GC-7-1697000001 (2026-10-12 19:00:01)\n"
+        "  [ses_old_7b] GC-7-1696000001 (2026-10-11 19:00:01)\n"
+        "  [ses_other_8] GC-8-1697000001 (2026-10-12 19:00:01)\n"
+        "  [ses_neg_grp] GC--1004324820543-1697000001 (2026-10-12 19:00:01)\n"
+        "  [ses_user_mk] TeleWorker - 10-12 19:08:41 (2026-10-12 19:08:41)\n"
+    )
+
+    def _make_worker(self, body: str) -> str:
+        fd, path = tempfile.mkstemp(suffix=".sh")
+        with os.fdopen(fd, "w") as f:
+            f.write(body)
+        os.chmod(path, os.stat(path).st_mode | stat.S_IEXEC)
+        self.addCleanup(os.remove, path)
+        return path
+
+    def _make_adapter(self, worker: str, **kwargs) -> TeleAgentAdapter:
+        return TeleAgentAdapter(
+            teleworker_bin=worker,
+            workspace_dir=".",
+            timeout_secs=30,
+            output_grace_secs=1,
+            **kwargs
+        )
+
+    class _FakeSubprocessRun:
+        """Records calls; answers -l with a fake listing and accepts deletes."""
+
+        def __init__(self, listing: str):
+            self.calls = []
+            self.listing = listing
+
+        def __call__(self, args, **kwargs):
+            self.calls.append(list(args))
+            if "-l" in args:
+                return type("R", (), {"returncode": 0, "stdout": self.listing.encode(), "stderr": b""})()
+            if "--delete-session" in args:
+                return type("R", (), {"returncode": 0, "stdout": b"", "stderr": b""})()
+            raise AssertionError(f"unexpected subprocess call: {args}")
+
+        def deleted(self):
+            return [c[c.index("--delete-session") + 1] for c in self.calls if "--delete-session" in c]
+
+    def test_stop_purges_tagged_daemon_sessions(self):
+        from unittest.mock import patch
+
+        worker = self._make_worker(_SLEEP_WORKER)
+        adapter = self._make_adapter(worker)
+        fake = self._FakeSubprocessRun(self._LISTING)
+
+        async def scenario():
+            with patch("groupconnect.adapters.teleagent.subprocess.run", fake):
+                task = asyncio.ensure_future(
+                    adapter.execute_turn("工作", conversation_id="ses_abc", chat_id=7)
+                )
+                for _ in range(100):
+                    if 7 in adapter.workers:
+                        break
+                    await asyncio.sleep(0.05)
+                adapter.terminate(7)  # /stop lands mid-run
+                text, cid = await asyncio.wait_for(task, timeout=10)
+                # Background executor purge must complete before the loop closes
+                for _ in range(200):
+                    if fake.deleted():
+                        break
+                    await asyncio.sleep(0.05)
+                return text, cid
+
+        text, cid = asyncio.run(scenario())
+        self.assertIsNone(text)
+        self.assertEqual(cid, "ses_abc")
+        # Exactly this chat's tagged sessions are deleted; other chats', group
+        # chats' and user-created sessions are untouched.
+        self.assertEqual(sorted(fake.deleted()), ["ses_live_7a", "ses_old_7b"])
+        self.assertTrue(any("-l" in c for c in fake.calls))
+
+    def test_no_op_stop_still_purges_orphan_sessions(self):
+        from unittest.mock import patch
+
+        adapter = self._make_adapter(self._make_worker(_CLEAN_WORKER))
+        fake = self._FakeSubprocessRun(self._LISTING)
+
+        async def scenario():
+            with patch("groupconnect.adapters.teleagent.subprocess.run", fake):
+                adapter.terminate(7)  # no live worker: kill is a no-op...
+                for _ in range(200):
+                    if fake.deleted():
+                        break
+                    await asyncio.sleep(0.05)
+
+        asyncio.run(scenario())
+        # ...but leaked daemon sessions from earlier turns are still purged
+        self.assertEqual(sorted(fake.deleted()), ["ses_live_7a", "ses_old_7b"])
+        self.assertEqual(adapter._termination_requested, set())
+
+    def test_purge_disabled_never_touches_daemon(self):
+        from unittest.mock import patch
+
+        adapter = self._make_adapter(
+            self._make_worker(_SLEEP_WORKER), purge_server_sessions=False
+        )
+        fake = self._FakeSubprocessRun(self._LISTING)
+
+        async def scenario():
+            with patch("groupconnect.adapters.teleagent.subprocess.run", fake):
+                task = asyncio.ensure_future(
+                    adapter.execute_turn("工作", conversation_id="ses_abc", chat_id=7)
+                )
+                for _ in range(100):
+                    if 7 in adapter.workers:
+                        break
+                    await asyncio.sleep(0.05)
+                adapter.terminate(7)
+                await asyncio.wait_for(task, timeout=10)
+                await asyncio.sleep(0.3)
+
+        asyncio.run(scenario())
+        self.assertEqual(fake.calls, [])  # daemon never contacted
+
+    def test_execute_turn_titles_session_with_chat_marker(self):
+        argv_file = tempfile.mktemp(suffix=".argv")
+        self.addCleanup(lambda: os.path.exists(argv_file) and os.remove(argv_file))
+        worker = self._make_worker(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"" + argv_file + "\"\n"
+            "printf '%s' '{\"session_id\":\"ses_t1\",\"text\":\"ok\"}'\n"
+        )
+        adapter = self._make_adapter(worker)
+
+        asyncio.run(adapter.execute_turn("ping", chat_id=7))
+        with open(argv_file) as f:
+            argv = f.read().splitlines()
+        self.assertIn("--title", argv)
+        title = argv[argv.index("--title") + 1]
+        self.assertRegex(title, r"^GC-7-\d+$")
+
+        # Without a chat_id (bare CLI usage), no marker title is injected
+        with open(argv_file, "w") as f:
+            f.write("")
+        asyncio.run(adapter.execute_turn("ping"))
+        with open(argv_file) as f:
+            argv = f.read().splitlines()
+        self.assertNotIn("--title", argv)
 
 
 class TestCliStopSilence(unittest.TestCase):

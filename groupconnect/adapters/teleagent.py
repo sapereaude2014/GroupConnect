@@ -8,13 +8,21 @@ import glob
 import json
 import logging
 import os
+import re
 import signal
+import subprocess
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from groupconnect.adapters.base import BaseAgentAdapter, register_adapter
 
 logger = logging.getLogger("groupconnect.adapter.teleagent")
+
+# Marker prefix for GroupConnect-owned TeleAgent sessions. Worker sessions are
+# titled "GC-<chat_id>-<spawn_ts>" so terminate() can locate and delete exactly
+# the daemon-side sessions belonging to a chat — never user-created sessions.
+_SESSION_TITLE_PREFIX = "GC-"
+_SESSION_LIST_RE_TMPL = r"\[([A-Za-z0-9_-]+)\]\s*" + _SESSION_TITLE_PREFIX + r"{chat_id}-\d+"
 
 
 def _load_skills_manifest(workspace_dir: str) -> str:
@@ -73,13 +81,18 @@ class TeleAgentAdapter(BaseAgentAdapter):
         workspace_dir: str = "./workspace",
         model: Optional[str] = None,
         timeout_secs: int = 1800,
-        output_grace_secs: int = 15
+        output_grace_secs: int = 15,
+        purge_server_sessions: bool = True
     ):
         self.teleworker_bin = teleworker_bin
         self.workspace_dir = os.path.abspath(workspace_dir)
         self.model = model
         self.timeout_secs = timeout_secs
         self.output_grace_secs = output_grace_secs
+        # SIGKILL only kills the thin tele-worker client; the TeleAgent daemon
+        # keeps executing the session's LLM loop server-side. When enabled,
+        # terminate() also deletes the daemon sessions so /stop truly stops.
+        self.purge_server_sessions = purge_server_sessions
 
         self.workers: Dict[int, Any] = {}
         self.worker_last_used: Dict[int, float] = {}
@@ -245,6 +258,9 @@ class TeleAgentAdapter(BaseAgentAdapter):
             "--json",
             "--timeout", str(self.timeout_secs),
         ]
+        if chat_id is not None:
+            # Tag the daemon session so terminate() can purge it later via /stop.
+            cmd.extend(["--title", f"{_SESSION_TITLE_PREFIX}{chat_id}-{int(time.time())}"])
         if conversation_id:
             cmd.extend(["-s", conversation_id])
         if self.model:
@@ -291,6 +307,8 @@ class TeleAgentAdapter(BaseAgentAdapter):
                     "--json",
                     "--timeout", str(self.timeout_secs),
                 ]
+                if chat_id is not None:
+                    fallback_cmd.extend(["--title", f"{_SESSION_TITLE_PREFIX}{chat_id}-{int(time.time())}"])
                 if self.model:
                     fallback_cmd.extend(["-m", self.model])
 
@@ -324,6 +342,40 @@ class TeleAgentAdapter(BaseAgentAdapter):
         except asyncio.CancelledError:
             return None, conversation_id
 
+    def _purge_server_sessions(self, chat_id: int) -> None:
+        """Deletes the daemon-side TeleAgent sessions tagged for this chat.
+
+        Runs in an executor thread after /stop. Killing the tele-worker client
+        leaves the daemon session's LLM loop alive (it keeps burning tokens and
+        running tools to completion); DELETE /session/<id> is the only reliable
+        way to stop it. Only sessions titled GC-<chat_id>-<ts> are touched —
+        user-created sessions are never matched.
+        """
+        try:
+            listing = subprocess.run(
+                [self.teleworker_bin, "-l"],
+                capture_output=True, timeout=15,
+            )
+            text = listing.stdout.decode("utf-8", errors="replace")
+            pattern = _SESSION_LIST_RE_TMPL.format(chat_id=re.escape(str(chat_id)))
+            session_ids = re.findall(pattern, text)
+            for sid in session_ids:
+                result = subprocess.run(
+                    [self.teleworker_bin, "--delete-session", sid],
+                    capture_output=True, timeout=15,
+                )
+                if result.returncode == 0:
+                    logger.info(f"[TeleAgent] Purged daemon session {sid} for chat {chat_id} (/stop)")
+                else:
+                    logger.warning(
+                        f"[TeleAgent] Failed to purge daemon session {sid} for chat {chat_id}: "
+                        f"{result.stderr.decode('utf-8', errors='replace').strip()[:200]}"
+                    )
+        except FileNotFoundError:
+            logger.warning(f"[TeleAgent] tele-worker binary not found; skipping session purge for chat {chat_id}")
+        except Exception as e:
+            logger.warning(f"[TeleAgent] Session purge failed for chat {chat_id}: {e}")
+
     def terminate(self, chat_id: int) -> None:
         proc = self.workers.get(chat_id)
         if proc and proc.returncode is None:
@@ -342,6 +394,16 @@ class TeleAgentAdapter(BaseAgentAdapter):
             except Exception as e:
                 logger.warning(f"Failed to killpg for chat {chat_id}: {e}")
             self.workers.pop(chat_id, None)
+        # The SIGKILL above only stops the thin client. The TeleAgent daemon
+        # keeps running this chat's session server-side unless we delete it,
+        # so /stop must also purge the daemon sessions (leak fix).
+        if self.purge_server_sessions:
+            try:
+                loop = asyncio.get_running_loop()
+                loop.run_in_executor(None, self._purge_server_sessions, chat_id)
+            except RuntimeError:
+                # No running event loop (sync context): purge synchronously.
+                self._purge_server_sessions(chat_id)
 
     def close(self) -> None:
         for cid, proc in list(self.workers.items()):
