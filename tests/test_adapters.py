@@ -132,7 +132,7 @@ class TestTeleAgentStopNoRevival(unittest.TestCase):
             workspace_dir=".",
             timeout_secs=30,
             output_grace_secs=1,
-            purge_server_sessions=False  # tests must never touch the real daemon
+            abort_server_sessions=False  # tests must never touch the real daemon
         )
 
     def test_stop_killed_worker_is_not_revived(self):
@@ -177,12 +177,13 @@ class TestTeleAgentStopNoRevival(unittest.TestCase):
         self.assertEqual(cid, "ses_test123")
 
 
-class TestTeleAgentStopPurgesServer(unittest.TestCase):
+class TestTeleAgentStopAbortsServer(unittest.TestCase):
     """Regression: /stop used to only SIGKILL the thin tele-worker client.
     The TeleAgent daemon kept running the session's LLM loop server-side —
     burning tokens, finishing the task, even messaging the user out-of-band
     long after "Task execution was stopped." was sent. terminate() must now
-    also delete the daemon sessions tagged for that chat."""
+    also abort the daemon sessions tagged for that chat; abort (not delete)
+    keeps the session and its history for seamless resumption."""
 
     _LISTING = (
         "Total sessions: 5\n"
@@ -211,7 +212,7 @@ class TestTeleAgentStopPurgesServer(unittest.TestCase):
         )
 
     class _FakeSubprocessRun:
-        """Records calls; answers -l with a fake listing and accepts deletes."""
+        """Records calls; answers -l with a fake listing and accepts aborts."""
 
         def __init__(self, listing: str):
             self.calls = []
@@ -221,14 +222,14 @@ class TestTeleAgentStopPurgesServer(unittest.TestCase):
             self.calls.append(list(args))
             if "-l" in args:
                 return type("R", (), {"returncode": 0, "stdout": self.listing.encode(), "stderr": b""})()
-            if "--delete-session" in args:
+            if "--abort-session" in args:
                 return type("R", (), {"returncode": 0, "stdout": b"", "stderr": b""})()
             raise AssertionError(f"unexpected subprocess call: {args}")
 
-        def deleted(self):
-            return [c[c.index("--delete-session") + 1] for c in self.calls if "--delete-session" in c]
+        def aborted(self):
+            return [c[c.index("--abort-session") + 1] for c in self.calls if "--abort-session" in c]
 
-    def test_stop_purges_tagged_daemon_sessions(self):
+    def test_stop_aborts_tagged_daemon_sessions(self):
         from unittest.mock import patch
 
         worker = self._make_worker(_SLEEP_WORKER)
@@ -246,9 +247,9 @@ class TestTeleAgentStopPurgesServer(unittest.TestCase):
                     await asyncio.sleep(0.05)
                 adapter.terminate(7)  # /stop lands mid-run
                 text, cid = await asyncio.wait_for(task, timeout=10)
-                # Background executor purge must complete before the loop closes
+                # Background executor abort must complete before the loop closes
                 for _ in range(200):
-                    if fake.deleted():
+                    if fake.aborted():
                         break
                     await asyncio.sleep(0.05)
                 return text, cid
@@ -256,12 +257,12 @@ class TestTeleAgentStopPurgesServer(unittest.TestCase):
         text, cid = asyncio.run(scenario())
         self.assertIsNone(text)
         self.assertEqual(cid, "ses_abc")
-        # Exactly this chat's tagged sessions are deleted; other chats', group
+        # Exactly this chat's tagged sessions are aborted; other chats', group
         # chats' and user-created sessions are untouched.
-        self.assertEqual(sorted(fake.deleted()), ["ses_live_7a", "ses_old_7b"])
+        self.assertEqual(sorted(fake.aborted()), ["ses_live_7a", "ses_old_7b"])
         self.assertTrue(any("-l" in c for c in fake.calls))
 
-    def test_no_op_stop_still_purges_orphan_sessions(self):
+    def test_no_op_stop_still_aborts_orphan_sessions(self):
         from unittest.mock import patch
 
         adapter = self._make_adapter(self._make_worker(_CLEAN_WORKER))
@@ -271,20 +272,20 @@ class TestTeleAgentStopPurgesServer(unittest.TestCase):
             with patch("groupconnect.adapters.teleagent.subprocess.run", fake):
                 adapter.terminate(7)  # no live worker: kill is a no-op...
                 for _ in range(200):
-                    if fake.deleted():
+                    if fake.aborted():
                         break
                     await asyncio.sleep(0.05)
 
         asyncio.run(scenario())
-        # ...but leaked daemon sessions from earlier turns are still purged
-        self.assertEqual(sorted(fake.deleted()), ["ses_live_7a", "ses_old_7b"])
+        # ...but leaked daemon sessions from earlier turns are still aborted
+        self.assertEqual(sorted(fake.aborted()), ["ses_live_7a", "ses_old_7b"])
         self.assertEqual(adapter._termination_requested, set())
 
-    def test_purge_disabled_never_touches_daemon(self):
+    def test_abort_disabled_never_touches_daemon(self):
         from unittest.mock import patch
 
         adapter = self._make_adapter(
-            self._make_worker(_SLEEP_WORKER), purge_server_sessions=False
+            self._make_worker(_SLEEP_WORKER), abort_server_sessions=False
         )
         fake = self._FakeSubprocessRun(self._LISTING)
 
