@@ -61,8 +61,11 @@ except ImportError:
 class FeishuChannel(BaseChannel):
     """Channel adapter for Feishu (Lark) Open Platform using SDK long-connection."""
 
-    # Long replies fold into a summary + expand-button card (the Feishu
-    # counterpart of the Telegram auto-Telegraph flow). Same threshold.
+    # Long replies go telegraph-style: a short summary lands in the main chat
+    # stream and the full text is attached as a reply thread — no client-side
+    # expand/collapse residue. Hard-coded (summary 60 chars / trigger 100 chars
+    # shared with the Telegram auto-Telegraph flow); card fold remains only as
+    # the fallback path.
     FOLD_THRESHOLD = AUTO_TELEGRAPH_THRESHOLD
 
     def __init__(
@@ -212,7 +215,7 @@ class FeishuChannel(BaseChannel):
         }
 
     def _should_fold(self, text: str) -> bool:
-        """True when text (excluding blockquotes) exceeds FOLD_THRESHOLD.
+        """True when text (excluding blockquotes) exceeds the fold threshold.
         Mirrors the Telegram auto-Telegraph measurement logic."""
         if not text or self.FOLD_THRESHOLD <= 0:
             return False
@@ -256,14 +259,11 @@ class FeishuChannel(BaseChannel):
 
         url = f"{self.api_base}/open-apis/im/v1/messages?receive_id_type=chat_id"
         # Always render as interactive card for consistent markdown rendering.
-        # Over-threshold replies fold into summary + expand button (telegraph-style).
-        folded_token = None
+        # Over-threshold replies go telegraph-style: summary in the stream,
+        # full text in a reply thread.
         if self._should_fold(text):
-            folded_token = uuid.uuid4().hex[:16]
-            summary = extract_first_paragraph(text)
-            card = self._folded_card(summary, folded_token)
-        else:
-            card = self._markdown_to_card(text)
+            return await self._send_threaded_reply(chat_id, text, headers)
+        card = self._markdown_to_card(text)
         payload = {
             "receive_id": str(chat_id),
             "msg_type": "interactive",
@@ -275,8 +275,6 @@ class FeishuChannel(BaseChannel):
         resp = await self.client.post(url, headers=headers, json=payload)
         data = resp.json()
         if data.get("code") == 0:
-            if folded_token:
-                self._cache_fold(folded_token, text, summary)
             return data["data"]["message_id"]
         # Card send failed; degrade to plain text so the reply is not lost
         if payload["msg_type"] == "interactive":
@@ -292,6 +290,75 @@ class FeishuChannel(BaseChannel):
                 return data["data"]["message_id"]
         logger.error(f"[Feishu] Send message failed: {data}")
         return None
+
+    async def _send_threaded_reply(
+        self,
+        chat_id: Union[int, str],
+        text: str,
+        headers: Dict[str, str],
+    ) -> Optional[Union[int, str]]:
+        """Telegraph-style long reply: a short summary message lands in the
+        main chat stream, the full text is attached to it as a reply thread.
+        No expand/collapse buttons, so no per-client expanded residue.
+        Fallback chain: thread reply fails -> full card in main stream;
+        summary send fails -> legacy fold card."""
+        url = f"{self.api_base}/open-apis/im/v1/messages?receive_id_type=chat_id"
+        summary = extract_first_paragraph(text)
+
+        # Legacy fold-card fallback (keeps the expand-button path intact).
+        async def _folded_card_fallback() -> Optional[Union[int, str]]:
+            folded_token = uuid.uuid4().hex[:16]
+            payload = {
+                "receive_id": str(chat_id),
+                "msg_type": "interactive",
+                "content": json.dumps(self._folded_card(summary, folded_token), ensure_ascii=False),
+            }
+            resp = await self.client.post(url, headers=headers, json=payload)
+            data = resp.json()
+            if data.get("code") == 0:
+                self._cache_fold(folded_token, text, summary)
+                return data["data"]["message_id"]
+            logger.error(f"[Feishu] Fold-card fallback failed: {data}")
+            return None
+
+        # 1) Summary message in the main chat stream (plain text: it is already
+        # markdown-stripped by extract_first_paragraph and carries no fold UI).
+        summary_text = f"{summary}\n\n🧵 全文见本条消息的话题楼" if summary else "🧵 内容较长，全文见本条消息的话题楼"
+        summary_payload = {
+            "receive_id": str(chat_id),
+            "msg_type": "text",
+            "content": json.dumps({"text": summary_text}, ensure_ascii=False),
+        }
+        resp = await self.client.post(url, headers=headers, json=summary_payload)
+        data = resp.json()
+        if data.get("code") != 0:
+            logger.warning(f"[Feishu] Thread-mode summary send failed ({data.get('msg')}); falling back to fold card")
+            return await _folded_card_fallback()
+        summary_message_id = data["data"]["message_id"]
+
+        # 2) Full text as a reply thread attached to the summary message.
+        reply_url = f"{self.api_base}/open-apis/im/v1/messages/{summary_message_id}/reply"
+        reply_payload = {
+            "msg_type": "interactive",
+            "content": json.dumps(self._markdown_to_card(text), ensure_ascii=False),
+            "reply_in_thread": True,
+        }
+        resp = await self.client.post(reply_url, headers=headers, json=reply_payload)
+        data = resp.json()
+        if data.get("code") != 0:
+            # e.g. 230071 (chat does not support reply-in-thread): keep the
+            # summary but deliver the full text as a normal card in the stream.
+            logger.warning(f"[Feishu] Thread reply failed ({data.get('msg')}); sending full card to main stream")
+            full_payload = {
+                "receive_id": str(chat_id),
+                "msg_type": "interactive",
+                "content": json.dumps(self._markdown_to_card(text), ensure_ascii=False),
+            }
+            resp = await self.client.post(url, headers=headers, json=full_payload)
+            data = resp.json()
+            if data.get("code") != 0:
+                logger.error(f"[Feishu] Full-card fallback failed: {data}")
+        return summary_message_id
 
     async def _add_reaction(self, message_id: str, emoji_type: str = "OnIt") -> Optional[str]:
         """Adds a reaction to a message; returns the reaction_id for later removal."""
