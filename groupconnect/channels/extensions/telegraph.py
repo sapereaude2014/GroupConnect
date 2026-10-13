@@ -202,81 +202,44 @@ def table_rows_to_preformatted_text(
     if max_col_width is not None and max_col_width > 0:
         col_w = [max(min(nw, max_col_width), 1) for nw in natural_w]
     else:
-        # Smart mobile-first budget (target total width <= 44 characters)
+        # Unified Two-Pass Flex Budget Solver (target total width <= 44 characters)
         target_budget = 44
-        if num_cols == 1:
-            col_w = [min(natural_w[0], target_budget)]
-        elif num_cols == 2:
-            # 2 columns: target safe width <= 44
-            total_nat = sum(natural_w) + gap_w
-            if total_nat <= target_budget:
-                col_w = [max(nw, 1) for nw in natural_w]
-            else:
-                w0 = min(natural_w[0], 14)
-                rem = max(target_budget - gap_w - w0, 18)
-                w1 = min(natural_w[1], rem)
-                col_w = [max(w0, 1), max(w1, 1)]
-        elif num_cols == 3:
-            # 3 columns: target safe width <= 44
-            total_nat = sum(natural_w) + gap_w * 2
-            if total_nat <= target_budget:
-                col_w = [max(nw, 1) for nw in natural_w]
-            else:
-                avail_w = max(target_budget - gap_w * 2, 28)
-                h0_w = _display_width(norm_headers[0])
-                h1_w = _display_width(norm_headers[1])
-                h2_w = _display_width(norm_headers[2])
-                w0 = min(natural_w[0], max(h0_w, 8))
-                rem = avail_w - w0
-                nw1, nw2 = natural_w[1], natural_w[2]
-                if nw1 + nw2 <= rem:
-                    w1, w2 = nw1, nw2
-                else:
-                    target_w1 = min(nw1, max(h1_w, 12))
-                    if rem - target_w1 < 14 and nw2 >= 14:
-                        target_w1 = max(rem - min(nw2, 18), max(h1_w, 8))
-                    if nw2 < rem - target_w1:
-                        w2 = max(nw2, h2_w)
-                        w1 = min(nw1, rem - w2)
-                    else:
-                        w1 = target_w1
-                        w2 = rem - w1
-                col_w = [max(w0, 1), max(w1, 1), max(w2, 1)]
-        elif num_cols == 4:
-            # 4 columns: target safe width <= 44
-            total_nat = sum(natural_w) + gap_w * 3
-            if total_nat <= target_budget:
-                col_w = [max(nw, 1) for nw in natural_w]
-            else:
-                avail_w = max(target_budget - gap_w * 3, 24)
-                h_ws = [_display_width(norm_headers[i]) for i in range(4)]
-                min_ws = [max(h_ws[i], 4) for i in range(4)]
-                base = max(avail_w // 4, 1)
-                col_w = [max(min(natural_w[i], base), min_ws[i]) for i in range(4)]
-                rem = avail_w - sum(col_w)
+        total_gaps = gap_w * (num_cols - 1)
+        avail_w = target_budget - total_gaps
+
+        # 1. First Pass: calculate Min-Content (indivisible readable floor) and Max-Content per column
+        header_ws = [_display_width(norm_headers[i].strip()) for i in range(num_cols)]
+        floor = 6 if num_cols >= 4 else 8
+        min_w = [max(min(natural_w[i], floor), header_ws[i], 1) for i in range(num_cols)]
+
+        # Case 1: Total natural width fits within budget -> render naturally without wrapping
+        if sum(natural_w) <= avail_w:
+            col_w = [max(nw, 1) for nw in natural_w]
+        # Case 3: Minimum floor exceeds budget -> Wide Table Mode (smooth horizontal scrolling in Telegraph <pre>)
+        elif sum(min_w) > avail_w:
+            col_w = []
+            for i in range(num_cols):
+                min_readable = max(header_ws[i], 6 if num_cols >= 5 else 4)
+                col_w.append(max(min(natural_w[i], 24), min_readable, 1))
+        # Case 2: Flex allocation within single-screen budget
+        else:
+            col_w = list(min_w)
+            rem = avail_w - sum(col_w)
+            growth = [max(natural_w[i] - min_w[i], 0) for i in range(num_cols)]
+            tot_growth = sum(growth)
+            if tot_growth > 0:
+                alloc = [int(rem * growth[i] / tot_growth) for i in range(num_cols)]
+                for i in range(num_cols):
+                    col_w[i] += alloc[i]
+                rem -= sum(alloc)
                 while rem > 0:
-                    deficit = [natural_w[i] - col_w[i] for i in range(4)]
-                    if max(deficit) <= 0:
+                    rem_growth = [natural_w[i] - col_w[i] for i in range(num_cols)]
+                    if max(rem_growth) <= 0:
+                        col_w[natural_w.index(max(natural_w))] += rem
                         break
-                    best_i = deficit.index(max(deficit))
+                    best_i = rem_growth.index(max(rem_growth))
                     col_w[best_i] += 1
                     rem -= 1
-        else:
-            # 5+ columns: Wide Table Mode (宽表横滑模式)
-            # If the wide table naturally fits within budget, keep it compact
-            total_nat = sum(natural_w) + gap_w * (num_cols - 1)
-            if total_nat <= target_budget:
-                col_w = [max(nw, 1) for nw in natural_w]
-            else:
-                # Wide data grid: guarantee header integrity & readable numbers/codes,
-                # allowing graceful horizontal scrolling in Telegraph (<pre> blocks).
-                col_w = []
-                for i in range(num_cols):
-                    h_w = _display_width(norm_headers[i])
-                    # Header must never be broken; numbers/codes at least 6
-                    min_readable = max(h_w, 6)
-                    # Natural width capped at 24 to prevent runaway single-line sentences
-                    col_w.append(max(min(natural_w[i], 24), min_readable))
 
     max_table_w = 0
 
