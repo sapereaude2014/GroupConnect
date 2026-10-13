@@ -297,25 +297,45 @@ class TestFeishuChannelOutbound(unittest.IsolatedAsyncioTestCase):
         quote_only = "> " + "引用内容" * 30 + "\n\n> 更多引用"
         self.assertFalse(channel._exceeds_threshold(quote_only))
 
-    async def test_send_reply_long_text_thread_mode(self):
-        """Over-threshold replies go thread-first: summary text in the main
-        stream, full text as a reply_in_thread card."""
+    async def test_send_reply_long_text_collapsible_card(self):
+        """Over-threshold replies go as a single card: summary directly
+        readable, full text inside a native collapsed collapsible_panel."""
         channel = self._make_channel()
         channel.client.post = AsyncMock(return_value=self._mock_resp({"code": 0, "data": {"message_id": "om_4"}}))
         long_text = "核心结论先行。这是首段摘要内容。\n\n" + "后续详细内容。" * 30
         msg_id = await channel.send_reply(chat_id="oc_1", text=long_text)
         self.assertEqual(msg_id, "om_4")
-        # 1st call = summary text into the main stream
-        first = channel.client.post.call_args_list[0].kwargs["json"]
-        self.assertEqual(first["msg_type"], "text")
-        self.assertIn("核心结论先行。这是首段摘要内容。", json.loads(first["content"])["text"])
-        # 2nd call = full card attached via the reply endpoint
+        # Exactly one message: summary + panel in the same card
+        self.assertEqual(channel.client.post.call_count, 1)
+        payload = channel.client.post.call_args.kwargs["json"]
+        self.assertEqual(payload["msg_type"], "interactive")
+        card = json.loads(payload["content"])
+        elements = card["body"]["elements"]
+        # Summary is directly readable as markdown
+        self.assertIn("核心结论先行。这是首段摘要内容。", elements[0]["content"])
+        # Full text lives in a collapsed native panel
+        panel = elements[1]
+        self.assertEqual(panel["tag"], "collapsible_panel")
+        self.assertFalse(panel["expanded"])
+        panel_md = "\n".join(el["content"] for el in panel["elements"] if el["tag"] == "markdown")
+        self.assertIn("后续详细内容。", panel_md)
+        self.assertIn("核心结论先行。这是首段摘要内容。", panel_md)
+
+    async def test_send_reply_collapsible_failure_falls_back_to_full_card(self):
+        """Collapsible card rejected -> full card in the stream -> text."""
+        channel = self._make_channel()
+        channel.client.post = AsyncMock(side_effect=[
+            self._mock_resp({"code": 230001, "msg": "panel unsupported"}),
+            self._mock_resp({"code": 0, "data": {"message_id": "om_fb1"}}),
+        ])
+        long_text = "首段摘要。\n\n" + "正文内容。" * 40
+        msg_id = await channel.send_reply(chat_id="oc_1", text=long_text)
+        self.assertEqual(msg_id, "om_fb1")
         self.assertEqual(channel.client.post.call_count, 2)
-        url = channel.client.post.call_args_list[1].args[0]
-        self.assertIn("/reply", url)
-        second = channel.client.post.call_args_list[1].kwargs["json"]
-        self.assertEqual(second["msg_type"], "interactive")
-        self.assertTrue(second["reply_in_thread"])
+        fallback_card = json.loads(channel.client.post.call_args_list[1].kwargs["json"]["content"])
+        # Plain full card: markdown elements only, no collapsible_panel
+        tags = [el["tag"] for el in fallback_card["body"]["elements"]]
+        self.assertNotIn("collapsible_panel", tags)
 
     async def test_send_reply_short_text_single_card(self):
         channel = self._make_channel()

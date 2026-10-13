@@ -55,9 +55,10 @@ except ImportError:
 class FeishuChannel(BaseChannel):
     """Channel adapter for Feishu (Lark) Open Platform using SDK long-connection."""
 
-    # Long replies go thread-first: a short summary lands in the main chat
-    # stream and the full text is attached as a reply thread — no client-side
-    # expand/collapse residue. Hard-coded (summary 60 chars / trigger 100 chars
+    # Long replies go as a single collapsible card: short summary directly
+    # readable, full text inside a native collapsed panel (per-user local
+    # expand/collapse, default collapsed — no topics created, no shared
+    # expanded state). Hard-coded (summary 60 chars / trigger 100 chars
     # shared with the Telegram auto-Telegraph flow). Replies to messages that
     # live inside a topic stay inside that same topic.
     THREAD_THRESHOLD = AUTO_TELEGRAPH_THRESHOLD
@@ -207,10 +208,11 @@ class FeishuChannel(BaseChannel):
             return await self._send_reply_in_thread(chat_id, text, headers, reply_to_msg_id)
 
         # Always render as markdown card for consistent rendering.
-        # Over-threshold replies go thread-first: summary in the stream,
-        # full text in a reply thread.
+        # Over-threshold replies go as a single collapsible card: short
+        # summary directly readable, full text inside a native collapsed
+        # panel (per-user local expand/collapse, default collapsed).
         if self._exceeds_threshold(text):
-            return await self._send_threaded_reply(chat_id, text, headers)
+            return await self._send_collapsible_reply(chat_id, text, headers)
         card = self._markdown_to_card(text)
         payload = {
             "receive_id": str(chat_id),
@@ -302,50 +304,75 @@ class FeishuChannel(BaseChannel):
         logger.error(f"[Feishu] Thread reply failed: {data}")
         return None
 
-    async def _send_threaded_reply(
+    def _collapsible_card(self, text: str, summary: str) -> dict:
+        """Single-card long reply: short summary readable directly, full text
+        inside a native collapsible_panel that defaults to collapsed. The
+        panel's expand/collapse is a local per-user client behavior, so no
+        topics are created and no shared expanded state exists."""
+        elements = []
+        if summary:
+            elements.append({"tag": "markdown", "text_align": "left", "content": summary + " ……"})
+        elements.append({
+            "tag": "collapsible_panel",
+            "expanded": False,
+            "background_color": "grey",
+            "header": {
+                "title": {"tag": "markdown", "content": "**展开全文**"},
+                "vertical_align": "center",
+                "icon": {
+                    "tag": "standard_icon",
+                    "token": "down-small-ccm_outlined",
+                    "color": "grey",
+                    "size": "16px 16px",
+                },
+                "icon_position": "right",
+                "icon_expanded_angle": -180,
+            },
+            "border": {"color": "grey", "corner_radius": "5px"},
+            "vertical_spacing": "8px",
+            "padding": "8px",
+            "elements": FeishuChannel._markdown_body_elements(text),
+        })
+        return FeishuChannel._card_shell(elements)
+
+    async def _send_collapsible_reply(
         self,
         chat_id: Union[int, str],
         text: str,
         headers: Dict[str, str],
     ) -> Optional[Union[int, str]]:
-        """Thread-first long reply: a short summary message lands in the main
-        chat stream, the full text is attached to it as a reply thread.
-        No expand/collapse buttons, so no per-client expanded residue.
-        Fallback chain: thread reply fails -> full card in main stream;
-        summary send fails -> full card in main stream."""
+        """Over-threshold reply as a single card: short summary directly
+        readable, full text inside a native collapsed collapsible_panel.
+        Expand/collapse is local per user and defaults to collapsed, so long
+        replies never create topics nor leave shared expanded residue.
+        Fallback chain: collapsible card fails -> full card in the stream;
+        full card fails -> plain text so the reply is never lost."""
         url = f"{self.api_base}/open-apis/im/v1/messages?receive_id_type=chat_id"
         summary = extract_first_paragraph(text)
-
-        # 1) Summary message in the main chat stream (plain text: it is already
-        # markdown-stripped by extract_first_paragraph and carries no fold UI).
-        summary_text = f"{summary}\n\n🧵 全文见本条消息的话题楼" if summary else "🧵 内容较长，全文见本条消息的话题楼"
-        summary_payload = {
+        payload = {
+            "receive_id": str(chat_id),
+            "msg_type": "interactive",
+            "content": json.dumps(self._collapsible_card(text, summary), ensure_ascii=False),
+        }
+        resp = await self.client.post(url, headers=headers, json=payload)
+        data = resp.json()
+        if data.get("code") == 0:
+            return data["data"]["message_id"]
+        logger.warning(f"[Feishu] Collapsible card send failed ({data.get('msg')}); falling back to full card")
+        msg_id = await self._send_full_card(chat_id, text, headers)
+        if msg_id:
+            return msg_id
+        fallback = {
             "receive_id": str(chat_id),
             "msg_type": "text",
-            "content": json.dumps({"text": summary_text}, ensure_ascii=False),
+            "content": json.dumps({"text": text}, ensure_ascii=False),
         }
-        resp = await self.client.post(url, headers=headers, json=summary_payload)
+        resp = await self.client.post(url, headers=headers, json=fallback)
         data = resp.json()
-        if data.get("code") != 0:
-            logger.warning(f"[Feishu] Thread-mode summary send failed ({data.get('msg')}); sending full card")
-            return await self._send_full_card(chat_id, text, headers)
-        summary_message_id = data["data"]["message_id"]
-
-        # 2) Full text as a reply thread attached to the summary message.
-        reply_url = f"{self.api_base}/open-apis/im/v1/messages/{summary_message_id}/reply"
-        reply_payload = {
-            "msg_type": "interactive",
-            "content": json.dumps(self._markdown_to_card(text), ensure_ascii=False),
-            "reply_in_thread": True,
-        }
-        resp = await self.client.post(reply_url, headers=headers, json=reply_payload)
-        data = resp.json()
-        if data.get("code") != 0:
-            # e.g. 230071 (chat does not support reply-in-thread): keep the
-            # summary but deliver the full text as a normal card in the stream.
-            logger.warning(f"[Feishu] Thread reply failed ({data.get('msg')}); sending full card to main stream")
-            await self._send_full_card(chat_id, text, headers)
-        return summary_message_id
+        if data.get("code") == 0:
+            return data["data"]["message_id"]
+        logger.error(f"[Feishu] Send message failed: {data}")
+        return None
 
     async def _add_reaction(self, message_id: str, emoji_type: str = "OnIt") -> Optional[str]:
         """Adds a reaction to a message; returns the reaction_id for later removal."""
