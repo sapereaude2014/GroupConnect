@@ -72,43 +72,93 @@ def _pad_right(s: str, target_width: int) -> str:
     return s + ' ' * max(0, target_width - _display_width(s))
 
 
+_NO_LINE_START = set("，。、；：！？）】｝”’%,)］}>'\"")
+_NO_LINE_END = set("（【｛“‘([<{")
+_CLAUSE_PUNCT = set("，、；：:;。！？")
+
+
+def _is_cjk(ch: str) -> bool:
+    o = ord(ch)
+    return (0x4E00 <= o <= 0x9FFF) or (0x3400 <= o <= 0x4DBF) or unicodedata.east_asian_width(ch) in ("W", "F")
+
+
+def _is_num_char(ch: str) -> bool:
+    return ch.isdigit() or ch in ".,+-–%$¥€"
+
+
 def _wrap_cell(text: str, max_width: int) -> List[str]:
-    """Wrap cell text on natural word boundaries (spaces, slashes, punctuation) within max_width."""
+    """Wrap cell text on natural word boundaries (spaces, punctuation, CJK chars) within max_width."""
     if not text or max_width <= 0:
         return [text]
     lines = []
     for raw_part in text.split("\n"):
         part = raw_part.strip()
         while _display_width(part) > max_width:
+            tot_w = _display_width(part)
+            breaks = []
             cur_w = 0
-            best_split = -1
-            delims = {" ", "/", ",", ";", "-", "|", "，", "、", "；", "：", ":", "+", "（", "）", "(", ")"}
-            for i, ch in enumerate(part):
-                w = 2 if ((0x1F300 <= ord(ch) <= 0x1F9FF) or (0x2600 <= ord(ch) <= 0x27BF) or unicodedata.east_asian_width(ch) in ('W', 'F')) else 1
-                if cur_w + w > max_width:
-                    break
+            n = len(part)
+            for i in range(1, n + 1):
+                prev = part[i - 1]
+                w = 2 if _is_cjk(prev) else 1
                 cur_w += w
-                if ch in delims:
-                    best_split = i + 1
+                if cur_w > max_width:
+                    break
+                if i == n:
+                    breaks.append((i, cur_w, 0))
+                    break
+                nxt = part[i]
+                if nxt in _NO_LINE_START:
+                    continue
+                if prev in _NO_LINE_END:
+                    continue
+                if _is_num_char(prev) and _is_num_char(nxt):
+                    continue
+                if (prev.isalnum() or prev == "_") and (nxt.isalnum() or nxt == "_") and not _is_cjk(prev) and not _is_cjk(nxt):
+                    continue
+                bonus = 0
+                if prev in _CLAUSE_PUNCT:
+                    bonus = 10
+                elif prev == " " or nxt == " ":
+                    bonus = 5
+                elif _is_cjk(prev) and _is_cjk(nxt):
+                    bonus = 1
+                else:
+                    bonus = 2
+                breaks.append((i, cur_w, bonus))
 
-            if best_split > 0 and (
-                _display_width(part[:best_split]) >= max(max_width * 0.4, 4)
-                or part[best_split - 1] in {" ", "，", "、", "；", "：", ":"}
-            ):
-                lines.append(part[:best_split].strip())
-                part = part[best_split:].strip()
-            else:
-                # No delimiter found within max_width, break by character
+            if not breaks:
+                # No boundary found within max_width, break by character
                 cut_idx = 0
                 cw = 0
                 for i, ch in enumerate(part):
-                    w = 2 if ((0x1F300 <= ord(ch) <= 0x1F9FF) or (0x2600 <= ord(ch) <= 0x27BF) or unicodedata.east_asian_width(ch) in ('W', 'F')) else 1
+                    w = 2 if _is_cjk(ch) else 1
                     if cw + w > max_width:
                         break
                     cw += w
                     cut_idx = i + 1
                 lines.append(part[:cut_idx].strip())
                 part = part[cut_idx:].strip()
+                continue
+
+            word_breaks = [b for b in breaks if b[2] >= 5 and b[1] >= max_width * 0.55]
+            if word_breaks:
+                best_idx = word_breaks[-1][0]
+            else:
+                rem_w = tot_w - breaks[-1][1]
+                if rem_w <= 2 and len(breaks) > 1:
+                    valid_earlier = [b for b in breaks if (tot_w - b[1]) >= 4 and b[1] >= max_width * 0.4]
+                    if valid_earlier:
+                        best_idx = valid_earlier[-1][0]
+                    else:
+                        best_idx = breaks[-1][0]
+                else:
+                    best_idx = breaks[-1][0]
+
+            head = part[:best_idx].strip()
+            part = part[best_idx:].strip()
+            if head:
+                lines.append(head)
 
         if part:
             lines.append(part)
@@ -126,7 +176,7 @@ def table_rows_to_preformatted_text(
     - Every column is strictly left-aligned at its designated horizontal offset.
     - Clean horizontal divider rules (───) separate headers and multi-line rows.
     - Natural halfwidth ASCII numbers/English preserved without distortion.
-    - Dynamic mobile budgeting guarantees tables stay within screen width (<= 34 chars).
+    - Dynamic mobile budgeting guarantees tables stay within screen width (<= 36 chars).
     """
     if not data_rows:
         return ""
@@ -152,28 +202,62 @@ def table_rows_to_preformatted_text(
     if max_col_width is not None and max_col_width > 0:
         col_w = [max(min(nw, max_col_width), 1) for nw in natural_w]
     else:
-        # Smart mobile-first budget (target total width <= 34 characters)
+        # Smart mobile-first budget (target total width <= 36 characters)
+        target_budget = 36
         if num_cols == 1:
-            col_w = [min(natural_w[0], 32)]
+            col_w = [min(natural_w[0], target_budget)]
         elif num_cols == 2:
-            # 2 columns: target safe width <= 34
-            nw0, nw1 = natural_w[0], natural_w[1]
-            if nw0 + gap_w + nw1 <= 34:
-                col_w = [max(nw0, 1), max(nw1, 1)]
-            else:
-                w0 = min(nw0, 12)
-                rem = max(34 - gap_w - w0, 14)
-                w1 = min(nw1, rem)
-                col_w = [max(w0, 1), max(w1, 1)]
-        elif num_cols == 3:
-            # 3 columns: target safe width <= 34
-            total_nat = sum(natural_w) + gap_w * 2
-            if total_nat <= 34:
+            # 2 columns: target safe width <= 36
+            total_nat = sum(natural_w) + gap_w
+            if total_nat <= target_budget:
                 col_w = [max(nw, 1) for nw in natural_w]
             else:
-                col_w = [max(min(nw, 10), 1) for nw in natural_w]
+                w0 = min(natural_w[0], 12)
+                rem = max(target_budget - gap_w - w0, 14)
+                w1 = min(natural_w[1], rem)
+                col_w = [max(w0, 1), max(w1, 1)]
+        elif num_cols == 3:
+            # 3 columns: target safe width <= 36
+            total_nat = sum(natural_w) + gap_w * 2
+            if total_nat <= target_budget:
+                col_w = [max(nw, 1) for nw in natural_w]
+            else:
+                avail_w = max(target_budget - gap_w * 2, 24)
+                h0_w = _display_width(norm_headers[0])
+                h1_w = _display_width(norm_headers[1])
+                h2_w = _display_width(norm_headers[2])
+                w0 = min(natural_w[0], max(h0_w, 8))
+                rem = avail_w - w0
+                nw1, nw2 = natural_w[1], natural_w[2]
+                if nw1 + nw2 <= rem:
+                    w1, w2 = nw1, nw2
+                else:
+                    target_w1 = min(nw1, max(h1_w, 10))
+                    if rem - target_w1 < 12 and nw2 >= 12:
+                        target_w1 = max(rem - min(nw2, 14), max(h1_w, 8))
+                    if nw2 < rem - target_w1:
+                        w2 = max(nw2, h2_w)
+                        w1 = min(nw1, rem - w2)
+                    else:
+                        w1 = target_w1
+                        w2 = rem - w1
+                col_w = [max(w0, 1), max(w1, 1), max(w2, 1)]
         else:
-            col_w = [max(min(nw, 8), 1) for nw in natural_w]
+            total_nat = sum(natural_w) + gap_w * (num_cols - 1)
+            if total_nat <= target_budget:
+                col_w = [max(nw, 1) for nw in natural_w]
+            else:
+                avail_w = max(target_budget - gap_w * (num_cols - 1), num_cols * 4)
+                base = max(avail_w // num_cols, 1)
+                col_w = [min(nw, base) for nw in natural_w]
+                rem = avail_w - sum(col_w)
+                while rem > 0:
+                    deficit = [natural_w[i] - col_w[i] for i in range(num_cols)]
+                    if max(deficit) <= 0:
+                        break
+                    best_i = deficit.index(max(deficit))
+                    col_w[best_i] += 1
+                    rem -= 1
 
     max_table_w = 0
 

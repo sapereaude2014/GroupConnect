@@ -115,6 +115,31 @@ class TestFullwidthConversion(unittest.TestCase):
         self.assertTrue(len(sep_lines) > 0)
         self.assertEqual(_display_width(sep_lines[0]), max_w)
 
+    def test_three_column_financial_table_wrapping_and_number_integrity(self):
+        from groupconnect.channels.extensions.telegraph import _display_width
+        headers = ["指标", "最新", "定性"]
+        data_rows = [
+            ["道指期货", "+0.51%", "银行财报打头，价值风格受捧"],
+            ["标普期货", "-0.06%", "观望"],
+            ["纳指期货", "-0.63%", "AI 硬件继续拖累"],
+            ["现货黄金", "重返 4,200 美元上方", "避险资金涌入"],
+            ["10Y 美债收益率", "约 5.20%（-4bp）", "同一避险叙事"],
+        ]
+        text = table_rows_to_preformatted_text(headers, data_rows)
+        lines = text.split("\n")
+        # Line width on mobile must not exceed 36 chars
+        max_w = max(_display_width(l) for l in lines)
+        self.assertLessEqual(max_w, 36)
+        # Numbers with commas or signs must not be broken across lines
+        self.assertIn("4,200", text)
+        self.assertIn("+0.51%", text)
+        self.assertIn("-0.06%", text)
+        self.assertIn("5.20%", text)
+        # Words must not be cut awkwardly
+        self.assertIn("银行财报打头，", text)
+        self.assertIn("价值风格受捧", text)
+        self.assertIn("避险资金涌入", text)
+
 
 class TestMarkdownTableToPreNode(unittest.TestCase):
     def test_markdown_table_becomes_pre_node(self):
