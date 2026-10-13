@@ -42,8 +42,9 @@ bots:
     #     lock: true                                     # Prevent concurrent runs (true, or path to lockfile)
     #     arbiter_only_on_broadcast: true               # Untargeted '/cmd' in a multi-bot group runs only on the Arbiter
     #     schedule:                                     # Optional: periodic schedule (auto-runs script, broadcasts report)
-    #       weekday: 6                                  # Day of week (0=Monday..6=Sunday; omit for every day)
+    #       weekday: 6                                  # Day of week (0=Monday..6=Sunday; list like [0,1,2,3,4,5] or int; omit for every day)
     #       hour: 4                                     # Hour of day (0..23)
+    #       minute: 0                                   # Minute of hour (0..59, defaults to 0)
 
     # pattern_commands:                  # Optional: direct regex script triggers — matched plain group text runs a
     #   - pattern: "^(turn on|turn off)\\s+(lights|ac)(\\s+\\d{1,2})?$"  # local script without invoking any LLM

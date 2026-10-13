@@ -162,6 +162,7 @@ class GroupConnectEngine:
             relay=self.relay
         )
         self.is_running = False
+        self._running_scheduled_tasks: Set[asyncio.Task] = set()
 
         # 5. Autonomous Routing (免@自主唤醒: single-arbiter + symmetric observers)
         self.autonomous: Optional[AutonomousController] = None
@@ -262,6 +263,9 @@ class GroupConnectEngine:
                 self._resume_hold_task.cancel()
             if scheduler_task:
                 scheduler_task.cancel()
+            for task in list(self._running_scheduled_tasks):
+                if not task.done():
+                    task.cancel()
             for task in self.chat_tasks.values():
                 if not task.done():
                     task.cancel()
@@ -280,47 +284,85 @@ class GroupConnectEngine:
                 logger.warning(f"Error closing adapter during shutdown: {e}")
 
     async def _scheduled_tasks_loop(self) -> None:
-        """Generic scheduled background runner for custom_commands with 'schedule' config."""
+        """Generic scheduled background runner with minute-aligned ticks."""
         last_run_keys: Set[str] = set()
         while self.is_running:
             try:
-                await asyncio.sleep(1800)  # check every 30 mins
+                # Sleep precisely until the start of the next minute (xx:xx:00) + 100ms guard
+                now = datetime.now()
+                sleep_secs = 60.0 - now.second - (now.microsecond / 1_000_000.0) + 0.1
+                if sleep_secs <= 0.1:
+                    sleep_secs += 60.0
+                await asyncio.sleep(sleep_secs)
+
                 now = datetime.now()
                 today_str = now.strftime("%Y%m%d")
+                current_weekday = now.weekday()
+                current_hour = now.hour
+                current_minute = now.minute
+
+                # Clean up yesterday's keys when date changes
+                if len(last_run_keys) > 200:
+                    last_run_keys = {k for k in last_run_keys if today_str in k}
+
                 for cmd_cfg in getattr(self.config, "custom_commands", []):
                     sched = cmd_cfg.get("schedule")
                     if not isinstance(sched, dict):
                         continue
+
+                    # Weekday check: int or list/tuple/set of ints (0=Monday..6=Sunday)
                     sched_weekday = sched.get("weekday")
+                    if sched_weekday is not None:
+                        if isinstance(sched_weekday, (list, tuple, set)):
+                            if current_weekday not in sched_weekday:
+                                continue
+                        elif current_weekday != sched_weekday:
+                            continue
+
                     sched_hour = sched.get("hour")
-                    if sched_weekday is not None and now.weekday() != sched_weekday:
+                    sched_minute = sched.get("minute", 0)
+                    if sched_hour is not None and current_hour != sched_hour:
                         continue
-                    if sched_hour is not None and now.hour != sched_hour:
+                    if sched_minute is not None and current_minute != sched_minute:
                         continue
+
                     cmd_name = str(cmd_cfg.get("command", "")).strip().lower()
-                    run_key = f"{cmd_name}_{today_str}_{sched_hour}"
+                    run_key = f"{cmd_name}_{today_str}_{current_hour:02d}{current_minute:02d}"
                     if run_key not in last_run_keys:
                         last_run_keys.add(run_key)
-                        logger.info(f"[SCHEDULER] Triggering scheduled task '{cmd_name}'...")
-                        script = os.path.expanduser(cmd_cfg.get("script", ""))
-                        if os.path.isfile(script):
-                            proc = await asyncio.create_subprocess_exec(
-                                script,
-                                stdout=asyncio.subprocess.PIPE,
-                                stderr=asyncio.subprocess.PIPE
-                            )
-                            stdout, stderr = await proc.communicate()
-                            if proc.returncode != 0:
-                                err_tail = (stderr or b"").decode("utf-8", "replace").strip()[-300:]
-                                logger.error(f"[SCHEDULER] Scheduled task '{cmd_name}' failed (rc={proc.returncode}): {err_tail}")
-                                await self._notify_task_failure(cmd_name, proc.returncode, err_tail)
-                        else:
-                            logger.error(f"[SCHEDULER] Script missing for '{cmd_name}': {script}")
-                            await self._notify_task_failure(cmd_name, -1, f"脚本不存在: {script}")
+                        logger.info(f"[SCHEDULER] Triggering scheduled task '{cmd_name}' at {current_hour:02d}:{current_minute:02d}...")
+                        task = asyncio.create_task(self._run_scheduled_task(cmd_name, cmd_cfg))
+                        self._running_scheduled_tasks.add(task)
+                        task.add_done_callback(self._running_scheduled_tasks.discard)
+
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.warning(f"Error in scheduler loop: {e}")
+
+    async def _run_scheduled_task(self, cmd_name: str, cmd_cfg: Dict[str, Any]) -> None:
+        """Executes a scheduled script in background and notifies on failure."""
+        script = os.path.expanduser(cmd_cfg.get("script", ""))
+        if not os.path.isfile(script):
+            logger.error(f"[SCHEDULER] Script missing for '{cmd_name}': {script}")
+            await self._notify_task_failure(cmd_name, -1, f"脚本不存在: {script}")
+            return
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                script,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await proc.communicate()
+            if proc.returncode != 0:
+                err_tail = (stderr or b"").decode("utf-8", "replace").strip()[-300:]
+                logger.error(f"[SCHEDULER] Scheduled task '{cmd_name}' failed (rc={proc.returncode}): {err_tail}")
+                await self._notify_task_failure(cmd_name, proc.returncode, err_tail)
+            else:
+                logger.info(f"[SCHEDULER] Scheduled task '{cmd_name}' completed successfully.")
+        except Exception as e:
+            logger.error(f"[SCHEDULER] Exception executing task '{cmd_name}': {e}")
+            await self._notify_task_failure(cmd_name, -1, str(e))
 
     async def _notify_task_failure(self, task_name: str, returncode: int, err_tail: str) -> None:
         """Alert allowed chats when a scheduled task fails."""
