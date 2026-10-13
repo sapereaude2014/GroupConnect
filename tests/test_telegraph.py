@@ -107,9 +107,9 @@ class TestFullwidthConversion(unittest.TestCase):
         ]
         text = table_rows_to_preformatted_text(headers, data_rows)
         lines = text.split("\n")
-        # Line width on mobile must not exceed 36 chars to avoid horizontal scrolling
+        # Line width on mobile must not exceed 44 chars to avoid horizontal scrolling
         max_w = max(_display_width(l) for l in lines)
-        self.assertLessEqual(max_w, 36)
+        self.assertLessEqual(max_w, 44)
         # Separator line length matches max line length closely
         sep_lines = [l for l in lines if all(c == "-" for c in l)]
         self.assertTrue(len(sep_lines) > 0)
@@ -127,9 +127,9 @@ class TestFullwidthConversion(unittest.TestCase):
         ]
         text = table_rows_to_preformatted_text(headers, data_rows)
         lines = text.split("\n")
-        # Line width on mobile must not exceed 36 chars
+        # Line width on mobile must not exceed 44 chars
         max_w = max(_display_width(l) for l in lines)
-        self.assertLessEqual(max_w, 36)
+        self.assertLessEqual(max_w, 44)
         # Numbers with commas or signs must not be broken across lines
         self.assertIn("4,200", text)
         self.assertIn("+0.51%", text)
@@ -139,6 +139,20 @@ class TestFullwidthConversion(unittest.TestCase):
         self.assertIn("银行财报打头，", text)
         self.assertIn("价值风格受捧", text)
         self.assertIn("避险资金涌入", text)
+
+    def test_four_column_table_budgeting(self):
+        from groupconnect.channels.extensions.telegraph import _display_width
+        headers = ["代码", "名称", "现价", "涨跌幅"]
+        data_rows = [
+            ["600519", "贵州茅台", "1,680.00", "+1.25%"],
+            ["300476", "胜宏科技（算力）", "196.87", "-29.58%"],
+        ]
+        text = table_rows_to_preformatted_text(headers, data_rows)
+        lines = text.split("\n")
+        max_w = max(_display_width(l) for l in lines)
+        self.assertLessEqual(max_w, 44)
+        self.assertIn("胜宏科技（算力）", text)
+        self.assertIn("-29.58%", text)
 
 
 class TestMarkdownTableToPreNode(unittest.TestCase):

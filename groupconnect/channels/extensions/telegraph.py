@@ -202,27 +202,27 @@ def table_rows_to_preformatted_text(
     if max_col_width is not None and max_col_width > 0:
         col_w = [max(min(nw, max_col_width), 1) for nw in natural_w]
     else:
-        # Smart mobile-first budget (target total width <= 36 characters)
-        target_budget = 36
+        # Smart mobile-first budget (target total width <= 44 characters)
+        target_budget = 44
         if num_cols == 1:
             col_w = [min(natural_w[0], target_budget)]
         elif num_cols == 2:
-            # 2 columns: target safe width <= 36
+            # 2 columns: target safe width <= 44
             total_nat = sum(natural_w) + gap_w
             if total_nat <= target_budget:
                 col_w = [max(nw, 1) for nw in natural_w]
             else:
-                w0 = min(natural_w[0], 12)
-                rem = max(target_budget - gap_w - w0, 14)
+                w0 = min(natural_w[0], 14)
+                rem = max(target_budget - gap_w - w0, 18)
                 w1 = min(natural_w[1], rem)
                 col_w = [max(w0, 1), max(w1, 1)]
         elif num_cols == 3:
-            # 3 columns: target safe width <= 36
+            # 3 columns: target safe width <= 44
             total_nat = sum(natural_w) + gap_w * 2
             if total_nat <= target_budget:
                 col_w = [max(nw, 1) for nw in natural_w]
             else:
-                avail_w = max(target_budget - gap_w * 2, 24)
+                avail_w = max(target_budget - gap_w * 2, 28)
                 h0_w = _display_width(norm_headers[0])
                 h1_w = _display_width(norm_headers[1])
                 h2_w = _display_width(norm_headers[2])
@@ -232,9 +232,9 @@ def table_rows_to_preformatted_text(
                 if nw1 + nw2 <= rem:
                     w1, w2 = nw1, nw2
                 else:
-                    target_w1 = min(nw1, max(h1_w, 10))
-                    if rem - target_w1 < 12 and nw2 >= 12:
-                        target_w1 = max(rem - min(nw2, 14), max(h1_w, 8))
+                    target_w1 = min(nw1, max(h1_w, 12))
+                    if rem - target_w1 < 14 and nw2 >= 14:
+                        target_w1 = max(rem - min(nw2, 18), max(h1_w, 8))
                     if nw2 < rem - target_w1:
                         w2 = max(nw2, h2_w)
                         w1 = min(nw1, rem - w2)
