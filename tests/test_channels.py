@@ -329,17 +329,21 @@ class TestFeishuChannelOutbound(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(buttons, [])
 
     async def test_reply_in_topic_stays_in_topic(self):
-        """Replying to a message that lives inside a topic must reply inside
-        that same topic (reply_id + reply_in_thread=True), not the main stream."""
+        """Replying to a message that lives inside a topic must go through
+        the reply endpoint of that message, not create a new main-stream
+        message."""
         channel = self._make_channel()
         channel.client.post = AsyncMock(return_value=self._mock_resp({"code": 0, "data": {"message_id": "om_6"}}))
         # Simulate an inbound topic message that the channel has indexed
         channel._msg_threads["om_topic_msg"] = "om_root"
         msg_id = await channel.send_reply(chat_id="oc_1", text="话题内回复内容", reply_to_msg_id="om_topic_msg")
         self.assertEqual(msg_id, "om_6")
+        url = channel.client.post.call_args.args[0]
+        self.assertTrue(url.endswith("/messages/om_topic_msg/reply"))
         payload = channel.client.post.call_args.kwargs["json"]
-        self.assertEqual(payload["reply_id"], "om_topic_msg")
-        self.assertTrue(payload["reply_in_thread"])
+        self.assertNotIn("receive_id", payload)  # not a new main-stream message
+        self.assertNotIn("reply_id", payload)    # reply target is in the URL
+        self.assertNotIn("reply_in_thread", payload)
 
     async def test_reply_in_topic_long_text_full_card_in_topic(self):
         """Long replies inside a topic are delivered as-is (topic already
@@ -350,10 +354,10 @@ class TestFeishuChannelOutbound(unittest.IsolatedAsyncioTestCase):
         long_text = "首段摘要。\n\n" + "话题内正文。" * 40
         await channel.send_reply(chat_id="oc_1", text=long_text, reply_to_msg_id="om_topic_msg2")
         self.assertEqual(channel.client.post.call_count, 1)
+        url = channel.client.post.call_args.args[0]
+        self.assertTrue(url.endswith("/messages/om_topic_msg2/reply"))
         payload = channel.client.post.call_args.kwargs["json"]
         self.assertEqual(payload["msg_type"], "interactive")
-        self.assertEqual(payload["reply_id"], "om_topic_msg2")
-        self.assertTrue(payload["reply_in_thread"])
 
     async def test_reply_in_topic_card_failure_falls_back_to_text_in_topic(self):
         channel = self._make_channel()
@@ -365,13 +369,56 @@ class TestFeishuChannelOutbound(unittest.IsolatedAsyncioTestCase):
         msg_id = await channel.send_reply(chat_id="oc_1", text="**加粗**话题回复", reply_to_msg_id="om_topic_msg3")
         self.assertEqual(msg_id, "om_8")
         self.assertEqual(channel.client.post.call_count, 2)
-        first = channel.client.post.call_args_list[0].kwargs["json"]
+        # Both attempts target the same topic message via the reply endpoint
+        for call in channel.client.post.call_args_list:
+            self.assertTrue(call.args[0].endswith("/messages/om_topic_msg3/reply"))
         second = channel.client.post.call_args_list[1].kwargs["json"]
-        self.assertEqual(first["msg_type"], "interactive")
         self.assertEqual(second["msg_type"], "text")
-        self.assertTrue(second["reply_in_thread"])
-        self.assertEqual(second["reply_id"], "om_topic_msg3")
         self.assertEqual(json.loads(second["content"])["text"], "**加粗**话题回复")
+
+    async def test_topic_reply_regression_real_feishu_field(self):
+        """Regression for the 2026-10-13 incident: real Feishu inbound
+        messages mark their topic via root_id (no thread_id attribute
+        exists on the Feishu message model). In-topic messages must be
+        indexed and replies must use the reply endpoint; main-stream
+        messages must not."""
+        from types import SimpleNamespace
+        channel = self._make_channel()
+
+        # What the Feishu SDK hands us for a message sent inside a topic:
+        # root_id points at the topic root; thread_id attribute is absent.
+        topic_msg = SimpleNamespace(
+            chat_id="oc_1", chat_type="group", message_id="om_topic_real",
+            root_id="om_root_real", message_type="text",
+            create_time="1760000000000",
+            content=json.dumps({"text": "在楼里问本炮一句"}),
+        )
+        channel._index_topic_root(topic_msg)
+        self.assertEqual(channel._msg_threads.get("om_topic_real"), "om_root_real")
+
+        # Main-stream message: empty root_id -> not indexed
+        main_msg = SimpleNamespace(
+            chat_id="oc_1", chat_type="group", message_id="om_main",
+            root_id="", message_type="text",
+            content=json.dumps({"text": "主流消息"}),
+        )
+        channel._index_topic_root(main_msg)
+        self.assertNotIn("om_main", channel._msg_threads)
+
+        # Topic-group chat style: thread_id set, root_id absent
+        grp_msg = SimpleNamespace(
+            chat_id="oc_2", chat_type="group", message_id="om_grp",
+            thread_id="thread_grp",
+        )
+        channel._index_topic_root(grp_msg)
+        self.assertEqual(channel._msg_threads.get("om_grp"), "thread_grp")
+
+        # Reply to the in-topic message goes through the reply endpoint
+        channel.client.post = AsyncMock(return_value=self._mock_resp({"code": 0, "data": {"message_id": "om_r"}}))
+        await channel.send_reply(chat_id="oc_1", text="楼内作答", reply_to_msg_id="om_topic_real")
+        self.assertEqual(channel.client.post.call_count, 1)
+        url = channel.client.post.call_args.args[0]
+        self.assertTrue(url.endswith("/messages/om_topic_real/reply"))
 
 
 if __name__ == "__main__":

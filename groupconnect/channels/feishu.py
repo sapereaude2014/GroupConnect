@@ -83,7 +83,10 @@ class FeishuChannel(BaseChannel):
         self.is_running = False
         self._last_user_msg_ids: Dict[str, str] = {}  # chat_id -> last user message_id
         self._typing_reactions: Dict[str, tuple] = {}  # chat_id -> (message_id, reaction_id)
-        # message_id -> thread_id, so replies to topic messages stay in-topic.
+        # message_id -> topic root (root_id / thread_id), so replies to
+        # in-topic messages stay in-topic. Entries are recorded on inbound
+        # messages, so the mapping always covers the message being replied to
+        # regardless of restarts.
         self._msg_threads: Dict[str, str] = {}
         self._msg_threads_limit = 2000
 
@@ -254,6 +257,18 @@ class FeishuChannel(BaseChannel):
         logger.error(f"[Feishu] Full-card send failed: {data}")
         return None
 
+    def _index_topic_root(self, msg) -> None:
+        """Records msg -> its topic root, so a later reply to this message
+        is routed back into the same topic. Feishu marks in-topic messages
+        with a non-empty root_id (reply-in-thread topics in normal chats) or
+        thread_id (topic-group chats); other platforms' thread_id-style
+        attributes are absent on Feishu messages."""
+        topic_root = getattr(msg, "root_id", None) or getattr(msg, "thread_id", None)
+        if topic_root:
+            self._msg_threads[str(msg.message_id)] = str(topic_root)
+            if len(self._msg_threads) > self._msg_threads_limit:
+                self._msg_threads.pop(next(iter(self._msg_threads)))
+
     async def _send_reply_in_thread(
         self,
         chat_id: Union[int, str],
@@ -261,28 +276,24 @@ class FeishuChannel(BaseChannel):
         headers: Dict[str, str],
         reply_to_msg_id: Union[int, str],
     ) -> Optional[Union[int, str]]:
-        """Replies inside an existing topic. The topic itself is already the
-        fold layer, so the full text is delivered as-is (no summary/thread
-        nesting). Falls back to plain text if the card is rejected."""
-        url = f"{self.api_base}/open-apis/im/v1/messages?receive_id_type=chat_id"
+        """Replies inside an existing topic via the reply API: replying to
+        an in-topic message automatically lands in that topic. The topic
+        itself is already the fold layer, so the full text is delivered as-is
+        (no summary/thread nesting). Falls back to plain text if the card is
+        rejected."""
+        url = f"{self.api_base}/open-apis/im/v1/messages/{reply_to_msg_id}/reply"
         payload = {
-            "receive_id": str(chat_id),
             "msg_type": "interactive",
             "content": json.dumps(self._markdown_to_card(text), ensure_ascii=False),
-            "reply_id": str(reply_to_msg_id),
-            "reply_in_thread": True,
         }
         resp = await self.client.post(url, headers=headers, json=payload)
         data = resp.json()
         if data.get("code") == 0:
             return data["data"]["message_id"]
-        logger.warning(f"[Feishu] Thread reply failed ({data.get('msg')}); falling back to plain text")
+        logger.warning(f"[Feishu] Topic reply failed ({data.get('msg')}); falling back to plain text")
         fallback = {
-            "receive_id": str(chat_id),
             "msg_type": "text",
             "content": json.dumps({"text": text}, ensure_ascii=False),
-            "reply_id": str(reply_to_msg_id),
-            "reply_in_thread": True,
         }
         resp = await self.client.post(url, headers=headers, json=fallback)
         data = resp.json()
@@ -528,11 +539,7 @@ class FeishuChannel(BaseChannel):
                 # Remember which topic a message belongs to, so replies to it
                 # stay inside the same topic instead of leaking to the main
                 # stream.
-                thread_id = getattr(msg, "thread_id", None)
-                if thread_id:
-                    self._msg_threads[str(msg.message_id)] = str(thread_id)
-                    if len(self._msg_threads) > self._msg_threads_limit:
-                        self._msg_threads.pop(next(iter(self._msg_threads)))
+                self._index_topic_root(msg)
 
                 msg_type = getattr(msg, "message_type", None) or getattr(msg, "msg_type", "text")
                 create_time = getattr(msg, "create_time", None) or str(int(time.time() * 1000))
