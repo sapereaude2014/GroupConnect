@@ -8,7 +8,6 @@ import asyncio
 import json
 import logging
 import time
-import uuid
 from typing import Any, Callable, Coroutine, Dict, Optional, Union
 
 import os
@@ -38,11 +37,6 @@ def _feishu_file_type(ext: str) -> str:
 
 try:
     import lark_oapi as lark
-    from lark_oapi.event.callback.model.p2_card_action_trigger import (
-        P2CardActionTriggerResponse,
-        CallBackCard,
-        CallBackToast,
-    )
     _HAS_LARK_SDK = True
 except ImportError:
     _HAS_LARK_SDK = False
@@ -61,12 +55,12 @@ except ImportError:
 class FeishuChannel(BaseChannel):
     """Channel adapter for Feishu (Lark) Open Platform using SDK long-connection."""
 
-    # Long replies go telegraph-style: a short summary lands in the main chat
+    # Long replies go thread-first: a short summary lands in the main chat
     # stream and the full text is attached as a reply thread — no client-side
     # expand/collapse residue. Hard-coded (summary 60 chars / trigger 100 chars
-    # shared with the Telegram auto-Telegraph flow); card fold remains only as
-    # the fallback path.
-    FOLD_THRESHOLD = AUTO_TELEGRAPH_THRESHOLD
+    # shared with the Telegram auto-Telegraph flow). Replies to messages that
+    # live inside a topic stay inside that same topic.
+    THREAD_THRESHOLD = AUTO_TELEGRAPH_THRESHOLD
 
     def __init__(
         self,
@@ -89,36 +83,9 @@ class FeishuChannel(BaseChannel):
         self.is_running = False
         self._last_user_msg_ids: Dict[str, str] = {}  # chat_id -> last user message_id
         self._typing_reactions: Dict[str, tuple] = {}  # chat_id -> (message_id, reaction_id)
-        self._fold_cache: Dict[str, Dict[str, str]] = {}  # token -> {"full":..., "summary":...}
-        self._fold_cache_limit = 200
-        # Persisted so fold buttons survive bot restarts (full text lives only
-        # in this cache — the card itself carries just the summary).
-        self._fold_cache_path = os.path.join(getattr(config, "ipc_dir", "/tmp"), "feishu_fold_cache.json")
-        self._load_fold_cache()
-
-    def _load_fold_cache(self) -> None:
-        try:
-            if os.path.isfile(self._fold_cache_path):
-                with open(self._fold_cache_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                if isinstance(data, dict):
-                    self._fold_cache = {
-                        str(k): v for k, v in data.items()
-                        if isinstance(v, dict) and "full" in v and "summary" in v
-                    }
-                    logger.info(f"[Feishu] Restored {len(self._fold_cache)} fold-cache entries from disk")
-        except Exception as e:
-            logger.debug(f"[Feishu] Fold cache load failed, starting fresh: {e}")
-            self._fold_cache = {}
-
-    def _save_fold_cache(self) -> None:
-        try:
-            tmp = self._fold_cache_path + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(self._fold_cache, f, ensure_ascii=False)
-            os.replace(tmp, self._fold_cache_path)
-        except Exception as e:
-            logger.debug(f"[Feishu] Fold cache save failed: {e}")
+        # message_id -> thread_id, so replies to topic messages stay in-topic.
+        self._msg_threads: Dict[str, str] = {}
+        self._msg_threads_limit = 2000
 
     async def get_tenant_access_token(self) -> str:
         """Retrieves and caches Feishu tenant_access_token."""
@@ -204,43 +171,14 @@ class FeishuChannel(BaseChannel):
             elements = [{"tag": "markdown", "content": text}]
         return FeishuChannel._card_shell(elements)
 
-    @staticmethod
-    def _fold_button(action: str, token: str, label: str, btn_type: str) -> dict:
-        return {
-            "tag": "button",
-            "text": {"tag": "plain_text", "content": label},
-            "type": btn_type,
-            "size": "small",
-            "behaviors": [{"type": "callback", "value": {"action": action, "token": token}}],
-        }
-
-    def _should_fold(self, text: str) -> bool:
-        """True when text (excluding blockquotes) exceeds the fold threshold.
+    def _exceeds_threshold(self, text: str) -> bool:
+        """True when text (excluding blockquotes) exceeds the thread threshold.
         Mirrors the Telegram auto-Telegraph measurement logic."""
-        if not text or self.FOLD_THRESHOLD <= 0:
+        if not text or self.THREAD_THRESHOLD <= 0:
             return False
-        return len(_strip_blockquotes(text)) > self.FOLD_THRESHOLD
+        return len(_strip_blockquotes(text)) > self.THREAD_THRESHOLD
 
-    def _folded_card(self, summary: str, token: str) -> dict:
-        content = summary if summary else "📄 内容较长，点击下方按钮展开全文。"
-        elements = [
-            {"tag": "markdown", "content": content},
-            self._fold_button("expand", token, "📖 展开全文", "primary"),
-        ]
-        return self._card_shell(elements)
 
-    def _expanded_card(self, full_text: str, token: str) -> dict:
-        elements = self._markdown_body_elements(full_text)
-        if not elements:
-            elements = [{"tag": "markdown", "content": full_text}]
-        elements.append(self._fold_button("collapse", token, "收起", "default"))
-        return self._card_shell(elements)
-
-    def _cache_fold(self, token: str, full_text: str, summary: str) -> None:
-        if len(self._fold_cache) >= self._fold_cache_limit:
-            self._fold_cache.pop(next(iter(self._fold_cache)))
-        self._fold_cache[token] = {"full": full_text, "summary": summary}
-        self._save_fold_cache()
 
     async def send_reply(
         self,
@@ -258,10 +196,17 @@ class FeishuChannel(BaseChannel):
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json; charset=utf-8"}
 
         url = f"{self.api_base}/open-apis/im/v1/messages?receive_id_type=chat_id"
-        # Always render as interactive card for consistent markdown rendering.
-        # Over-threshold replies go telegraph-style: summary in the stream,
+        # Reply inside the same topic when the user's message lives in one:
+        # topic conversations stay in the topic instead of leaking to the main
+        # stream.
+        thread_id = self._msg_threads.get(str(reply_to_msg_id)) if reply_to_msg_id else None
+        if thread_id:
+            return await self._send_reply_in_thread(chat_id, text, headers, reply_to_msg_id)
+
+        # Always render as markdown card for consistent rendering.
+        # Over-threshold replies go thread-first: summary in the stream,
         # full text in a reply thread.
-        if self._should_fold(text):
+        if self._exceeds_threshold(text):
             return await self._send_threaded_reply(chat_id, text, headers)
         card = self._markdown_to_card(text)
         payload = {
@@ -269,8 +214,6 @@ class FeishuChannel(BaseChannel):
             "msg_type": "interactive",
             "content": json.dumps(card, ensure_ascii=False)
         }
-        if reply_to_msg_id:
-            payload["reply_in_thread"] = False
 
         resp = await self.client.post(url, headers=headers, json=payload)
         data = resp.json()
@@ -291,35 +234,76 @@ class FeishuChannel(BaseChannel):
         logger.error(f"[Feishu] Send message failed: {data}")
         return None
 
+    async def _send_full_card(
+        self,
+        chat_id: Union[int, str],
+        text: str,
+        headers: Dict[str, str],
+    ) -> Optional[Union[int, str]]:
+        """Sends the full text as a regular card in the main stream."""
+        url = f"{self.api_base}/open-apis/im/v1/messages?receive_id_type=chat_id"
+        payload = {
+            "receive_id": str(chat_id),
+            "msg_type": "interactive",
+            "content": json.dumps(self._markdown_to_card(text), ensure_ascii=False),
+        }
+        resp = await self.client.post(url, headers=headers, json=payload)
+        data = resp.json()
+        if data.get("code") == 0:
+            return data["data"]["message_id"]
+        logger.error(f"[Feishu] Full-card send failed: {data}")
+        return None
+
+    async def _send_reply_in_thread(
+        self,
+        chat_id: Union[int, str],
+        text: str,
+        headers: Dict[str, str],
+        reply_to_msg_id: Union[int, str],
+    ) -> Optional[Union[int, str]]:
+        """Replies inside an existing topic. The topic itself is already the
+        fold layer, so the full text is delivered as-is (no summary/thread
+        nesting). Falls back to plain text if the card is rejected."""
+        url = f"{self.api_base}/open-apis/im/v1/messages?receive_id_type=chat_id"
+        payload = {
+            "receive_id": str(chat_id),
+            "msg_type": "interactive",
+            "content": json.dumps(self._markdown_to_card(text), ensure_ascii=False),
+            "reply_id": str(reply_to_msg_id),
+            "reply_in_thread": True,
+        }
+        resp = await self.client.post(url, headers=headers, json=payload)
+        data = resp.json()
+        if data.get("code") == 0:
+            return data["data"]["message_id"]
+        logger.warning(f"[Feishu] Thread reply failed ({data.get('msg')}); falling back to plain text")
+        fallback = {
+            "receive_id": str(chat_id),
+            "msg_type": "text",
+            "content": json.dumps({"text": text}, ensure_ascii=False),
+            "reply_id": str(reply_to_msg_id),
+            "reply_in_thread": True,
+        }
+        resp = await self.client.post(url, headers=headers, json=fallback)
+        data = resp.json()
+        if data.get("code") == 0:
+            return data["data"]["message_id"]
+        logger.error(f"[Feishu] Thread reply failed: {data}")
+        return None
+
     async def _send_threaded_reply(
         self,
         chat_id: Union[int, str],
         text: str,
         headers: Dict[str, str],
     ) -> Optional[Union[int, str]]:
-        """Telegraph-style long reply: a short summary message lands in the
-        main chat stream, the full text is attached to it as a reply thread.
+        """Thread-first long reply: a short summary message lands in the main
+        chat stream, the full text is attached to it as a reply thread.
         No expand/collapse buttons, so no per-client expanded residue.
         Fallback chain: thread reply fails -> full card in main stream;
-        summary send fails -> legacy fold card."""
+        summary send fails -> full card in main stream."""
         url = f"{self.api_base}/open-apis/im/v1/messages?receive_id_type=chat_id"
         summary = extract_first_paragraph(text)
-
-        # Legacy fold-card fallback (keeps the expand-button path intact).
-        async def _folded_card_fallback() -> Optional[Union[int, str]]:
-            folded_token = uuid.uuid4().hex[:16]
-            payload = {
-                "receive_id": str(chat_id),
-                "msg_type": "interactive",
-                "content": json.dumps(self._folded_card(summary, folded_token), ensure_ascii=False),
-            }
-            resp = await self.client.post(url, headers=headers, json=payload)
-            data = resp.json()
-            if data.get("code") == 0:
-                self._cache_fold(folded_token, text, summary)
-                return data["data"]["message_id"]
-            logger.error(f"[Feishu] Fold-card fallback failed: {data}")
-            return None
 
         # 1) Summary message in the main chat stream (plain text: it is already
         # markdown-stripped by extract_first_paragraph and carries no fold UI).
@@ -332,8 +316,8 @@ class FeishuChannel(BaseChannel):
         resp = await self.client.post(url, headers=headers, json=summary_payload)
         data = resp.json()
         if data.get("code") != 0:
-            logger.warning(f"[Feishu] Thread-mode summary send failed ({data.get('msg')}); falling back to fold card")
-            return await _folded_card_fallback()
+            logger.warning(f"[Feishu] Thread-mode summary send failed ({data.get('msg')}); sending full card")
+            return await self._send_full_card(chat_id, text, headers)
         summary_message_id = data["data"]["message_id"]
 
         # 2) Full text as a reply thread attached to the summary message.
@@ -349,15 +333,7 @@ class FeishuChannel(BaseChannel):
             # e.g. 230071 (chat does not support reply-in-thread): keep the
             # summary but deliver the full text as a normal card in the stream.
             logger.warning(f"[Feishu] Thread reply failed ({data.get('msg')}); sending full card to main stream")
-            full_payload = {
-                "receive_id": str(chat_id),
-                "msg_type": "interactive",
-                "content": json.dumps(self._markdown_to_card(text), ensure_ascii=False),
-            }
-            resp = await self.client.post(url, headers=headers, json=full_payload)
-            data = resp.json()
-            if data.get("code") != 0:
-                logger.error(f"[Feishu] Full-card fallback failed: {data}")
+            await self._send_full_card(chat_id, text, headers)
         return summary_message_id
 
     async def _add_reaction(self, message_id: str, emoji_type: str = "OnIt") -> Optional[str]:
@@ -538,47 +514,7 @@ class FeishuChannel(BaseChannel):
             return None
 
     def _build_event_handler(self):
-        """Builds the SDK event dispatcher with the message-receive handler
-        and the card-action handler (fold expand/collapse buttons)."""
-        # NOTE: In lark-oapi >=1.4, register_* methods live on the builder
-        # (returning self for chaining), not on the built handler object.
-
-        def _on_card_action(data):
-            """Handles fold-card button clicks. Returns a response that
-            updates the card in place (no separate PATCH call needed)."""
-            try:
-                if not _HAS_LARK_SDK:
-                    return None
-                ev = getattr(data, "event", None)
-                action = getattr(ev, "action", None) if ev else None
-                value = getattr(action, "value", None) if action else None
-                if not isinstance(value, dict):
-                    return None
-                act = str(value.get("action", ""))
-                token = str(value.get("token", ""))
-                entry = self._fold_cache.get(token)
-                if not entry:
-                    toast = CallBackToast()
-                    toast.type = "info"
-                    toast.content = "内容已失效"
-                    resp = P2CardActionTriggerResponse()
-                    resp.toast = toast
-                    return resp
-                if act == "expand":
-                    card = self._expanded_card(entry["full"], token)
-                elif act == "collapse":
-                    card = self._folded_card(entry["summary"], token)
-                else:
-                    return None
-                cb_card = CallBackCard()
-                cb_card.type = "raw"
-                cb_card.data = card
-                resp = P2CardActionTriggerResponse()
-                resp.card = cb_card
-                return resp
-            except Exception as e:
-                logger.error(f"[Feishu] Card action error: {e}", exc_info=True)
-                return None
+        """Builds the SDK event dispatcher with the message-receive handler."""
 
         async def _handle_inbound_async(msg, sender):
             try:
@@ -588,6 +524,15 @@ class FeishuChannel(BaseChannel):
                 chat_type = msg.chat_type or "group"
                 if chat_type == "p2p":
                     chat_type = "private"
+
+                # Remember which topic a message belongs to, so replies to it
+                # stay inside the same topic instead of leaking to the main
+                # stream.
+                thread_id = getattr(msg, "thread_id", None)
+                if thread_id:
+                    self._msg_threads[str(msg.message_id)] = str(thread_id)
+                    if len(self._msg_threads) > self._msg_threads_limit:
+                        self._msg_threads.pop(next(iter(self._msg_threads)))
 
                 msg_type = getattr(msg, "message_type", None) or getattr(msg, "msg_type", "text")
                 create_time = getattr(msg, "create_time", None) or str(int(time.time() * 1000))
@@ -692,7 +637,6 @@ class FeishuChannel(BaseChannel):
         event_handler = (
             lark.EventDispatcherHandler.builder("", "")
             .register_p2_im_message_receive_v1(_on_message_receive)
-            .register_p2_card_action_trigger(_on_card_action)
             .build()
         )
         return event_handler

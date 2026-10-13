@@ -288,111 +288,90 @@ class TestFeishuChannelOutbound(unittest.IsolatedAsyncioTestCase):
         # Fallback keeps the raw text so the reply is never lost
         self.assertEqual(json.loads(second["content"])["text"], "## 标题\n正文")
 
-    def test_should_fold_threshold(self):
+    def test_exceeds_thread_threshold(self):
         channel = self._make_channel()
-        self.assertFalse(channel._should_fold("短消息"))
+        self.assertFalse(channel._exceeds_threshold("短消息"))
         long_text = "这是一段超过一百个字符的长文本，" * 10  # ~150 chars
-        self.assertTrue(channel._should_fold(long_text))
-        # Blockquotes don't count toward the fold measurement
+        self.assertTrue(channel._exceeds_threshold(long_text))
+        # Blockquotes don't count toward the threshold measurement
         quote_only = "> " + "引用内容" * 30 + "\n\n> 更多引用"
-        self.assertFalse(channel._should_fold(quote_only))
+        self.assertFalse(channel._exceeds_threshold(quote_only))
 
-    def test_fold_cache_persists_across_restart(self):
-        import tempfile
-        with tempfile.TemporaryDirectory() as tmpdir:
-            cfg = GatewayConfig({
-                "platform": "feishu",
-                "feishu_app_id": "cli_mock_123",
-                "feishu_app_secret": "sec_mock_456",
-                "tuning": {"ipc_dir": tmpdir},
-            })
-            ch1 = FeishuChannel(cfg, AsyncMock())
-            ch1._cache_fold("tokA", "全文内容A", "摘要A")
-            # Simulate restart: brand-new channel instance, same ipc_dir
-            ch2 = FeishuChannel(cfg, AsyncMock())
-            self.assertIn("tokA", ch2._fold_cache)
-            self.assertEqual(ch2._fold_cache["tokA"]["full"], "全文内容A")
-            self.assertEqual(ch2._fold_cache["tokA"]["summary"], "摘要A")
-
-    async def test_send_reply_long_text_folds_with_expand_button(self):
+    async def test_send_reply_long_text_thread_mode(self):
+        """Over-threshold replies go thread-first: summary text in the main
+        stream, full text as a reply_in_thread card."""
         channel = self._make_channel()
         channel.client.post = AsyncMock(return_value=self._mock_resp({"code": 0, "data": {"message_id": "om_4"}}))
         long_text = "核心结论先行。这是首段摘要内容。\n\n" + "后续详细内容。" * 30
         msg_id = await channel.send_reply(chat_id="oc_1", text=long_text)
         self.assertEqual(msg_id, "om_4")
-        payload = channel.client.post.call_args.kwargs["json"]
-        card = json.loads(payload["content"])
-        buttons = [el for el in card["body"]["elements"] if el["tag"] == "button"]
-        self.assertEqual(len(buttons), 1)
-        self.assertIn("展开全文", buttons[0]["text"]["content"])
-        self.assertEqual(buttons[0]["behaviors"][0]["type"], "callback")
-        # Full text cached for in-place expansion
-        tokens = [b["behaviors"][0]["value"]["token"] for b in buttons]
-        self.assertIn(tokens[0], channel._fold_cache)
-        self.assertEqual(channel._fold_cache[tokens[0]]["full"], long_text)
+        # 1st call = summary text into the main stream
+        first = channel.client.post.call_args_list[0].kwargs["json"]
+        self.assertEqual(first["msg_type"], "text")
+        self.assertIn("核心结论先行。这是首段摘要内容。", json.loads(first["content"])["text"])
+        # 2nd call = full card attached via the reply endpoint
+        self.assertEqual(channel.client.post.call_count, 2)
+        url = channel.client.post.call_args_list[1].args[0]
+        self.assertIn("/reply", url)
+        second = channel.client.post.call_args_list[1].kwargs["json"]
+        self.assertEqual(second["msg_type"], "interactive")
+        self.assertTrue(second["reply_in_thread"])
 
-    async def test_send_reply_short_text_does_not_fold(self):
+    async def test_send_reply_short_text_single_card(self):
         channel = self._make_channel()
         channel.client.post = AsyncMock(return_value=self._mock_resp({"code": 0, "data": {"message_id": "om_5"}}))
         await channel.send_reply(chat_id="oc_1", text="短回复内容")
+        self.assertEqual(channel.client.post.call_count, 1)
         payload = channel.client.post.call_args.kwargs["json"]
+        self.assertEqual(payload["msg_type"], "interactive")
         card = json.loads(payload["content"])
         buttons = [el for el in card["body"]["elements"] if el["tag"] == "button"]
         self.assertEqual(buttons, [])
-        self.assertEqual(channel._fold_cache, {})
 
-    def test_fold_card_action_expand_and_collapse(self):
-        from types import SimpleNamespace
-        from groupconnect.channels.feishu import _HAS_LARK_SDK
-        if not _HAS_LARK_SDK:
-            self.skipTest("lark-oapi not installed")
-
+    async def test_reply_in_topic_stays_in_topic(self):
+        """Replying to a message that lives inside a topic must reply inside
+        that same topic (reply_id + reply_in_thread=True), not the main stream."""
         channel = self._make_channel()
-        full_text = "首段。\n\n" + "正文详情。" * 40
-        channel._fold_cache["tok123"] = {"full": full_text, "summary": "首段。"}
+        channel.client.post = AsyncMock(return_value=self._mock_resp({"code": 0, "data": {"message_id": "om_6"}}))
+        # Simulate an inbound topic message that the channel has indexed
+        channel._msg_threads["om_topic_msg"] = "om_root"
+        msg_id = await channel.send_reply(chat_id="oc_1", text="话题内回复内容", reply_to_msg_id="om_topic_msg")
+        self.assertEqual(msg_id, "om_6")
+        payload = channel.client.post.call_args.kwargs["json"]
+        self.assertEqual(payload["reply_id"], "om_topic_msg")
+        self.assertTrue(payload["reply_in_thread"])
 
-        handler = channel._build_event_handler()
-        card_action_handler = handler._callback_processor_map["p2.card.action.trigger"].f
-        self.assertIsNotNone(card_action_handler, "card action handler not registered")
-
-        fake_data = SimpleNamespace(
-            event=SimpleNamespace(
-                action=SimpleNamespace(value={"action": "expand", "token": "tok123"}),
-                operator=SimpleNamespace(open_id="ou_x"),
-                context=SimpleNamespace(open_message_id="om_9", open_chat_id="oc_1"),
-            )
-        )
-        resp = card_action_handler(fake_data)
-        self.assertIsNotNone(resp)
-        self.assertEqual(resp.card.type, "raw")
-        elements = resp.card.data["body"]["elements"]
-        self.assertIn(full_text, elements[0]["content"])
-        collapse_btn = [el for el in elements if el["tag"] == "button"][0]
-        self.assertEqual(collapse_btn["behaviors"][0]["value"]["action"], "collapse")
-
-        fake_data.event.action.value = {"action": "collapse", "token": "tok123"}
-        resp2 = card_action_handler(fake_data)
-        self.assertIn("首段。", resp2.card.data["body"]["elements"][0]["content"])
-        expand_btn = [el for el in resp2.card.data["body"]["elements"] if el["tag"] == "button"][0]
-        self.assertEqual(expand_btn["behaviors"][0]["value"]["action"], "expand")
-
-    def test_fold_card_action_invalid_token_shows_toast(self):
-        from types import SimpleNamespace
-        from groupconnect.channels.feishu import _HAS_LARK_SDK
-        if not _HAS_LARK_SDK:
-            self.skipTest("lark-oapi not installed")
-
+    async def test_reply_in_topic_long_text_full_card_in_topic(self):
+        """Long replies inside a topic are delivered as-is (topic already
+        folds the content) — no summary/thread nesting inside the topic."""
         channel = self._make_channel()
-        handler = channel._build_event_handler()
-        card_action_handler = handler._callback_processor_map["p2.card.action.trigger"].f
-        fake_data = SimpleNamespace(
-            event=SimpleNamespace(
-                action=SimpleNamespace(value={"action": "expand", "token": "missing"}),
-            )
-        )
-        resp = card_action_handler(fake_data)
-        self.assertIsNotNone(resp.toast)
-        self.assertIn("失效", resp.toast.content)
+        channel.client.post = AsyncMock(return_value=self._mock_resp({"code": 0, "data": {"message_id": "om_7"}}))
+        channel._msg_threads["om_topic_msg2"] = "threadB"
+        long_text = "首段摘要。\n\n" + "话题内正文。" * 40
+        await channel.send_reply(chat_id="oc_1", text=long_text, reply_to_msg_id="om_topic_msg2")
+        self.assertEqual(channel.client.post.call_count, 1)
+        payload = channel.client.post.call_args.kwargs["json"]
+        self.assertEqual(payload["msg_type"], "interactive")
+        self.assertEqual(payload["reply_id"], "om_topic_msg2")
+        self.assertTrue(payload["reply_in_thread"])
+
+    async def test_reply_in_topic_card_failure_falls_back_to_text_in_topic(self):
+        channel = self._make_channel()
+        channel.client.post = AsyncMock(side_effect=[
+            self._mock_resp({"code": 230002, "msg": "bad card"}),
+            self._mock_resp({"code": 0, "data": {"message_id": "om_8"}}),
+        ])
+        channel._msg_threads["om_topic_msg3"] = "threadC"
+        msg_id = await channel.send_reply(chat_id="oc_1", text="**加粗**话题回复", reply_to_msg_id="om_topic_msg3")
+        self.assertEqual(msg_id, "om_8")
+        self.assertEqual(channel.client.post.call_count, 2)
+        first = channel.client.post.call_args_list[0].kwargs["json"]
+        second = channel.client.post.call_args_list[1].kwargs["json"]
+        self.assertEqual(first["msg_type"], "interactive")
+        self.assertEqual(second["msg_type"], "text")
+        self.assertTrue(second["reply_in_thread"])
+        self.assertEqual(second["reply_id"], "om_topic_msg3")
+        self.assertEqual(json.loads(second["content"])["text"], "**加粗**话题回复")
 
 
 if __name__ == "__main__":
