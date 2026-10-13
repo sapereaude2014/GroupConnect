@@ -154,6 +154,21 @@ class TestFullwidthConversion(unittest.TestCase):
         self.assertIn("胜宏科技（算力）", text)
         self.assertIn("-29.58%", text)
 
+    def test_five_plus_columns_wide_table_mode(self):
+        headers = ["代码", "名称", "市值", "成本", "现价", "浮盈", "收益率"]
+        data_rows = [
+            ["600519", "贵州茅台", "16.8万", "1500", "1680", "+1.8万", "+12.0%"],
+            ["300476", "胜宏科技", "7.87万", "279.58", "196.87", "-3.31万", "-29.58%"],
+        ]
+        text = table_rows_to_preformatted_text(headers, data_rows)
+        # Headers and cells must maintain full integrity without splitting
+        self.assertIn("收益率", text)
+        self.assertIn("600519", text)
+        self.assertIn("贵州茅台", text)
+        self.assertIn("279.58", text)
+        self.assertIn("-29.58%", text)
+        self.assertIn("-3.31万", text)
+
 
 class TestMarkdownTableToPreNode(unittest.TestCase):
     def test_markdown_table_becomes_pre_node(self):

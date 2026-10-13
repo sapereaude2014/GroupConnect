@@ -242,22 +242,41 @@ def table_rows_to_preformatted_text(
                         w1 = target_w1
                         w2 = rem - w1
                 col_w = [max(w0, 1), max(w1, 1), max(w2, 1)]
-        else:
-            total_nat = sum(natural_w) + gap_w * (num_cols - 1)
+        elif num_cols == 4:
+            # 4 columns: target safe width <= 44
+            total_nat = sum(natural_w) + gap_w * 3
             if total_nat <= target_budget:
                 col_w = [max(nw, 1) for nw in natural_w]
             else:
-                avail_w = max(target_budget - gap_w * (num_cols - 1), num_cols * 4)
-                base = max(avail_w // num_cols, 1)
-                col_w = [min(nw, base) for nw in natural_w]
+                avail_w = max(target_budget - gap_w * 3, 24)
+                h_ws = [_display_width(norm_headers[i]) for i in range(4)]
+                min_ws = [max(h_ws[i], 4) for i in range(4)]
+                base = max(avail_w // 4, 1)
+                col_w = [max(min(natural_w[i], base), min_ws[i]) for i in range(4)]
                 rem = avail_w - sum(col_w)
                 while rem > 0:
-                    deficit = [natural_w[i] - col_w[i] for i in range(num_cols)]
+                    deficit = [natural_w[i] - col_w[i] for i in range(4)]
                     if max(deficit) <= 0:
                         break
                     best_i = deficit.index(max(deficit))
                     col_w[best_i] += 1
                     rem -= 1
+        else:
+            # 5+ columns: Wide Table Mode (宽表横滑模式)
+            # If the wide table naturally fits within budget, keep it compact
+            total_nat = sum(natural_w) + gap_w * (num_cols - 1)
+            if total_nat <= target_budget:
+                col_w = [max(nw, 1) for nw in natural_w]
+            else:
+                # Wide data grid: guarantee header integrity & readable numbers/codes,
+                # allowing graceful horizontal scrolling in Telegraph (<pre> blocks).
+                col_w = []
+                for i in range(num_cols):
+                    h_w = _display_width(norm_headers[i])
+                    # Header must never be broken; numbers/codes at least 6
+                    min_readable = max(h_w, 6)
+                    # Natural width capped at 24 to prevent runaway single-line sentences
+                    col_w.append(max(min(natural_w[i], 24), min_readable))
 
     max_table_w = 0
 
