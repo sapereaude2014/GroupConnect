@@ -146,6 +146,24 @@ class TestQueueCoalescing(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0.05)
         self.assertEqual(self.engine._handle_triggered_message.call_count, 1)
 
+    async def test_dispatch_autonomous_forwards_attachments(self):
+        """Autonomous dispatch should preserve attachments from decision into InboundMessage."""
+        from types import SimpleNamespace
+        chat_id = 7777
+        self.engine.autonomous = SimpleNamespace(cfg=SimpleNamespace(max_queue_backlog=50))
+        self.engine._handle_triggered_message = AsyncMock()
+        att = [{"type": "photo", "path": "/path/to/img.jpg", "name": "img.jpg"}]
+        await self.engine._dispatch_autonomous({
+            "chat_id": chat_id, "chat_type": "group", "msg_id": 420,
+            "sender": "Zheng Ma", "text": "看下这张图",
+            "attachments": att,
+            "target_bots": ["test_bot"], "urgency": "immediate",
+        })
+        await asyncio.sleep(0.05)
+        self.assertEqual(self.engine._handle_triggered_message.call_count, 1)
+        inbound_msg = self.engine._handle_triggered_message.call_args[0][0]
+        self.assertEqual(inbound_msg.attachments, att)
+
     async def test_group_coalesced_marked_inline_not_duplicated(self):
         """In group chats, coalesced messages are marked with ⏳ in the sliding
         window context, NOT listed in a separate Coalesced Pending Instructions

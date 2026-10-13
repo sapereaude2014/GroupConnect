@@ -1115,12 +1115,19 @@ class AutonomousController:
                     logger.warning(f"[ROUTING] Failed to mark dropped resume completed: {e}")
 
     def _is_message_routable(self, msg) -> bool:
-        """Filter out non-routable messages (bots, attachments, permissions)."""
+        """Filter out non-routable messages (bots, bare attachments without caption, permissions)."""
         if getattr(msg, "is_bot_relay", False) or bool(getattr(msg, "from_user", {}).get("is_bot", False)):
             return False
+        text = (getattr(msg, "text", "") or "").strip()
         if getattr(msg, "attachments", None):
-            self._drop_resume(msg)
-            return False  # v1: autonomous routing for plain text only
+            # Bare media messages with no real text/caption cannot be routed autonomously
+            if not text or text in (
+                "[Photo Attachment]",
+                "[Voice Audio Attachment]",
+                "[Document Attachment]",
+            ) or (text.startswith("[Document Attachment:") and text.endswith("]")):
+                self._drop_resume(msg)
+                return False
         if not self.chat_allowed(msg.chat_id) or not self.sender_allowed(msg.sender_name):
             self._drop_resume(msg)
             return False
@@ -1135,6 +1142,11 @@ class AutonomousController:
             "msg_id": msg.msg_id,
             "sender": msg.sender_name,
             "text": msg.text or "",
+            "attachments": getattr(msg, "attachments", []) or [],
+            "reply_attachments": getattr(msg, "reply_attachments", []) or [],
+            "reply_to_msg_id": getattr(msg, "reply_to_msg_id", None),
+            "reply_preview": getattr(msg, "reply_preview", "") or "",
+            "reply_to_bot_username": getattr(msg, "reply_to_bot_username", "") or "",
             "decide_at": _dt.datetime.now().isoformat(timespec="seconds"),
             "is_resume": bool(getattr(msg, "is_resume", False)),
             **decision,

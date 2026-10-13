@@ -1465,7 +1465,49 @@ class TestFlushPending(unittest.IsolatedAsyncioTestCase):
         pos_drop = instructions.find("3. INTERPERSONAL CHITCHAT / SILENCE")
         self.assertTrue(pos_imm < pos_wait < pos_drop, "Expected order: immediate -> wait -> drop")
 
+    async def test_attachment_with_caption_is_routable(self):
+        """Messages with attachments and real text caption should be routable."""
+        from unittest.mock import AsyncMock
+        self.cfg.aliases = {"primary_bot": ["assistant"]}
+        self.ctrl.relay.broadcast_event = AsyncMock()
+        msg = self.SimpleNamespace(
+            chat_id=-1001234567890, chat_type="group", msg_id=301,
+            sender_name="Alice", from_user={"is_bot": False},
+            text="assistant 请锐评一下这张图",
+            is_bot_relay=False,
+            attachments=[{"type": "photo", "path": "/path/to/test.jpg", "name": "test.jpg"}],
+            reply_attachments=[],
+            reply_to_msg_id=None,
+            reply_preview="",
+            reply_to_bot_username="",
+        )
+        await self.ctrl.evaluate_and_publish(msg)
+        self.ctrl.relay.broadcast_event.assert_awaited_once()
+        payload = self.ctrl.relay.broadcast_event.await_args[0][0]
+        self.assertEqual(payload["target_bot"], "primary_bot")
+        self.assertEqual(len(payload["attachments"]), 1)
+        self.assertEqual(payload["attachments"][0]["path"], "/path/to/test.jpg")
+
+    async def test_bare_attachment_without_caption_is_dropped(self):
+        """Bare media messages without text caption should be dropped silently."""
+        from unittest.mock import AsyncMock
+        self.ctrl.relay.broadcast_event = AsyncMock()
+        msg = self.SimpleNamespace(
+            chat_id=-1001234567890, chat_type="group", msg_id=302,
+            sender_name="Alice", from_user={"is_bot": False},
+            text="[Photo Attachment]",
+            is_bot_relay=False,
+            attachments=[{"type": "photo", "path": "/path/to/bare.jpg", "name": "bare.jpg"}],
+            reply_attachments=[],
+            reply_to_msg_id=None,
+            reply_preview="",
+            reply_to_bot_username="",
+        )
+        await self.ctrl.evaluate_and_publish(msg)
+        self.ctrl.relay.broadcast_event.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
+
 
