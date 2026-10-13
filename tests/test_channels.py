@@ -321,8 +321,8 @@ class TestFeishuChannelOutbound(unittest.IsolatedAsyncioTestCase):
         self.assertIn("后续详细内容。", panel_md)
         self.assertIn("核心结论先行。这是首段摘要内容。", panel_md)
 
-    async def test_send_reply_collapsible_failure_falls_back_to_full_card(self):
-        """Collapsible card rejected -> full card in the stream -> text."""
+    async def test_send_reply_collapsible_failure_falls_back_to_text(self):
+        """Collapsible card rejected -> plain text with the full content."""
         channel = self._make_channel()
         channel.client.post = AsyncMock(side_effect=[
             self._mock_resp({"code": 230001, "msg": "panel unsupported"}),
@@ -332,10 +332,9 @@ class TestFeishuChannelOutbound(unittest.IsolatedAsyncioTestCase):
         msg_id = await channel.send_reply(chat_id="oc_1", text=long_text)
         self.assertEqual(msg_id, "om_fb1")
         self.assertEqual(channel.client.post.call_count, 2)
-        fallback_card = json.loads(channel.client.post.call_args_list[1].kwargs["json"]["content"])
-        # Plain full card: markdown elements only, no collapsible_panel
-        tags = [el["tag"] for el in fallback_card["body"]["elements"]]
-        self.assertNotIn("collapsible_panel", tags)
+        fallback = channel.client.post.call_args_list[1].kwargs["json"]
+        self.assertEqual(fallback["msg_type"], "text")
+        self.assertIn("正文内容。", json.loads(fallback["content"])["text"])
 
     async def test_send_reply_short_text_single_card(self):
         channel = self._make_channel()

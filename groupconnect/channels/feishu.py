@@ -239,26 +239,6 @@ class FeishuChannel(BaseChannel):
         logger.error(f"[Feishu] Send message failed: {data}")
         return None
 
-    async def _send_full_card(
-        self,
-        chat_id: Union[int, str],
-        text: str,
-        headers: Dict[str, str],
-    ) -> Optional[Union[int, str]]:
-        """Sends the full text as a regular card in the main stream."""
-        url = f"{self.api_base}/open-apis/im/v1/messages?receive_id_type=chat_id"
-        payload = {
-            "receive_id": str(chat_id),
-            "msg_type": "interactive",
-            "content": json.dumps(self._markdown_to_card(text), ensure_ascii=False),
-        }
-        resp = await self.client.post(url, headers=headers, json=payload)
-        data = resp.json()
-        if data.get("code") == 0:
-            return data["data"]["message_id"]
-        logger.error(f"[Feishu] Full-card send failed: {data}")
-        return None
-
     def _index_topic_root(self, msg) -> None:
         """Records msg -> its topic root, so a later reply to this message
         is routed back into the same topic. Feishu marks in-topic messages
@@ -345,8 +325,7 @@ class FeishuChannel(BaseChannel):
         readable, full text inside a native collapsed collapsible_panel.
         Expand/collapse is local per user and defaults to collapsed, so long
         replies never create topics nor leave shared expanded residue.
-        Fallback chain: collapsible card fails -> full card in the stream;
-        full card fails -> plain text so the reply is never lost."""
+        Fallback: card rejected -> plain text, so the reply is never lost."""
         url = f"{self.api_base}/open-apis/im/v1/messages?receive_id_type=chat_id"
         summary = extract_first_paragraph(text)
         payload = {
@@ -358,10 +337,7 @@ class FeishuChannel(BaseChannel):
         data = resp.json()
         if data.get("code") == 0:
             return data["data"]["message_id"]
-        logger.warning(f"[Feishu] Collapsible card send failed ({data.get('msg')}); falling back to full card")
-        msg_id = await self._send_full_card(chat_id, text, headers)
-        if msg_id:
-            return msg_id
+        logger.warning(f"[Feishu] Collapsible card send failed ({data.get('msg')}); falling back to text")
         fallback = {
             "receive_id": str(chat_id),
             "msg_type": "text",
