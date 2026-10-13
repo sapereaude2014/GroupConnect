@@ -440,6 +440,36 @@ class FeishuChannel(BaseChannel):
             logger.warning(f"[Feishu] Failed to check user membership: {e}")
             return False
 
+    async def _download_resource(
+        self,
+        message_id: str,
+        file_key: str,
+        resource_type: str,
+        dest_filename: str
+    ) -> Optional[str]:
+        try:
+            safe_filename = os.path.basename(dest_filename)
+            local_path = os.path.join(self.config.attachments_dir, safe_filename)
+            if os.path.isfile(local_path) and os.path.getsize(local_path) > 0:
+                logger.debug(f"[Feishu] Attachment already exists locally: {local_path}")
+                return local_path
+
+            token = await self.get_tenant_access_token()
+            url = f"{self.api_base}/open-apis/im/v1/messages/{message_id}/resources/{file_key}?type={resource_type}"
+            headers = {"Authorization": f"Bearer {token}"}
+            resp = await self.client.get(url, headers=headers, timeout=60.0)
+            if resp.status_code == 200:
+                os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                with open(local_path, "wb") as f:
+                    f.write(resp.content)
+                logger.info(f"[Feishu] Successfully downloaded attachment to {local_path} ({len(resp.content)} bytes)")
+                return local_path
+            logger.error(f"[Feishu] Failed to download resource {file_key} (status {resp.status_code}): {resp.text}")
+            return None
+        except Exception as e:
+            logger.error(f"[Feishu] Error downloading resource {file_key}: {e}", exc_info=True)
+            return None
+
     def _build_event_handler(self):
         """Builds the SDK event dispatcher with the message-receive handler
         and the card-action handler (fold expand/collapse buttons)."""
@@ -483,11 +513,8 @@ class FeishuChannel(BaseChannel):
                 logger.error(f"[Feishu] Card action error: {e}", exc_info=True)
                 return None
 
-        def _on_message_receive(data):
+        async def _handle_inbound_async(msg, sender):
             try:
-                event = data.event
-                msg = event.message
-                sender = event.sender
                 sender_id = sender.sender_id
 
                 chat_id = msg.chat_id
@@ -495,12 +522,70 @@ class FeishuChannel(BaseChannel):
                 if chat_type == "p2p":
                     chat_type = "private"
 
+                msg_type = getattr(msg, "message_type", None) or getattr(msg, "msg_type", "text")
+                create_time = getattr(msg, "create_time", None) or str(int(time.time() * 1000))
+
                 raw_content = msg.content or "{}"
+                content_json = {}
                 try:
                     content_json = json.loads(raw_content)
-                    text = content_json.get("text", "")
                 except Exception:
-                    text = raw_content
+                    pass
+
+                text = ""
+                attachments = []
+
+                if msg_type == "text":
+                    text = content_json.get("text", "") if isinstance(content_json, dict) else raw_content
+                elif msg_type == "file":
+                    file_key = content_json.get("file_key")
+                    file_name = content_json.get("file_name", "file")
+                    if file_key:
+                        fname = f"{create_time}_{chat_id}_{msg.message_id}_{file_name}"
+                        local_path = await self._download_resource(msg.message_id, file_key, "file", fname)
+                        if local_path:
+                            attachments.append({"type": "document", "path": local_path, "name": file_name})
+                            text = f"[Document Attachment: {file_name}]"
+                elif msg_type == "image":
+                    image_key = content_json.get("image_key")
+                    if image_key:
+                        fname = f"{create_time}_{chat_id}_{msg.message_id}_{image_key}.jpg"
+                        local_path = await self._download_resource(msg.message_id, image_key, "image", fname)
+                        if local_path:
+                            attachments.append({"type": "photo", "path": local_path, "name": fname})
+                            text = "[Photo Attachment]"
+                elif msg_type == "audio":
+                    file_key = content_json.get("file_key")
+                    if file_key:
+                        fname = f"{create_time}_{chat_id}_{msg.message_id}_audio.opus"
+                        local_path = await self._download_resource(msg.message_id, file_key, "file", fname)
+                        if local_path:
+                            attachments.append({"type": "voice", "path": local_path, "name": fname})
+                            text = "[Voice Audio Attachment]"
+                elif msg_type == "media":
+                    file_key = content_json.get("file_key")
+                    file_name = content_json.get("file_name", "video.mp4")
+                    if file_key:
+                        fname = f"{create_time}_{chat_id}_{msg.message_id}_{file_name}"
+                        local_path = await self._download_resource(msg.message_id, file_key, "file", fname)
+                        if local_path:
+                            attachments.append({"type": "video", "path": local_path, "name": file_name})
+                            text = f"[Video Attachment: {file_name}]"
+                elif msg_type == "post":
+                    post_text_parts = []
+                    if isinstance(content_json, dict):
+                        for lang, post_data in content_json.items():
+                            if isinstance(post_data, dict):
+                                title = post_data.get("title", "")
+                                if title:
+                                    post_text_parts.append(title)
+                                for paragraph in post_data.get("content", []):
+                                    p_text = "".join(elem.get("text", "") for elem in paragraph if isinstance(elem, dict) and elem.get("tag") == "text")
+                                    if p_text:
+                                        post_text_parts.append(p_text)
+                    text = "\n".join(post_text_parts) if post_text_parts else raw_content
+                else:
+                    text = content_json.get("text", "") if isinstance(content_json, dict) else raw_content
 
                 mentions = msg.mentions or []
                 is_mentioned = any(m.name == self.bot_name or m.key == "@_all" for m in mentions)
@@ -521,10 +606,21 @@ class FeishuChannel(BaseChannel):
                     },
                     text=text,
                     is_triggered=is_triggered,
+                    attachments=attachments,
                 )
-                asyncio.get_event_loop().create_task(self.handler(inbound))
+                await self.handler(inbound)
             except Exception as e:
-                logger.error(f"[Feishu] Error processing message event: {e}", exc_info=True)
+                logger.error(f"[Feishu] Error processing inbound message: {e}", exc_info=True)
+
+        def _on_message_receive(data):
+            try:
+                event = data.event
+                msg = event.message
+                sender = event.sender
+                asyncio.get_event_loop().create_task(_handle_inbound_async(msg, sender))
+            except Exception as e:
+                logger.error(f"[Feishu] Error dispatching message event: {e}", exc_info=True)
+
 
         event_handler = (
             lark.EventDispatcherHandler.builder("", "")
