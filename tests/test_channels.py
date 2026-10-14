@@ -439,7 +439,79 @@ class TestFeishuChannelOutbound(unittest.IsolatedAsyncioTestCase):
         url = channel.client.post.call_args.args[0]
         self.assertTrue(url.endswith("/messages/om_topic_real/reply"))
 
+    async def test_feishu_inbound_mention_matching(self):
+        """Verify mention matching by app_id, aliases, bot_name, and @_user_1 replacement."""
+        from types import SimpleNamespace
+        cfg = GatewayConfig({
+            "platform": "feishu",
+            "bot": {
+                "name": "马后炮",
+                "username": "mhp",
+                "aliases": ["小炮", "炮哥"],
+            },
+            "feishu_app_id": "cli_aa319fd99678dbe8",
+            "feishu_app_secret": "sec_mock",
+        })
+        received = []
+        async def mock_handler(inbound):
+            received.append(inbound)
+
+        channel = FeishuChannel(cfg, mock_handler)
+
+        # 1. Mention with app_id matching, even though Feishu name is "小马bot"
+        mention_app = SimpleNamespace(id="cli_aa319fd99678dbe8", name="小马bot", key="@_user_1")
+        msg1 = SimpleNamespace(
+            chat_id="oc_group1", chat_type="group", message_id="om_1",
+            root_id="", message_type="text", create_time="1760000000000",
+            content=json.dumps({"text": "@_user_1 你怎么了"}),
+            mentions=[mention_app]
+        )
+        sender = SimpleNamespace(sender_id=SimpleNamespace(user_id="u1", open_id="ou_1"))
+        await channel._handle_inbound_async(msg1, sender)
+        self.assertEqual(len(received), 1)
+        self.assertTrue(received[0].is_triggered)
+        self.assertEqual(received[0].text, "@mhp 你怎么了")
+
+        # 2. Mention with alias matching ("小炮")
+        mention_alias = SimpleNamespace(id="cli_other", name="小炮", key="@_user_2")
+        msg2 = SimpleNamespace(
+            chat_id="oc_group1", chat_type="group", message_id="om_2",
+            root_id="", message_type="text", create_time="1760000000000",
+            content=json.dumps({"text": "@_user_2 下班提醒我"}),
+            mentions=[mention_alias]
+        )
+        await channel._handle_inbound_async(msg2, sender)
+        self.assertEqual(len(received), 2)
+        self.assertTrue(received[1].is_triggered)
+        self.assertEqual(received[1].text, "@mhp 下班提醒我")
+
+        # 3. Mention with @_all
+        mention_all = SimpleNamespace(id="", name="所有人", key="@_all")
+        msg3 = SimpleNamespace(
+            chat_id="oc_group1", chat_type="group", message_id="om_3",
+            root_id="", message_type="text", create_time="1760000000000",
+            content=json.dumps({"text": "@_all 大家注意"}),
+            mentions=[mention_all]
+        )
+        await channel._handle_inbound_async(msg3, sender)
+        self.assertEqual(len(received), 3)
+        self.assertTrue(received[2].is_triggered)
+
+        # 4. Unmentioned group message
+        mention_other = SimpleNamespace(id="ou_user_other", name="张三", key="@_user_9")
+        msg4 = SimpleNamespace(
+            chat_id="oc_group1", chat_type="group", message_id="om_4",
+            root_id="", message_type="text", create_time="1760000000000",
+            content=json.dumps({"text": "@_user_9 收到"}),
+            mentions=[mention_other]
+        )
+        await channel._handle_inbound_async(msg4, sender)
+        self.assertEqual(len(received), 4)
+        self.assertFalse(received[3].is_triggered)
+        self.assertEqual(received[3].text, "@_user_9 收到")
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

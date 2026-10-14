@@ -134,6 +134,7 @@ class GatewayConfig:
             .lstrip("@")
         )
         self.bot_name: str = str(bot.get("name") or bot.get("bot_name") or data.get("bot_name") or "GroupConnect")
+        self.aliases: List[str] = list(bot.get("aliases", []) or data.get("aliases", []))
 
         # Channel options
         self.channel_options: Dict[str, Any] = dict(

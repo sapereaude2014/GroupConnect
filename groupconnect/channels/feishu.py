@@ -76,6 +76,7 @@ class FeishuChannel(BaseChannel):
         self.api_base = config.raw.get("feishu_api_base", "https://open.feishu.cn")
         self.bot_username = config.bot_username
         self.bot_name = config.bot_name
+        self.aliases: List[str] = list(getattr(config, "aliases", []) or config.raw.get("aliases", []))
 
         self._token: Optional[str] = None
         self._token_expires_at: float = 0.0
@@ -527,122 +528,147 @@ class FeishuChannel(BaseChannel):
             logger.error(f"[Feishu] Error downloading resource {file_key}: {e}", exc_info=True)
             return None
 
+    async def _handle_inbound_async(self, msg, sender):
+        try:
+            sender_id = sender.sender_id
+
+            chat_id = msg.chat_id
+            chat_type = msg.chat_type or "group"
+            if chat_type == "p2p":
+                chat_type = "private"
+
+            # Remember which topic a message belongs to, so replies to it
+            # stay inside the same topic instead of leaking to the main
+            # stream.
+            self._index_topic_root(msg)
+
+            msg_type = getattr(msg, "message_type", None) or getattr(msg, "msg_type", "text")
+            create_time = getattr(msg, "create_time", None) or str(int(time.time() * 1000))
+
+            raw_content = msg.content or "{}"
+            content_json = {}
+            try:
+                content_json = json.loads(raw_content)
+            except Exception:
+                pass
+
+            text = ""
+            attachments = []
+
+            if msg_type == "text":
+                text = content_json.get("text", "") if isinstance(content_json, dict) else raw_content
+            elif msg_type == "file":
+                file_key = content_json.get("file_key")
+                file_name = content_json.get("file_name", "file")
+                if file_key:
+                    fname = f"{create_time}_{chat_id}_{msg.message_id}_{file_name}"
+                    local_path = await self._download_resource(msg.message_id, file_key, "file", fname)
+                    if local_path:
+                        attachments.append({"type": "document", "path": local_path, "name": file_name})
+                        text = f"[Document Attachment: {file_name}]"
+            elif msg_type == "image":
+                image_key = content_json.get("image_key")
+                if image_key:
+                    fname = f"{create_time}_{chat_id}_{msg.message_id}_{image_key}.jpg"
+                    local_path = await self._download_resource(msg.message_id, image_key, "image", fname)
+                    if local_path:
+                        attachments.append({"type": "photo", "path": local_path, "name": fname})
+                        text = "[Photo Attachment]"
+            elif msg_type == "audio":
+                file_key = content_json.get("file_key")
+                if file_key:
+                    fname = f"{create_time}_{chat_id}_{msg.message_id}_audio.opus"
+                    local_path = await self._download_resource(msg.message_id, file_key, "file", fname)
+                    if local_path:
+                        attachments.append({"type": "voice", "path": local_path, "name": fname})
+                        text = "[Voice Audio Attachment]"
+            elif msg_type == "media":
+                file_key = content_json.get("file_key")
+                file_name = content_json.get("file_name", "video.mp4")
+                if file_key:
+                    fname = f"{create_time}_{chat_id}_{msg.message_id}_{file_name}"
+                    local_path = await self._download_resource(msg.message_id, file_key, "file", fname)
+                    if local_path:
+                        attachments.append({"type": "video", "path": local_path, "name": file_name})
+                        text = f"[Video Attachment: {file_name}]"
+            elif msg_type == "post":
+                post_text_parts = []
+                if isinstance(content_json, dict):
+                    for lang, post_data in content_json.items():
+                        if isinstance(post_data, dict):
+                            title = post_data.get("title", "")
+                            if title:
+                                post_text_parts.append(title)
+                            for paragraph in post_data.get("content", []):
+                                p_text = "".join(elem.get("text", "") for elem in paragraph if isinstance(elem, dict) and elem.get("tag") == "text")
+                                if p_text:
+                                    post_text_parts.append(p_text)
+                text = "\n".join(post_text_parts) if post_text_parts else raw_content
+            else:
+                text = content_json.get("text", "") if isinstance(content_json, dict) else raw_content
+
+            mentions = msg.mentions or []
+            bot_match_names = {self.bot_name, self.bot_username} | set(self.aliases)
+            bot_mention_keys = set()
+            is_mentioned = False
+            for m in mentions:
+                m_key = getattr(m, "key", None) or (m.get("key") if isinstance(m, dict) else "") or ""
+                m_name = getattr(m, "name", None) or (m.get("name") if isinstance(m, dict) else "") or ""
+                m_id = getattr(m, "id", None) or (m.get("id") if isinstance(m, dict) else "") or ""
+                if m_key == "@_all":
+                    is_mentioned = True
+                elif self.app_id and m_id == self.app_id:
+                    is_mentioned = True
+                    if m_key:
+                        bot_mention_keys.add(m_key)
+                elif m_name and m_name in bot_match_names:
+                    is_mentioned = True
+                    if m_key:
+                        bot_mention_keys.add(m_key)
+
+            # Normalize bot mention placeholder keys (e.g. @_user_1) to @bot_username
+            if bot_mention_keys:
+                for k in bot_mention_keys:
+                    text = text.replace(k, f"@{self.bot_username}")
+
+            is_triggered = (
+                (chat_type == "private")
+                or is_mentioned
+                or any(f"@{alias}" in text for alias in [self.bot_username, self.bot_name] + self.aliases)
+            )
+
+            # Track last user message_id per chat for typing reactions
+            self._last_user_msg_ids[chat_id] = msg.message_id
+
+            inbound = InboundMessage(
+                chat_id=chat_id,
+                chat_type=chat_type,
+                msg_id=msg.message_id,
+                sender_name=sender_id.user_id or sender_id.open_id or "feishu_user",
+                from_user={
+                    "id": sender_id.open_id or sender_id.user_id or "",
+                    "username": sender_id.user_id or "",
+                    "is_bot": False,
+                },
+                text=text,
+                is_triggered=is_triggered,
+                attachments=attachments,
+            )
+            await self.handler(inbound)
+        except Exception as e:
+            logger.error(f"[Feishu] Error processing inbound message: {e}", exc_info=True)
+
     def _build_event_handler(self):
         """Builds the SDK event dispatcher with the message-receive handler."""
-
-        async def _handle_inbound_async(msg, sender):
-            try:
-                sender_id = sender.sender_id
-
-                chat_id = msg.chat_id
-                chat_type = msg.chat_type or "group"
-                if chat_type == "p2p":
-                    chat_type = "private"
-
-                # Remember which topic a message belongs to, so replies to it
-                # stay inside the same topic instead of leaking to the main
-                # stream.
-                self._index_topic_root(msg)
-
-                msg_type = getattr(msg, "message_type", None) or getattr(msg, "msg_type", "text")
-                create_time = getattr(msg, "create_time", None) or str(int(time.time() * 1000))
-
-                raw_content = msg.content or "{}"
-                content_json = {}
-                try:
-                    content_json = json.loads(raw_content)
-                except Exception:
-                    pass
-
-                text = ""
-                attachments = []
-
-                if msg_type == "text":
-                    text = content_json.get("text", "") if isinstance(content_json, dict) else raw_content
-                elif msg_type == "file":
-                    file_key = content_json.get("file_key")
-                    file_name = content_json.get("file_name", "file")
-                    if file_key:
-                        fname = f"{create_time}_{chat_id}_{msg.message_id}_{file_name}"
-                        local_path = await self._download_resource(msg.message_id, file_key, "file", fname)
-                        if local_path:
-                            attachments.append({"type": "document", "path": local_path, "name": file_name})
-                            text = f"[Document Attachment: {file_name}]"
-                elif msg_type == "image":
-                    image_key = content_json.get("image_key")
-                    if image_key:
-                        fname = f"{create_time}_{chat_id}_{msg.message_id}_{image_key}.jpg"
-                        local_path = await self._download_resource(msg.message_id, image_key, "image", fname)
-                        if local_path:
-                            attachments.append({"type": "photo", "path": local_path, "name": fname})
-                            text = "[Photo Attachment]"
-                elif msg_type == "audio":
-                    file_key = content_json.get("file_key")
-                    if file_key:
-                        fname = f"{create_time}_{chat_id}_{msg.message_id}_audio.opus"
-                        local_path = await self._download_resource(msg.message_id, file_key, "file", fname)
-                        if local_path:
-                            attachments.append({"type": "voice", "path": local_path, "name": fname})
-                            text = "[Voice Audio Attachment]"
-                elif msg_type == "media":
-                    file_key = content_json.get("file_key")
-                    file_name = content_json.get("file_name", "video.mp4")
-                    if file_key:
-                        fname = f"{create_time}_{chat_id}_{msg.message_id}_{file_name}"
-                        local_path = await self._download_resource(msg.message_id, file_key, "file", fname)
-                        if local_path:
-                            attachments.append({"type": "video", "path": local_path, "name": file_name})
-                            text = f"[Video Attachment: {file_name}]"
-                elif msg_type == "post":
-                    post_text_parts = []
-                    if isinstance(content_json, dict):
-                        for lang, post_data in content_json.items():
-                            if isinstance(post_data, dict):
-                                title = post_data.get("title", "")
-                                if title:
-                                    post_text_parts.append(title)
-                                for paragraph in post_data.get("content", []):
-                                    p_text = "".join(elem.get("text", "") for elem in paragraph if isinstance(elem, dict) and elem.get("tag") == "text")
-                                    if p_text:
-                                        post_text_parts.append(p_text)
-                    text = "\n".join(post_text_parts) if post_text_parts else raw_content
-                else:
-                    text = content_json.get("text", "") if isinstance(content_json, dict) else raw_content
-
-                mentions = msg.mentions or []
-                is_mentioned = any(m.name == self.bot_name or m.key == "@_all" for m in mentions)
-                is_triggered = (chat_type == "private") or is_mentioned or (f"@{self.bot_username}" in text)
-
-                # Track last user message_id per chat for typing reactions
-                self._last_user_msg_ids[chat_id] = msg.message_id
-
-                inbound = InboundMessage(
-                    chat_id=chat_id,
-                    chat_type=chat_type,
-                    msg_id=msg.message_id,
-                    sender_name=sender_id.user_id or sender_id.open_id or "feishu_user",
-                    from_user={
-                        "id": sender_id.open_id or sender_id.user_id or "",
-                        "username": sender_id.user_id or "",
-                        "is_bot": False,
-                    },
-                    text=text,
-                    is_triggered=is_triggered,
-                    attachments=attachments,
-                )
-                await self.handler(inbound)
-            except Exception as e:
-                logger.error(f"[Feishu] Error processing inbound message: {e}", exc_info=True)
 
         def _on_message_receive(data):
             try:
                 event = data.event
                 msg = event.message
                 sender = event.sender
-                asyncio.get_event_loop().create_task(_handle_inbound_async(msg, sender))
+                asyncio.get_event_loop().create_task(self._handle_inbound_async(msg, sender))
             except Exception as e:
                 logger.error(f"[Feishu] Error dispatching message event: {e}", exc_info=True)
-
 
         event_handler = (
             lark.EventDispatcherHandler.builder("", "")
