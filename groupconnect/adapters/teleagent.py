@@ -50,6 +50,26 @@ def _load_skills_manifest(workspace_dir: str) -> str:
     )
 
 
+def _load_agents_doc(workspace_dir: str) -> str:
+    """Load the workspace AGENTS.md (if present) as part of the system prompt.
+
+    AGENTS.md carries the workspace's operational rules and conventions. The
+    TeleAgent daemon does not auto-read it, so the adapter injects it on the
+    first turn of every conversation, giving it the same weight as the skills
+    manifest. Returns an empty string when the file is missing or unreadable.
+    """
+    agents_md = os.path.join(workspace_dir, "AGENTS.md")
+    try:
+        if os.path.isfile(agents_md):
+            with open(agents_md, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+            if content:
+                return f"【Workspace AGENTS.md 规范】\n{content}"
+    except Exception:
+        pass
+    return ""
+
+
 def _extract_skill_entry(skill_md: str, workspace_dir: str, entries: list) -> None:
     """Extract name and description from a SKILL.md frontmatter and append to entries."""
     try:
@@ -105,6 +125,9 @@ class TeleAgentAdapter(BaseAgentAdapter):
         self.skills_manifest = _load_skills_manifest(self.workspace_dir)
         if self.skills_manifest:
             logger.info(f"[TeleAgent] Loaded skills manifest from {self.workspace_dir}/.agents/")
+        self.agents_doc = _load_agents_doc(self.workspace_dir)
+        if self.agents_doc:
+            logger.info(f"[TeleAgent] Loaded AGENTS.md from {self.workspace_dir}/")
 
     @staticmethod
     def _kill_process_group(proc: Any) -> None:
@@ -249,9 +272,16 @@ class TeleAgentAdapter(BaseAgentAdapter):
         chat_id: Optional[int] = None,
         attachments: Optional[List[Dict[str, Any]]] = None
     ) -> Tuple[Optional[str], Optional[str]]:
-        # Inject skills manifest on first turn (no existing conversation)
-        if self.skills_manifest and not conversation_id:
-            prompt = f"{self.skills_manifest}\n\n{prompt}"
+        # Inject workspace AGENTS.md and skills manifest on first turn (no existing conversation).
+        # Order matters: workspace rules come first, then the skills catalog.
+        if not conversation_id:
+            injected = []
+            if self.agents_doc:
+                injected.append(self.agents_doc)
+            if self.skills_manifest:
+                injected.append(self.skills_manifest)
+            if injected:
+                prompt = "\n\n".join(injected + [prompt])
 
         cmd = [
             self.teleworker_bin,
@@ -299,6 +329,8 @@ class TeleAgentAdapter(BaseAgentAdapter):
                     f"Auto-fallback to a fresh session..."
                 )
                 fallback_prompt = prompt
+                if self.agents_doc and "【Workspace AGENTS.md 规范】" not in fallback_prompt:
+                    fallback_prompt = f"{self.agents_doc}\n\n{fallback_prompt}"
                 if self.skills_manifest and "【Pre-loaded Skills Manifest】" not in fallback_prompt:
                     fallback_prompt = f"{self.skills_manifest}\n\n{fallback_prompt}"
 

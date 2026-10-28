@@ -330,6 +330,86 @@ class TestTeleAgentStopAbortsServer(unittest.TestCase):
         self.assertNotIn("--title", argv)
 
 
+class TestTeleAgentAgentsDocInjection(unittest.TestCase):
+    """The TeleAgent daemon never auto-reads the workspace AGENTS.md, so the
+    adapter injects it on the first turn of every conversation — same weight as
+    the skills manifest, listed BEFORE it (workspace rules precede the catalog).
+    Resumed sessions keep the already-fixed system prompt and skip re-injection."""
+
+    AGENTS_MD_BODY = "# 测试工作区规范\n\n- 红线条目：测试必须客观中立\n"
+
+    def _make_worker(self, body: str) -> str:
+        fd, path = tempfile.mkstemp(suffix=".sh")
+        with os.fdopen(fd, "w") as f:
+            f.write(body)
+        os.chmod(path, os.stat(path).st_mode | stat.S_IEXEC)
+        self.addCleanup(os.remove, path)
+        return path
+
+    def _make_workspace(self, with_agents_md: bool, with_skill: bool = True) -> str:
+        ws = tempfile.mkdtemp(suffix=".ws")
+        self.addCleanup(lambda: os.path.exists(ws) and __import__("shutil").rmtree(ws))
+        if with_agents_md:
+            with open(os.path.join(ws, "AGENTS.md"), "w", encoding="utf-8") as f:
+                f.write(self.AGENTS_MD_BODY)
+        if with_skill:
+            skill_dir = os.path.join(ws, ".agents", "skills", "demo")
+            os.makedirs(skill_dir, exist_ok=True)
+            with open(os.path.join(skill_dir, "SKILL.md"), "w", encoding="utf-8") as f:
+                f.write("---\nname: demo-skill\ndescription: 测试用技能\n---\n")
+        return ws
+
+    def _run_and_capture_prompt(self, ws: str, chat_id: int = None, conversation_id: str = None):
+        argv_file = tempfile.mktemp(suffix=".argv")
+        self.addCleanup(lambda: os.path.exists(argv_file) and os.remove(argv_file))
+        worker = self._make_worker(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"" + argv_file + "\"\n"
+            "printf '%s' '{\"session_id\":\"ses_t1\",\"text\":\"ok\"}'\n"
+        )
+        adapter = TeleAgentAdapter(
+            teleworker_bin=worker,
+            workspace_dir=ws,
+            timeout_secs=30,
+            output_grace_secs=1,
+            abort_server_sessions=False,
+        )
+        kwargs = {}
+        if chat_id is not None:
+            kwargs["chat_id"] = chat_id
+        if conversation_id is not None:
+            kwargs["conversation_id"] = conversation_id
+        asyncio.run(adapter.execute_turn("ping", **kwargs))
+        with open(argv_file) as f:
+            lines = f.read().splitlines()
+        # The prompt is a single argv entry but is multi-line; join everything
+        # after "-p" back together.
+        return "\n".join(lines[lines.index("-p") + 1:])
+
+    def test_agents_doc_and_manifest_injected_on_first_turn(self):
+        ws = self._make_workspace(with_agents_md=True)
+        prompt = self._run_and_capture_prompt(ws, chat_id=1)
+        self.assertIn("【Workspace AGENTS.md 规范】", prompt)
+        self.assertIn("红线条目：测试必须客观中立", prompt)
+        self.assertIn("【Pre-loaded Skills Manifest】", prompt)
+        self.assertIn("demo-skill", prompt)
+        # Workspace rules must precede the skills catalog, which precedes the user turn
+        self.assertLess(prompt.index("【Workspace AGENTS.md 规范】"), prompt.index("【Pre-loaded Skills Manifest】"))
+        self.assertLess(prompt.index("【Pre-loaded Skills Manifest】"), prompt.index("ping"))
+
+    def test_missing_agents_md_injects_nothing(self):
+        ws = self._make_workspace(with_agents_md=False)
+        prompt = self._run_and_capture_prompt(ws, chat_id=1)
+        self.assertNotIn("【Workspace AGENTS.md 规范】", prompt)
+        # Skills manifest injection is unaffected
+        self.assertIn("【Pre-loaded Skills Manifest】", prompt)
+
+    def test_resumed_session_skips_reinjection(self):
+        ws = self._make_workspace(with_agents_md=True)
+        prompt = self._run_and_capture_prompt(ws, conversation_id="ses_existing")
+        self.assertNotIn("【Workspace AGENTS.md 规范】", prompt)
+        self.assertNotIn("【Pre-loaded Skills Manifest】", prompt)
+
+
 class TestCliStopSilence(unittest.TestCase):
     """Regression: /stop SIGKILL on CLI-harness workers (antigravity/claude/
     codex/opencode) used to surface an "Exit code -9" error message in chat.
