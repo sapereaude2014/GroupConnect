@@ -295,6 +295,14 @@ class GroupConnectEngine:
                     sleep_secs += 60.0
                 await asyncio.sleep(sleep_secs)
 
+                # Memory hygiene: return freed glibc heap pages to the kernel each
+                # minute tick, so long-running daemons stay slim on phones/low-RAM hosts.
+                try:
+                    import ctypes
+                    ctypes.CDLL("libc.so.6").malloc_trim(0)
+                except Exception:
+                    pass
+
                 now = datetime.now()
                 today_str = now.strftime("%Y%m%d")
                 current_weekday = now.weekday()

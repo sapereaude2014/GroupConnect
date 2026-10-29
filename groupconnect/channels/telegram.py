@@ -46,7 +46,10 @@ class TelegramChannel(BaseChannel):
         self.api_base = f"https://api.telegram.org/bot{self.bot_token}"
         self.file_api_base = f"https://api.telegram.org/file/bot{self.bot_token}"
 
-        self.client = httpx.AsyncClient(timeout=60.0)
+        self.client = httpx.AsyncClient(
+            timeout=60.0,
+            limits=httpx.Limits(max_keepalive_connections=4, max_connections=10),
+        )
         self.is_running = False
         self.last_update_id = 0
         self.on_burst_callback: Optional[Callable[[Optional[float]], None]] = None
