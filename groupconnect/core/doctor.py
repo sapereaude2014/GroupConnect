@@ -271,10 +271,7 @@ class Doctor:
         if not api_key:
             env_map = {
                 "jev": "JEV_API_KEY",
-                "openai": "OPENAI_API_KEY",
-                "llm": "OPENAI_API_KEY",
-                "anthropic": "ANTHROPIC_API_KEY",
-                "gemini": "GEMINI_API_KEY",
+                "decisions": "GEMINI_ROUTER_API_KEY",
             }
             expected_env = env_map.get(acfg.engine, "JEV_API_KEY")
             self.print_item(

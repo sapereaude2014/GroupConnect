@@ -67,51 +67,8 @@ Evaluate conversational timing and urgency for assistant bots (first match wins)
    Human conversation, venting, or banter requiring no bot intervention.
 """
 
-DEFAULT_ROUTING_RULES_MD = """# Autonomous Routing Decision Rules
-Group Context: {group}
-
-Decision Rules (Evaluate in order, first match wins):
-1. BOT DIALOGUE CONTINUATION & DIRECT COMMAND (urgency = "immediate"):
-   - If recent context shows a bot asked a question, offered options, or proposed a
-     plan, and the current message is an acknowledgment, confirmation, decision
-     (e.g. "option A", "okay", "yes", "confirmed"), or a follow-up directed to
-     that bot -> Assign to THAT bot in target_bots with urgency "immediate".
-   - If the message is a direct command or imperative task request matching a bot's
-     role -> Assign to the matching bot(s) in target_bots with urgency "immediate".
-   - Direct instruction criteria: {immediate}
-
-2. OBJECTIVE INQUIRY & RECOMMENDATION (urgency = "wait_silence"):
-   - If the message is an open question, data lookup, or recommendation request
-     addressed to the group at large, matching a bot's role -> Assign to the matching
-     bot(s) in target_bots with urgency "wait_silence" (leaves social space for
-     humans to reply first).
-   - Inquiry criteria: {wait}
-
-3. INTERPERSONAL CHITCHAT / SILENCE (urgency = "drop", target_bots = []):
-   - {drop}
-
-4. MULTI-BOT ASSIGNMENT & DISPATCH:
-   - DISPATCH: One bot is asked to handle a task involving another bot (e.g. "A, ask B to do X") -> Assign to the DISPATCHER bot only.
-   - PARALLEL: The sender explicitly wants multiple bots to participate or collaborate (e.g. "A and B both look at this", "everyone check this") -> Assign all addressed bots in target_bots with urgency "immediate".
-"""
-
-DEFAULT_LLM_PROMPT_TEMPLATE = """You are the single arbiter of a private group chat.
-Decide whether an assistant bot should reply WITHOUT being explicitly @-mentioned.
-
-Roles of the bots:
-{ROLES}
-
-Recent conversation:
-{CONTEXT}
-
-Current message from {SENDER}: "{TEXT}"
-{ALIAS_HINT}
-
-{RULES_SECTION}
-
-Output STRICT JSON only (use empty list [] when urgency is "drop"):
-{"target_bots": ["<bot_name>"]|[], "urgency": "immediate"|"wait_silence"|"drop", "confidence": 0.0}
-"""
-
-
+# Decision-model engines (questionnaire contract: 1 orthogonal Choice + N Noul per call).
+# Google Gemini Decisions API (Beta): POST {DECISIONS_BASE_URL}/decisions
+DECISIONS_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
+DECISIONS_DEFAULT_MODEL = "gemini-decision-1"
 

@@ -69,9 +69,9 @@ zero_at:
   enabled: true                         # Enable Zero-@ autonomous listening and multi-bot arbitration
   # context_window_size: 5              # Optional: recent group messages passed to the classifier (default 5)
   # classifier:                         # Optional: omit to use Jev by default (auto-reads JEV_API_KEY from env)
-  #   engine: openai                    # Protocol: jev (default) | openai | anthropic | gemini
-  #   model: deepseek-chat              # Classifier model identifier
-  #   base_url: https://api.deepseek.com/v1  # Optional custom API endpoint URL
+  #   engine: decisions                 # Decision-model engines: jev (default) | decisions (Google Gemini Decisions API, auto-reads GEMINI_ROUTER_API_KEY)
+  #   model: gemini-decision-1          # Classifier model identifier (decisions defaults to gemini-decision-1)
+  #   base_url: https://generativelanguage.googleapis.com/v1beta  # Optional custom API endpoint URL
   # rules:                              # Optional: override built-in routing prompt slots (fill only what you want to change)
   #   group: "Engineering team group chat with specialized assistant bots."
   #   drop: "Casual human-to-human banter, acknowledgements (ok/thanks/got it), or direct conversations between teammates with no action request."

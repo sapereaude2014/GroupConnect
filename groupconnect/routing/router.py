@@ -4,7 +4,7 @@ Core implementation of Autonomous Routing (免@自主感知唤醒).
 Decision pipeline (arbiter side only):
     L0 physical noise  - empty / punctuation-only / emoji-only  (0 token)
     L1 alias bypass    - contains a bot alias -> direct wake    (0 token)
-    L2 classifier     - active provider engine (jev|gemini) judgment (1 API call)
+    L2 classifier     - active provider engine (jev|decisions) judgment (1 API call)
 
 Tri-state output:
     {"target_bot": <bot|none>, "urgency": "immediate"|"wait_silence"|"drop"}
@@ -62,14 +62,14 @@ from groupconnect.routing.defaults import (
     DEFAULT_NOISE_PATTERNS,
     DEFAULT_ALIAS_DROP_PATTERNS,
     DEFAULT_RULE_TEMPLATES,
-    DEFAULT_LLM_PROMPT_TEMPLATE,
-    DEFAULT_ROUTING_RULES_MD,
     DEFAULT_JEV_CHOICE_INSTRUCTIONS,
     DEFAULT_IMMEDIATE_CRITERIA,
     DEFAULT_WAIT_CRITERIA,
     DEFAULT_DROP_CRITERIA,
     DEFAULT_GROUP_DESCRIPTION,
     DEFAULT_ASSIGNMENT_CRITERIA,
+    DECISIONS_BASE_URL,
+    DECISIONS_DEFAULT_MODEL,
 )
 
 _ENV_VAR_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
@@ -278,15 +278,17 @@ class AutonomousConfig:
             if clf_engine == "jev":
                 default_model = "jev-latest"
                 default_env = "JEV_API_KEY"
-            elif clf_engine in ("openai", "llm"):
-                default_model = "gpt-4o-mini"
-                default_env = "OPENAI_API_KEY"
-            elif clf_engine == "anthropic":
-                default_model = "claude-3-5-haiku-latest"
-                default_env = "ANTHROPIC_API_KEY"
+            elif clf_engine == "decisions":
+                default_model = DECISIONS_DEFAULT_MODEL
+                default_env = "GEMINI_ROUTER_API_KEY"
             else:
-                default_model = "gemini-2.5-flash-lite"
-                default_env = "GEMINI_ROUTER_API_KEY" if "GEMINI_ROUTER_API_KEY" in os.environ else "GEMINI_API_KEY"
+                logger.warning(
+                    "[ROUTING] Unknown classifier engine '%s' "
+                    "(expected jev|decisions); "
+                    "classifier fails closed until fixed.", clf_engine,
+                )
+                default_model = ""
+                default_env = ""
             clf_model = clf.get("model", cfg.get("model", default_model)) or default_model
             api_key = clf.get("api_key", cfg.get("api_key", os.environ.get(default_env, "")))
             api_key_env = clf.get("api_key_env", default_env if not clf.get("api_key") and not cfg.get("api_key") else "")
@@ -315,20 +317,24 @@ class AutonomousConfig:
                     self.active_provider, sorted(self.providers),
                 )
             pcfg = {}
-        self.engine: str = str(pcfg.get("engine", "jev" if self.active_provider == "typesafe" else "llm")).lower()
+        self.engine: str = str(pcfg.get("engine", "jev")).lower()
         if pcfg:
             if self.engine == "jev":
                 default_engine_model = "jev-latest"
-            elif self.engine in ("openai", "llm"):
-                default_engine_model = "gpt-4o-mini"
-            elif self.engine == "anthropic":
-                default_engine_model = "claude-3-5-haiku-latest"
+            elif self.engine == "decisions":
+                default_engine_model = DECISIONS_DEFAULT_MODEL
             else:
-                default_engine_model = "gemini-2.5-flash-lite"
+                logger.warning(
+                    "[ROUTING] Unknown classifier engine '%s'; classifier fails closed until fixed.",
+                    self.engine,
+                )
+                default_engine_model = ""
         else:
             default_engine_model = ""
         self.model: str = str(pcfg.get("model") or default_engine_model)
         self.base_url: str = _expand_env(str(pcfg.get("base_url", clf.get("base_url", "")))).strip().rstrip("/")
+        if self.engine == "decisions" and not self.base_url:
+            self.base_url = DECISIONS_BASE_URL
         raw_api_key = os.environ.get(str(pcfg.get("api_key_env") or ""), "") or str(pcfg.get("api_key") or "")
         self.api_key: str = _expand_env(raw_api_key).strip()
         self.timeout_ms: int = int(pcfg.get("timeout_ms", 3000))
@@ -533,18 +539,7 @@ class AutonomousArbiter:
             self._budget_used = 0
         return self._budget_used >= self.cfg.daily_budget
 
-    # ---------- prompt ----------
-    def _render_prompt(self, text: str, sender: str, context: str, alias_hint: str) -> str:
-        roles = "\n".join(f"  {bot}: {role}" for bot, role in self.cfg.roles.items())
-        return (
-            DEFAULT_LLM_PROMPT_TEMPLATE.replace("{ROLES}", roles)
-               .replace("{RULES_SECTION}", self._load_rules_instructions())
-               .replace("{CONTEXT}", context or "(no prior messages)")
-               .replace("{SENDER}", sender)
-               .replace("{TEXT}", text)
-               .replace("{ALIAS_HINT}", alias_hint)
-        )
-
+    # ---------- decision questionnaire ----------
     def _load_choice_instructions(self) -> str:
         """Renders Jev Choice timing instructions.
 
@@ -556,18 +551,6 @@ class AutonomousArbiter:
             DEFAULT_JEV_CHOICE_INSTRUCTIONS.strip()
             .replace("{group}", t.get("group", DEFAULT_GROUP_DESCRIPTION))
         )
-
-    def _load_rules_instructions(self) -> str:
-        """Renders decision instructions by substituting active rule_templates."""
-        t = self.cfg.rule_templates
-        return (
-            DEFAULT_ROUTING_RULES_MD.strip()
-            .replace("{group}", t.get("group", DEFAULT_GROUP_DESCRIPTION))
-            .replace("{immediate}", t.get("immediate", DEFAULT_IMMEDIATE_CRITERIA))
-            .replace("{wait}", t.get("wait", DEFAULT_WAIT_CRITERIA))
-            .replace("{drop}", t.get("drop", DEFAULT_DROP_CRITERIA))
-        )
-
 
     # ---------- pipeline ----------
     def evaluate_sync(self, text: str, sender: str, context: str = "") -> Optional[Dict[str, Any]]:
@@ -596,7 +579,7 @@ class AutonomousArbiter:
 
     async def classify(self, text: str, sender: str, context: str, alias_hint: str = "") -> Dict[str, Any]:
         """L2: single classifier tri-state call. Fail-closed -> drop.
-        Dispatches on the ACTIVE provider's engine (jev | gemini)."""
+        Dispatches on the ACTIVE provider's engine (jev | decisions)."""
         self.cfg.reload_if_modified()
         drop = {"target_bot": "none", "target_bots": [], "urgency": "drop", "confidence": 0.0, "source": "classifier"}
         if not self.cfg.api_key:
@@ -617,12 +600,12 @@ class AutonomousArbiter:
         engine = self.cfg.engine
         if engine == "jev":
             return await self._classify_jev(text, sender, context, alias_hint, drop)
-        if engine in ("llm", "openai", "gemini", "anthropic"):
-            return await self._classify_llm(text, sender, context, alias_hint, drop)
+        if engine == "decisions":
+            return await self._classify_decisions(text, sender, context, alias_hint, drop)
         logger.warning(f"[ROUTING] Unknown classifier engine '{engine}'; fail-closed drop.")
         return drop
 
-    def _jev_assignment_templates(self) -> Dict[str, str]:
+    def _assignment_templates(self) -> Dict[str, str]:
         t = self.cfg.rule_templates
         assignment = t.get("assignment", DEFAULT_ASSIGNMENT_CRITERIA)
         templates = {}
@@ -635,10 +618,14 @@ class AutonomousArbiter:
             )
         return templates
 
-    def _jev_criteria(self) -> Tuple[dict, dict, str]:
-        """Builds Jev Choice criteria (3-option: immediate/wait/drop) + map + group.
-        Choice is now orthogonal to bot identity — it only judges timing/social context.
-        Bot assignment is fully delegated to per-bot Noul questions."""
+    def _decision_criteria(self) -> Tuple[dict, dict, str]:
+        """Builds the decision Choice criteria (3-option: immediate/wait/drop),
+        the option->urgency map, and the group description.
+
+        Engine-agnostic — shared by every decision-model classifier
+        (jev | decisions). Choice is orthogonal to bot identity: it only
+        judges timing/social context; bot assignment is fully delegated
+        to the per-bot Noul questions."""
         t = self.cfg.rule_templates
         group = t.get("group", DEFAULT_GROUP_DESCRIPTION)
         criteria = {
@@ -646,26 +633,22 @@ class AutonomousArbiter:
             "wait": t.get("wait", DEFAULT_WAIT_CRITERIA),
             "drop": t.get("drop", DEFAULT_DROP_CRITERIA),
         }
-        jev_map = {
+        decision_map = {
             "immediate": ("none", "immediate"),
             "wait": ("none", "wait_silence"),
             "drop": ("none", "drop"),
         }
-        return criteria, jev_map, group
+        return criteria, decision_map, group
 
-    def _build_jev_payload(
-        self, text: str, sender: str, context: str, alias_hint: str
-    ) -> Tuple[str, dict, dict, float, dict]:
-        criteria, jev_map, group_description = self._jev_criteria()
-        assignment_templates = self._jev_assignment_templates()
+    def _decision_questions(self) -> Tuple[dict, dict, str]:
+        """Builds the engine-agnostic decision questionnaire:
+        1 orthogonal Choice question (timing) + 1 Noul question per bot
+        (assignment). Every decision-model engine speaks this same wire
+        contract, so adding a provider never touches question semantics
+        or arbitration."""
+        criteria, decision_map, group = self._decision_criteria()
+        assignment_templates = self._assignment_templates()
 
-        state = {
-            "group": group_description,
-            "bot_roles": dict(self.cfg.roles),
-            "recent_conversation": context or "(no prior messages)",
-            "current_message": {"sender": sender, "text": text},
-            "alias_hint": alias_hint or "(no alias detected)",
-        }
         questions = {
             "routing": {
                 "type": "choice",
@@ -681,17 +664,61 @@ class AutonomousArbiter:
                     "type": "noul",
                     "instructions": p_inst,
                 }
+        return questions, decision_map, group
+
+    def _decision_state(
+        self, text: str, sender: str, context: str, alias_hint: str, group: str
+    ) -> dict:
+        """Builds the shared decision context evaluated by all questions."""
+        return {
+            "group": group,
+            "bot_roles": dict(self.cfg.roles),
+            "recent_conversation": context or "(no prior messages)",
+            "current_message": {"sender": sender, "text": text},
+            "alias_hint": alias_hint or "(no alias detected)",
+        }
+
+    def _build_jev_payload(
+        self, text: str, sender: str, context: str, alias_hint: str
+    ) -> Tuple[str, dict, dict, float, dict]:
+        """TypeSafe Jev systemone transport payload: structured state +
+        the engine-agnostic questionnaire."""
+        questions, decision_map, group = self._decision_questions()
+        state = self._decision_state(text, sender, context, alias_hint, group)
 
         api_root = getattr(self.cfg, "base_url", "") or "https://api.typesafe.ai/v1"
         url = api_root if api_root.endswith("/systemone") else f"{api_root}/systemone"
         timeout = self.cfg.timeout_ms / 1000.0
         payload = {"state": state, "model": self.cfg.model, "questions": questions}
         headers = {"Authorization": f"Bearer {self.cfg.api_key}"}
-        return url, payload, headers, timeout, jev_map
+        return url, payload, headers, timeout, decision_map
 
-    async def _post_jev_systemone(
-        self, url: str, payload: dict, headers: dict, timeout: float
+    def _build_decisions_payload(
+        self, text: str, sender: str, context: str, alias_hint: str
+    ) -> Tuple[str, dict, dict, float, dict]:
+        """Google Gemini Decisions API transport payload: the SAME
+        questionnaire with the shared state serialized as the multimodal
+        `input` string."""
+        questions, decision_map, group = self._decision_questions()
+        state = self._decision_state(text, sender, context, alias_hint, group)
+
+        api_root = getattr(self.cfg, "base_url", "") or DECISIONS_BASE_URL
+        url = f"{api_root.rstrip('/')}/decisions"
+        timeout = self.cfg.timeout_ms / 1000.0
+        payload = {
+            "model": self.cfg.model or DECISIONS_DEFAULT_MODEL,
+            "input": json.dumps(state, ensure_ascii=False),
+            "questions": questions,
+        }
+        headers = {"x-goog-api-key": self.cfg.api_key}
+        return url, payload, headers, timeout, decision_map
+
+    async def _post_decision_api(
+        self, url: str, payload: dict, headers: dict, timeout: float, tag: str
     ) -> Optional[dict]:
+        """Shared transport for all decision-model engines: throttled POST
+        with bounded retry on 429/5xx (1/2/4s backoff). Returns the parsed
+        JSON body, or None on exhaustion — callers fail closed -> drop."""
         retryable = {429, 500, 502, 503, 504}
         backoffs = [1.0, 2.0, 4.0]
         async with self._call_lock:
@@ -709,31 +736,31 @@ class AutonomousArbiter:
                 except Exception as e:
                     res = None
                     if attempt < len(backoffs):
-                        logger.warning(f"[ROUTING] Jev attempt {attempt+1} failed: {e}; retry in {backoffs[attempt]}s.")
+                        logger.warning(f"[ROUTING] {tag} attempt {attempt+1} failed: {e}; retry in {backoffs[attempt]}s.")
                         await asyncio.sleep(backoffs[attempt])
                         continue
-                    logger.warning(f"[ROUTING] Jev failed after {attempt+1} attempts: {e}; fail-closed drop.")
+                    logger.warning(f"[ROUTING] {tag} failed after {attempt+1} attempts: {e}; fail-closed drop.")
                     return None
                 if res.status_code in retryable and attempt < len(backoffs):
-                    logger.warning(f"[ROUTING] Jev HTTP {res.status_code} (attempt {attempt+1}); retry in {backoffs[attempt]}s.")
+                    logger.warning(f"[ROUTING] {tag} HTTP {res.status_code} (attempt {attempt+1}); retry in {backoffs[attempt]}s.")
                     await asyncio.sleep(backoffs[attempt])
             if res is None or res.status_code != 200:
-                logger.warning(f"[ROUTING] Jev exhausted retries; fail-closed drop.")
+                logger.warning(f"[ROUTING] {tag} exhausted retries; fail-closed drop.")
                 return None
             self._budget_used += 1
             try:
-                return res.json().get("answers", {}) or {}
+                return res.json()
             except Exception as e:
-                logger.warning(f"[ROUTING] Jev response parsing failed: {e}; fail-closed drop.")
+                logger.warning(f"[ROUTING] {tag} response parsing failed: {e}; fail-closed drop.")
                 return None
 
-    def _arbitrate_jev(self, answers: dict, jev_map: dict, drop: dict) -> Dict[str, Any]:
+    def _arbitrate_decision(self, answers: dict, decision_map: dict, drop: dict) -> Dict[str, Any]:
         try:
             # --- Choice: timing/social context (orthogonal to bot identity) ---
             routing_ans = answers.get("routing") or {}
             choice_key = routing_ans.get("choice", "drop")
             confidence = float(routing_ans.get("confidence", 0.0) or 0.0)
-            _, choice_urgency = jev_map.get(choice_key, ("none", "drop"))
+            _, choice_urgency = decision_map.get(choice_key, ("none", "drop"))
 
             # --- Noul: per-bot assignment (domain experts) ---
             noul_results: list = []  # (bot, prob) pairs
@@ -830,157 +857,33 @@ class AutonomousArbiter:
                 "source": "classifier",
             }
         except Exception as e:
-            logger.warning(f"[ROUTING] Jev response parsing failed: {e}; fail-closed drop.")
+            logger.warning(f"[ROUTING] Decision response parsing failed: {e}; fail-closed drop.")
             return drop
 
     async def _classify_jev(self, text: str, sender: str, context: str, alias_hint: str, drop: dict) -> Dict[str, Any]:
-        """Jev (TypeSafe) classifier: orthogonal Choice (timing) + Noul×N (assignment).
+        """TypeSafe Jev classifier: orthogonal Choice (timing) + Noul×N (assignment).
 
         Choice is a fixed 3-option question (immediate/wait/drop) that only
         evaluates social context and urgency — independent of bot identity.
         Each bot gets an independent Noul question: 'does this message need {bot}?'
         """
-        url, payload, headers, timeout, jev_map = self._build_jev_payload(text, sender, context, alias_hint)
-        answers = await self._post_jev_systemone(url, payload, headers, timeout)
-        if answers is None:
+        url, payload, headers, timeout, decision_map = self._build_jev_payload(text, sender, context, alias_hint)
+        data = await self._post_decision_api(url, payload, headers, timeout, "Jev")
+        if data is None:
             return drop
-        return self._arbitrate_jev(answers, jev_map, drop)
+        return self._arbitrate_decision(data.get("answers", {}) or {}, decision_map, drop)
 
-    @staticmethod
-    def _extract_json_dict(raw_text: str) -> Dict[str, Any]:
-        """Extracts JSON object from LLM text, stripping optional markdown fences."""
-        s = (raw_text or "").strip()
-        if s.startswith("```"):
-            s = re.sub(r"^```(?:json)?\s*", "", s)
-            s = re.sub(r"\s*```$", "", s).strip()
-        start = s.find("{")
-        end = s.rfind("}")
-        if start != -1 and end != -1 and end >= start:
-            s = s[start : end + 1]
-        return json.loads(s)
-
-    async def _classify_llm(self, text: str, sender: str, context: str, alias_hint: str, drop: dict) -> Dict[str, Any]:
-        """General LLM JSON classifier: renders prompt -> calls OpenAI-compatible / Gemini / Anthropic API -> parses JSON."""
-        prompt = self._render_prompt(text, sender, context, alias_hint)
-        if not prompt:
+    async def _classify_decisions(self, text: str, sender: str, context: str, alias_hint: str, drop: dict) -> Dict[str, Any]:
+        """Google Gemini Decisions API classifier: the SAME orthogonal
+        questionnaire contract as Jev (1 Choice timing question + N per-bot
+        Noul assignment questions) evaluated in one batched, calibrated,
+        output-free request. Calibrated probabilities feed the shared
+        arbitration (dynamic threshold lines / rescue / fallback) unchanged."""
+        url, payload, headers, timeout, decision_map = self._build_decisions_payload(text, sender, context, alias_hint)
+        data = await self._post_decision_api(url, payload, headers, timeout, "Decisions")
+        if data is None:
             return drop
-
-        engine = self.cfg.engine
-        base_url = getattr(self.cfg, "base_url", "")
-        use_gemini_native = (engine == "gemini")
-        use_anthropic = (engine == "anthropic")
-
-        if use_gemini_native:
-            api_root = base_url or "https://generativelanguage.googleapis.com/v1beta"
-            url = f"{api_root}/models/{self.cfg.model}:generateContent?key={self.cfg.api_key}"
-            headers: Dict[str, str] = {}
-            payload = {
-                "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {
-                    "response_mime_type": "application/json",
-                    "temperature": 0.0,
-                },
-            }
-        elif use_anthropic:
-            api_root = base_url or "https://api.anthropic.com/v1"
-            url = api_root if api_root.endswith("/messages") else f"{api_root}/messages"
-            headers = {
-                "x-api-key": self.cfg.api_key,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            }
-            payload = {
-                "model": self.cfg.model,
-                "max_tokens": 256,
-                "temperature": 0.0,
-                "messages": [{"role": "user", "content": prompt}],
-            }
-        else:
-            # Standard OpenAI-compatible Chat Completions endpoint (OpenAI, DeepSeek, Qwen, SiliconFlow, OpenRouter, etc.)
-            api_root = base_url or "https://api.openai.com/v1"
-            url = api_root if api_root.endswith("/chat/completions") else f"{api_root}/chat/completions"
-            headers = {
-                "Authorization": f"Bearer {self.cfg.api_key}",
-                "Content-Type": "application/json",
-            }
-            payload = {
-                "model": self.cfg.model,
-                "messages": [{"role": "user", "content": prompt}],
-                "response_format": {"type": "json_object"},
-                "temperature": 0.0,
-            }
-
-        timeout = self.cfg.timeout_ms / 1000.0
-        async with self._call_lock:  # throttle: no classifier bursts (anti-429)
-            wait = self._min_interval - (asyncio.get_running_loop().time() - self._last_call_ts)
-            if wait > 0:
-                await asyncio.sleep(wait)
-            self._last_call_ts = asyncio.get_running_loop().time()
-            try:
-                async with httpx.AsyncClient(timeout=timeout) as client:
-                    res = await client.post(url, json=payload, headers=headers)
-                retryable = {429, 500, 502, 503, 504}
-                if res.status_code in retryable:
-                    for attempt, backoff in enumerate((2.0, 4.0), start=1):
-                        logger.warning(f"[ROUTING] Classifier HTTP {res.status_code}; backoff {backoff}s (retry {attempt}/2).")
-                        await asyncio.sleep(backoff)
-                        async with httpx.AsyncClient(timeout=timeout) as client:
-                            res = await client.post(url, json=payload, headers=headers)
-                        if res.status_code not in retryable:
-                            break
-                if res.status_code != 200:
-                    logger.warning(f"[ROUTING] Classifier HTTP {res.status_code}; fail-closed drop.")
-                    return drop
-                self._budget_used += 1
-                resp_json = res.json()
-                if use_gemini_native:
-                    raw_text = resp_json["candidates"][0]["content"]["parts"][0]["text"]
-                elif use_anthropic:
-                    raw_text = resp_json["content"][0]["text"]
-                else:
-                    raw_text = resp_json["choices"][0]["message"]["content"]
-                data = self._extract_json_dict(raw_text)
-            except Exception as e:
-                logger.warning(f"[ROUTING] Classifier failed: {e}; fail-closed drop.")
-                return drop
-
-            raw_target = data.get("target_bots") or data.get("target_bot", "none")
-            if isinstance(raw_target, list):
-                cleaned = [str(t).lower().lstrip("@") for t in raw_target]
-                target_bots = [t for t in cleaned if t in self.cfg.roles]
-            elif isinstance(raw_target, str):
-                t_str = str(raw_target).lower().lstrip("@")
-                target_bots = [t_str] if t_str in self.cfg.roles else []
-            else:
-                target_bots = []
-
-            primary_target = target_bots[0] if target_bots else "none"
-
-            raw_conf = data.get("confidence", 0.0)
-            try:
-                conf_val = float(raw_conf or 0.0)
-                if math.isnan(conf_val) or conf_val < 0.0:
-                    conf_val = 0.0
-                else:
-                    conf_val = min(conf_val, 1.0)
-            except (ValueError, TypeError):
-                conf_val = 0.0
-
-            decision = {
-                "target_bot": primary_target,
-                "target_bots": target_bots,
-                "urgency": str(data.get("urgency", "drop")).lower(),
-                "confidence": conf_val,
-                "source": "classifier",
-            }
-            if decision["urgency"] not in ("immediate", "wait_silence", "drop") or not target_bots:
-                decision["urgency"] = "drop"
-            if decision["urgency"] != "drop" and decision["confidence"] < self.cfg.confidence_threshold:
-                logger.info(f"[ROUTING] Confidence {decision['confidence']} below threshold; drop.")
-                decision["urgency"] = "drop"
-            if decision["urgency"] == "drop":
-                decision.update(target_bot="none", target_bots=[])
-            return decision
+        return self._arbitrate_decision(data.get("answers", {}) or {}, decision_map, drop)
 
 
 class AutonomousController:

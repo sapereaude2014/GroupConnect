@@ -35,9 +35,9 @@ class TestAutonomousRouting(unittest.TestCase):
                         "api_key_env": "JEV_API_KEY",
                         "timeout_ms": 5000
                     },
-                    "google_ai_studio": {
-                        "engine": "gemini",
-                        "model": "gemini-2.5-flash-lite",
+                    "google_decisions": {
+                        "engine": "decisions",
+                        "model": "gemini-decision-1",
                         "api_key_env": "GEMINI_ROUTER_API_KEY",
                         "timeout_ms": 3000
                     }
@@ -186,7 +186,7 @@ class TestAutonomousRouting(unittest.TestCase):
         # Self-describing registry: active switch + per-provider params.
         self.assertEqual(self.cfg.active_provider, "typesafe")
         self.assertIn("typesafe", self.cfg.providers)
-        self.assertIn("google_ai_studio", self.cfg.providers)
+        self.assertIn("google_decisions", self.cfg.providers)
         self.assertEqual(self.cfg.engine, "jev")
         self.assertEqual(self.cfg.model, "jev-latest")
         self.assertEqual(self.cfg.api_key, os.environ.get("JEV_API_KEY", ""))
@@ -235,7 +235,7 @@ class TestAutonomousRouting(unittest.TestCase):
             self.assertEqual(cfg.model, "")
             self.assertEqual(cfg.api_key, "")
 
-    def test_jev_and_llm_use_inline_rules_overrides(self):
+    def test_decision_rules_use_inline_overrides(self):
         from groupconnect.routing.router import (
             AutonomousArbiter, DEFAULT_DROP_CRITERIA, DEFAULT_GROUP_DESCRIPTION,
         )
@@ -251,20 +251,14 @@ class TestAutonomousRouting(unittest.TestCase):
             },
         })
         arb = AutonomousArbiter(cfg)
-        criteria, jev_map, group = arb._jev_criteria()
+        criteria, decision_map, group = arb._decision_criteria()
         self.assertEqual(criteria["immediate"], "IMM {bot}|{role}")
         self.assertEqual(criteria["wait"], "WAIT {bot}")
         self.assertEqual(criteria["drop"], "DROP_CUSTOM")
         self.assertEqual(group, "GRP_CUSTOM")
-        self.assertEqual(jev_map["drop"], ("none", "drop"))
-        # LLM instructions must perform true in-place replacement (default wording gone)
-        instructions = arb._load_rules_instructions()
-        self.assertIn("DROP_CUSTOM", instructions)
-        self.assertIn("GRP_CUSTOM", instructions)
-        self.assertNotIn(DEFAULT_DROP_CRITERIA, instructions)
-        self.assertNotIn(DEFAULT_GROUP_DESCRIPTION, instructions)
+        self.assertEqual(decision_map["drop"], ("none", "drop"))
 
-        # Jev Choice instructions: only {group} injected; criteria texts live
+        # Choice instructions: only {group} injected; criteria texts live
         # exclusively in the criteria object (no duplicate tokens)
         choice_inst = arb._load_choice_instructions()
         self.assertIn("GRP_CUSTOM", choice_inst)
@@ -280,7 +274,7 @@ class TestAutonomousRouting(unittest.TestCase):
 
         # Config with no custom rules -> built-in defaults kick in
         arb = AutonomousArbiter(self.cfg)
-        criteria, _, _ = arb._jev_criteria()
+        criteria, _, _ = arb._decision_criteria()
         self.assertEqual(criteria["drop"], DEFAULT_DROP_CRITERIA)
         self.assertEqual(criteria["immediate"], DEFAULT_IMMEDIATE_CRITERIA)
 
@@ -289,7 +283,7 @@ class TestAutonomousRouting(unittest.TestCase):
 
         # Fallback to default
         arb = AutonomousArbiter(self.cfg)
-        pt = arb._jev_assignment_templates()
+        pt = arb._assignment_templates()
         self.assertIn("primary_bot", pt)
         self.assertIn("Home automation", pt["primary_bot"])
 
@@ -299,7 +293,7 @@ class TestAutonomousRouting(unittest.TestCase):
             "rules": {"assignment": "NEEDS {bot} as {role}"},
         })
         arb2 = AutonomousArbiter(cfg)
-        pt2 = arb2._jev_assignment_templates()
+        pt2 = arb2._assignment_templates()
         self.assertEqual(pt2["bot_a"], "NEEDS bot_a as RoleA")
         self.assertEqual(pt2["bot_b"], "NEEDS bot_b as RoleB")
 
@@ -706,6 +700,182 @@ class TestAutonomousRouting(unittest.TestCase):
 
             asyncio.run(run())
 
+    def test_decisions_engine_registry_defaults(self):
+        """Flat classifier config (no providers block) picks up the decisions
+        defaults: gemini-decision-1 + Google Decisions base URL +
+        GEMINI_ROUTER_API_KEY env."""
+        cfg = AutonomousConfig({
+            "enabled": True,
+            "roles": {"bot_a": "RoleA"},
+            "classifier": {"engine": "decisions"},
+        })
+        self.assertEqual(cfg.engine, "decisions")
+        self.assertEqual(cfg.model, "gemini-decision-1")
+        self.assertEqual(cfg.base_url, "https://generativelanguage.googleapis.com/v1beta")
+
+    def test_decisions_payload_contract(self):
+        """Google Decisions engine reuses the shared questionnaire; the state
+        is serialized as the multimodal `input` string, auth via x-goog-api-key."""
+        import tempfile, json
+        from groupconnect.routing.router import AutonomousArbiter
+
+        cfg_json = {"autonomous": {
+            "roles": {"bot_a": "RoleA", "bot_b": "RoleB"},
+            "classifier": {
+                "active": "google_decisions",
+                "providers": {
+                    "google_decisions": {
+                        "engine": "decisions",
+                        "model": "gemini-decision-1",
+                        "api_key": "test_key"
+                    }
+                }
+            },
+            "confidence_threshold": 0.6,
+        }}
+        with tempfile.TemporaryDirectory() as d:
+            cfg_path = os.path.join(d, "groupconnect.yaml")
+            with open(cfg_path, "w") as f:
+                f.write(json.dumps(cfg_json))
+            cfg = AutonomousConfig(cfg_path)
+            arb = AutonomousArbiter(cfg)
+
+            self.assertEqual(cfg.engine, "decisions")
+            self.assertEqual(cfg.base_url, "https://generativelanguage.googleapis.com/v1beta")
+
+            url, payload, headers, timeout, decision_map = arb._build_decisions_payload(
+                "Please check the weather", "Alice", "earlier talk", "(no alias)"
+            )
+            self.assertEqual(url, "https://generativelanguage.googleapis.com/v1beta/decisions")
+            self.assertEqual(headers, {"x-goog-api-key": "test_key"})
+            self.assertEqual(payload["model"], "gemini-decision-1")
+            state = json.loads(payload["input"])
+            self.assertEqual(state["current_message"]["text"], "Please check the weather")
+            questions = payload["questions"]
+            self.assertEqual(questions["routing"]["type"], "choice")
+            self.assertEqual(set(questions["routing"]["criteria"]), {"immediate", "wait", "drop"})
+            self.assertEqual(questions["assignment_bot_a"]["type"], "noul")
+            self.assertEqual(questions["assignment_bot_b"]["type"], "noul")
+            self.assertEqual(decision_map["drop"], ("none", "drop"))
+
+    def test_decisions_classify_choice_and_noul_multi_bot(self):
+        """Decisions engine feeds the shared arbitration: same answer schema
+        as Jev produces the same multi-bot immediate dispatch."""
+        import asyncio
+        from unittest.mock import patch, MagicMock
+        import tempfile, json
+        from groupconnect.routing.router import AutonomousArbiter
+
+        cfg_json = {"autonomous": {
+            "roles": {"bot_a": "RoleA", "bot_b": "RoleB", "bot_c": "RoleC"},
+            "classifier": {
+                "active": "google_decisions",
+                "providers": {
+                    "google_decisions": {
+                        "engine": "decisions",
+                        "model": "gemini-decision-1",
+                        "api_key": "test_key"
+                    }
+                }
+            },
+            "confidence_threshold": 0.6,
+        }}
+        with tempfile.TemporaryDirectory() as d:
+            cfg_path = os.path.join(d, "groupconnect.yaml")
+            with open(cfg_path, "w") as f:
+                f.write(json.dumps(cfg_json))
+            cfg = AutonomousConfig(cfg_path)
+            arb = AutonomousArbiter(cfg)
+
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = {
+                "answers": {
+                    "routing": {
+                        "type": "choice",
+                        "choice": "immediate",
+                        "probabilities": {"immediate": 0.95, "wait": 0.03, "drop": 0.02},
+                        "confidence": 0.95,
+                    },
+                    "assignment_bot_a": {"type": "noul", "noul": 0.88, "confidence": 0.88},
+                    "assignment_bot_b": {"type": "noul", "noul": 0.85, "confidence": 0.85},
+                    "assignment_bot_c": {"type": "noul", "noul": 0.12, "confidence": 0.88},
+                },
+                "usage": {"total_input_tokens": 900},
+            }
+
+            async def run():
+                with patch("httpx.AsyncClient.post", return_value=mock_resp):
+                    res = await arb.classify("Bot A and Bot B look at this", "Alice", "")
+                    # Choice=immediate, Noul A=0.88>=0.40, Noul B=0.85>=0.40, C=0.12<0.40
+                    self.assertEqual(res["target_bot"], "bot_a")
+                    self.assertEqual(set(res["target_bots"]), {"bot_a", "bot_b"})
+                    self.assertEqual(res["urgency"], "immediate")
+
+            asyncio.run(run())
+
+    def test_decisions_classify_fail_closed_on_http_error(self):
+        """Non-retryable HTTP errors fail closed to drop (no silent wakeups)."""
+        import asyncio
+        from unittest.mock import patch, MagicMock
+        import tempfile, json
+        from groupconnect.routing.router import AutonomousArbiter
+
+        cfg_json = {"autonomous": {
+            "roles": {"bot_a": "RoleA"},
+            "classifier": {
+                "active": "google_decisions",
+                "providers": {
+                    "google_decisions": {
+                        "engine": "decisions",
+                        "model": "gemini-decision-1",
+                        "api_key": "test_key"
+                    }
+                }
+            },
+            "confidence_threshold": 0.6,
+        }}
+        with tempfile.TemporaryDirectory() as d:
+            cfg_path = os.path.join(d, "groupconnect.yaml")
+            with open(cfg_path, "w") as f:
+                f.write(json.dumps(cfg_json))
+            cfg = AutonomousConfig(cfg_path)
+            arb = AutonomousArbiter(cfg)
+
+            mock_resp = MagicMock()
+            mock_resp.status_code = 400  # non-retryable -> immediate fail-closed
+
+            async def run():
+                with patch("httpx.AsyncClient.post", return_value=mock_resp):
+                    res = await arb.classify("Hello", "Alice", "")
+                    self.assertEqual(res["target_bot"], "none")
+                    self.assertEqual(res["target_bots"], [])
+                    self.assertEqual(res["urgency"], "drop")
+
+            asyncio.run(run())
+
+    def test_retired_gemini_engine_fails_closed(self):
+        """Retired/unknown engines no longer silently fall back to a Gemini
+        chat model — they fail closed with an explicit warning."""
+        import asyncio
+        from groupconnect.routing.router import AutonomousArbiter
+
+        cfg = AutonomousConfig({
+            "enabled": True,
+            "roles": {"bot_a": "RoleA"},
+            "classifier": {"engine": "gemini", "api_key": "k"},
+        })
+        self.assertEqual(cfg.model, "")
+
+        arb = AutonomousArbiter(cfg)
+
+        async def run():
+            res = await arb.classify("Hello", "Alice", "")
+            self.assertEqual(res["target_bot"], "none")
+            self.assertEqual(res["urgency"], "drop")
+
+        asyncio.run(run())
+
     def test_observer_target_bots_subset(self):
         import asyncio
         from groupconnect.routing.router import AutonomousObserver
@@ -740,54 +910,6 @@ class TestAutonomousRouting(unittest.TestCase):
         d_alias = self.ctrl.arbiter.evaluate_sync("assistant 帮我查天气", "Alice")
         self.assertEqual(d_alias["target_bots"], ["primary_bot"])
         self.assertEqual(d_alias["target_bot"], "primary_bot")
-
-    def test_llm_classify_openai_compatible(self):
-        import asyncio
-        from unittest.mock import patch, MagicMock
-        import tempfile, json
-        from groupconnect.routing.router import AutonomousArbiter
-
-        cfg_json = {"autonomous": {
-            "roles": {"bot_a": "RoleA", "bot_b": "RoleB", "bot_c": "RoleC"},
-            "classifier": {
-                "engine": "openai",
-                "model": "deepseek-chat",
-                "base_url": "https://api.deepseek.com/v1",
-                "api_key": "test_key",
-            },
-            "confidence_threshold": 0.7,
-        }}
-        with tempfile.TemporaryDirectory() as d:
-            cfg_path = os.path.join(d, "groupconnect.yaml")
-            with open(cfg_path, "w") as f:
-                f.write(json.dumps(cfg_json))
-            cfg = AutonomousConfig(cfg_path)
-            self.assertEqual(cfg.engine, "openai")
-            self.assertEqual(cfg.base_url, "https://api.deepseek.com/v1")
-            arb = AutonomousArbiter(cfg)
-
-            mock_resp = MagicMock()
-            mock_resp.status_code = 200
-            mock_resp.json.return_value = {
-                "choices": [{
-                    "message": {
-                        "content": '```json\n{"target_bots": ["bot_a", "bot_b"], "target_bot": "bot_a", "urgency": "immediate", "confidence": 0.92}\n```'
-                    }
-                }]
-            }
-
-            async def run():
-                with patch("httpx.AsyncClient.post", return_value=mock_resp) as mock_post:
-                    res = await arb.classify("Bot A and Bot B check this", "Alice", "")
-                    self.assertEqual(res["target_bot"], "bot_a")
-                    self.assertEqual(res["target_bots"], ["bot_a", "bot_b"])
-                    self.assertEqual(res["urgency"], "immediate")
-                    self.assertEqual(mock_post.call_args[0][0], "https://api.deepseek.com/v1/chat/completions")
-                    sent_prompt = mock_post.call_args[1]["json"]["messages"][0]["content"]
-                    self.assertIn("MULTI-BOT ASSIGNMENT & DISPATCH", sent_prompt)
-                    self.assertNotIn("YOUR SCOPE — You judge ONLY the response TIMING", sent_prompt)
-
-            asyncio.run(run())
 
     def test_jev_prefix_collision_prevention(self):
         """Bots sharing name prefix (e.g. 'bot' and 'bot_helper') must not bleed probabilities.
@@ -1454,7 +1576,7 @@ class TestFlushPending(unittest.IsolatedAsyncioTestCase):
         self.cfg.aliases = {
             "primary_bot": ["助手", "小管家"]
         }
-        templates = self.ctrl.arbiter._jev_assignment_templates()
+        templates = self.ctrl.arbiter._assignment_templates()
         self.assertIn("primary_bot", templates)
         self.assertIn("助手, 小管家", templates["primary_bot"])
 
