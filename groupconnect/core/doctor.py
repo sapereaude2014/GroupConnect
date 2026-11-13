@@ -1,7 +1,7 @@
 """
 GroupConnect Doctor: Full-Stack Health & Environment Diagnostics.
-Performs automated verification of Python runtime, platform APIs, Telegram privacy mode,
-Agent CLIs, local workspaces, and Zero-@ routing connectivity.
+Performs automated verification of Python runtime, platform APIs and credentials,
+Telegram privacy mode, Agent CLIs, local workspaces, and Zero-@ routing connectivity.
 """
 
 import os
@@ -113,9 +113,6 @@ class Doctor:
     def _check_channel(self) -> None:
         bot_label = f"{self.config.platform} · @{self.config.bot_username}" if self.config.bot_username else self.config.platform
         print(f"\n[{Colors.BOLD}2. 消息平台连通性 ({bot_label}){Colors.RESET}]")
-        if not self.config.bot_token:
-            self.print_item("fail", "未配置 Bot Token", "在 .env 文件中设置 Bot Token，yaml 中用 ${VAR} 引用")
-            return
 
         # Check .env / *.env files (matches load_dotenv_for_config)
         if self.config.config_path:
@@ -136,7 +133,17 @@ class Doctor:
             else:
                 self.print_item("warn", "未找到 .env / *.env 文件", f"参考 .env.example 创建 {os.path.join(cfg_dir, '.env')}")
 
-        if self.config.platform == "telegram":
+        platform = self.config.platform
+        co = self.config.channel_options or {}
+
+        if platform in ("feishu", "lark"):
+            self._check_feishu_channel()
+            return
+
+        if platform == "telegram":
+            if not self.config.bot_token:
+                self.print_item("fail", "未配置 Telegram Bot Token", "在 .env 文件中设置 Bot Token，yaml 中用 ${VAR} 引用")
+                return
             last_err = None
             for attempt in range(2):
                 try:
@@ -169,8 +176,69 @@ class Doctor:
                 except Exception as e:
                     last_err = e
             self.print_item("warn", f"无法连接 Telegram API ({last_err})", "请检查网络或代理连通性")
+            return
+
+        if platform == "discord":
+            token = str(co.get("discord_bot_token") or self.config.bot_token).strip()
+            if token:
+                self.print_item("pass", "平台 discord 凭证已声明 (Discord Bot Token)")
+            else:
+                self.print_item("fail", "未配置 Discord Bot Token", "在 .env 文件中设置并在 yaml 中以 ${VAR} 引用")
+            return
+
+        if platform == "slack":
+            token = str(co.get("slack_bot_token") or self.config.bot_token).strip()
+            app_token = str(co.get("slack_app_token", "")).strip()
+            if token:
+                note = "，App Token 已声明" if app_token else "（未声明 App Token，Socket Mode 需另行配置）"
+                self.print_item("pass", f"平台 slack 凭证已声明 (Slack Bot Token){note}")
+            else:
+                self.print_item("fail", "未配置 Slack Bot Token", "在 .env 文件中设置并在 yaml 中以 ${VAR} 引用")
+            return
+
+        if platform == "wecom":
+            corp_id = str(co.get("wecom_corp_id", "")).strip()
+            corp_secret = str(co.get("wecom_corp_secret", "")).strip()
+            if corp_id and corp_secret:
+                self.print_item("pass", "平台 wecom 凭证已声明 (Corp ID / Corp Secret)")
+            else:
+                self.print_item("fail", "未配置 WeCom Corp ID / Corp Secret", "在 .env 文件中设置并在 yaml 中以 ${VAR} 引用")
+            return
+
+        if self.config.bot_token:
+            self.print_item("pass", f"平台 {platform} Token 已声明")
         else:
-            self.print_item("pass", f"平台 {self.config.platform} Token 已声明")
+            self.print_item("warn", f"平台 {platform} 未声明 Bot Token（若该平台使用其他凭证方式，可忽略）")
+
+    def _check_feishu_channel(self) -> None:
+        """Feishu/Lark connectivity: app_id + app_secret are the credentials; no bot token involved."""
+        raw = self.config.raw or {}
+        co = self.config.channel_options or {}
+        app_id = str(co.get("feishu_app_id") or raw.get("feishu_app_id") or raw.get("app_id", "")).strip()
+        app_secret = str(co.get("feishu_app_secret") or raw.get("feishu_app_secret") or raw.get("app_secret", "")).strip()
+        if not app_id or not app_secret:
+            missing = "App ID" if not app_id else "App Secret"
+            self.print_item("fail", f"飞书凭证缺失: {missing}", "在 .env 中设置 FEISHU_APP_ID / FEISHU_APP_SECRET，并在 yaml 中以 ${VAR} 引用")
+            return
+
+        api_base = str(raw.get("feishu_api_base", "https://open.feishu.cn")).rstrip("/")
+        try:
+            with httpx.Client(timeout=8.0) as client:
+                resp = client.post(
+                    f"{api_base}/open-apis/auth/v3/tenant_access_token/internal",
+                    json={"app_id": app_id, "app_secret": app_secret},
+                )
+            if resp.status_code != 200:
+                self.print_item("warn", f"飞书 API 响应异常: HTTP {resp.status_code}")
+                return
+            data = resp.json()
+            if data.get("code") == 0:
+                self.print_item("pass", f"飞书 API 连通: App ID {app_id}（tenant_access_token 获取成功）")
+            else:
+                detail = f"code={data.get('code')} {data.get('msg', '')}".rstrip()
+                self.print_item("fail", f"飞书鉴权失败: {detail}", "核对 FEISHU_APP_ID / FEISHU_APP_SECRET，并确认应用处于启用状态")
+        except Exception as e:
+            self.print_item("warn", f"无法连接飞书 API ({e})", "请检查网络连通性，或确认 feishu_api_base 配置正确")
 
     def _check_agent(self) -> None:
         bot_label = f"{self.config.engine_type} · @{self.config.bot_username}" if self.config.bot_username else self.config.engine_type
